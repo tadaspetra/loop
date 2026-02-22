@@ -223,7 +223,7 @@
         drawFit(screenVideo, 0, 0, CANVAS_W, CANVAS_H);
         // Camera as PiP in bottom-right
         const pipW = Math.round(CANVAS_W * PIP_FRACTION);
-        const pipH = Math.round(pipW * (cameraVideo.videoHeight / cameraVideo.videoWidth));
+        const pipH = pipW; // 1:1 ratio
         const pipX = CANVAS_W - pipW - PIP_MARGIN;
         const pipY = CANVAS_H - pipH - PIP_MARGIN;
         // rounded rectangle clip
@@ -241,23 +241,14 @@
         ctx.quadraticCurveTo(pipX, pipY, pipX + r, pipY);
         ctx.closePath();
         ctx.clip();
-        ctx.drawImage(cameraVideo, pipX, pipY, pipW, pipH);
+        // Draw camera cropped to center square
+        const camW = cameraVideo.videoWidth;
+        const camH = cameraVideo.videoHeight;
+        const cropSize = Math.min(camW, camH);
+        const sx = (camW - cropSize) / 2;
+        const sy = (camH - cropSize) / 2;
+        ctx.drawImage(cameraVideo, sx, sy, cropSize, cropSize, pipX, pipY, pipW, pipH);
         ctx.restore();
-        // border
-        ctx.strokeStyle = 'rgba(255,255,255,0.3)';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(pipX + r, pipY);
-        ctx.lineTo(pipX + pipW - r, pipY);
-        ctx.quadraticCurveTo(pipX + pipW, pipY, pipX + pipW, pipY + r);
-        ctx.lineTo(pipX + pipW, pipY + pipH - r);
-        ctx.quadraticCurveTo(pipX + pipW, pipY + pipH, pipX + pipW - r, pipY + pipH);
-        ctx.lineTo(pipX + r, pipY + pipH);
-        ctx.quadraticCurveTo(pipX, pipY + pipH, pipX, pipY + pipH - r);
-        ctx.lineTo(pipX, pipY + r);
-        ctx.quadraticCurveTo(pipX, pipY, pipX + r, pipY);
-        ctx.closePath();
-        ctx.stroke();
       } else if (hasScreen) {
         drawFit(screenVideo, 0, 0, CANVAS_W, CANVAS_H);
       } else if (hasCamera) {
