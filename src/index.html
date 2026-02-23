@@ -9,7 +9,8 @@
 </head>
 <body class="bg-gray-900 text-white min-h-screen flex flex-col">
 
-  <div class="flex-1 flex flex-col p-6 gap-4 max-w-4xl mx-auto w-full">
+  <!-- Recording View -->
+  <div id="recordingView" class="flex-1 flex flex-col p-6 gap-4 max-w-4xl mx-auto w-full">
     <!-- Source selectors -->
     <div class="flex gap-4">
       <div class="flex-1">
@@ -75,6 +76,47 @@
     </div>
   </div>
 
+  <!-- Editor View -->
+  <div id="editorView" class="hidden flex-1 flex flex-col p-6 gap-4 max-w-5xl mx-auto w-full">
+    <!-- Top toolbar -->
+    <div class="flex items-center gap-4">
+      <button id="editorBackBtn" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">Back to Recording</button>
+      <span id="editorTime" class="text-sm text-gray-400 font-mono flex-1 text-center">00:00 / 00:00</span>
+      <button id="editorRenderBtn" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm font-medium transition-colors">Render</button>
+    </div>
+
+    <!-- Editor canvas -->
+    <div class="flex-1 bg-black overflow-hidden relative flex items-center justify-center min-h-[360px]">
+      <canvas id="editorCanvas" class="w-full h-full object-contain" style="aspect-ratio: 16/9;"></canvas>
+    </div>
+
+    <!-- Hidden video elements for editor playback -->
+    <video id="editorScreenVideo" playsinline class="hidden"></video>
+    <video id="editorCameraVideo" muted playsinline class="hidden"></video>
+
+    <!-- Playback controls -->
+    <div class="flex items-center justify-center gap-3">
+      <button id="editorPlayBtn" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">Play</button>
+      <button id="editorKeyframeBtn" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">Add Keyframe</button>
+      <button id="editorToggleCamBtn" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">Toggle Camera</button>
+      <button id="editorDeleteKfBtn" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">Delete Keyframe</button>
+    </div>
+
+    <!-- Timeline scrubber -->
+    <div id="editorTimeline" class="relative bg-gray-800 rounded h-8 cursor-pointer select-none">
+      <div id="editorScrubber" class="absolute top-0 bottom-0 w-0.5 bg-white pointer-events-none" style="left: 0%"></div>
+      <div id="editorKeyframeMarkers" class="absolute inset-0 pointer-events-none"></div>
+    </div>
+
+    <!-- Render progress -->
+    <div id="editorRenderProgress" class="hidden">
+      <div class="text-sm text-gray-400 mb-1" id="editorRenderLabel">Rendering...</div>
+      <div class="bg-gray-800 rounded-full h-3 overflow-hidden">
+        <div id="editorRenderBar" class="bg-blue-500 h-full rounded-full transition-all duration-150" style="width: 0%"></div>
+      </div>
+    </div>
+  </div>
+
   <script>
     const screenSelect = document.getElementById('screenSource');
     const screenFitSelect = document.getElementById('screenFit');
@@ -93,6 +135,27 @@
     const folderPathEl = document.getElementById('folderPath');
     const openFolderBtn = document.getElementById('openFolderBtn');
     const pickFolderBtn = document.getElementById('pickFolderBtn');
+    const recordingView = document.getElementById('recordingView');
+
+    // Editor DOM refs
+    const editorView = document.getElementById('editorView');
+    const editorCanvas = document.getElementById('editorCanvas');
+    const editorCtx = editorCanvas.getContext('2d');
+    const editorScreenVideo = document.getElementById('editorScreenVideo');
+    const editorCameraVideo = document.getElementById('editorCameraVideo');
+    const editorBackBtn = document.getElementById('editorBackBtn');
+    const editorPlayBtn = document.getElementById('editorPlayBtn');
+    const editorKeyframeBtn = document.getElementById('editorKeyframeBtn');
+    const editorToggleCamBtn = document.getElementById('editorToggleCamBtn');
+    const editorDeleteKfBtn = document.getElementById('editorDeleteKfBtn');
+    const editorRenderBtn = document.getElementById('editorRenderBtn');
+    const editorTimeEl = document.getElementById('editorTime');
+    const editorTimeline = document.getElementById('editorTimeline');
+    const editorScrubber = document.getElementById('editorScrubber');
+    const editorKeyframeMarkers = document.getElementById('editorKeyframeMarkers');
+    const editorRenderProgress = document.getElementById('editorRenderProgress');
+    const editorRenderLabel = document.getElementById('editorRenderLabel');
+    const editorRenderBar = document.getElementById('editorRenderBar');
 
     let screenStream = null;
     let cameraStream = null;
@@ -111,9 +174,44 @@
     const CANVAS_H = 1080;
     const PIP_FRACTION = 0.25;
     const PIP_MARGIN = 20;
+    const PIP_SIZE = Math.round(CANVAS_W * PIP_FRACTION);
 
     canvas.width = CANVAS_W;
     canvas.height = CANVAS_H;
+    editorCanvas.width = CANVAS_W;
+    editorCanvas.height = CANVAS_H;
+
+    // ===== Editor State =====
+    let editorState = null;
+    let editorDrawRAF = null;
+    let draggingPip = false;
+    let dragOffsetX = 0;
+    let dragOffsetY = 0;
+
+    // ===== Shared drawPip function =====
+    function drawPip(targetCtx, video, pipX, pipY, pipW, pipH) {
+      const r = 12;
+      targetCtx.save();
+      targetCtx.beginPath();
+      targetCtx.moveTo(pipX + r, pipY);
+      targetCtx.lineTo(pipX + pipW - r, pipY);
+      targetCtx.quadraticCurveTo(pipX + pipW, pipY, pipX + pipW, pipY + r);
+      targetCtx.lineTo(pipX + pipW, pipY + pipH - r);
+      targetCtx.quadraticCurveTo(pipX + pipW, pipY + pipH, pipX + pipW - r, pipY + pipH);
+      targetCtx.lineTo(pipX + r, pipY + pipH);
+      targetCtx.quadraticCurveTo(pipX, pipY + pipH, pipX, pipY + pipH - r);
+      targetCtx.lineTo(pipX, pipY + r);
+      targetCtx.quadraticCurveTo(pipX, pipY, pipX + r, pipY);
+      targetCtx.closePath();
+      targetCtx.clip();
+      const camW = video.videoWidth;
+      const camH = video.videoHeight;
+      const cropSize = Math.min(camW, camH);
+      const sx = (camW - cropSize) / 2;
+      const sy = (camH - cropSize) / 2;
+      targetCtx.drawImage(video, sx, sy, cropSize, cropSize, pipX, pipY, pipW, pipH);
+      targetCtx.restore();
+    }
 
     // Populate device lists
     async function enumerateDevices() {
@@ -233,45 +331,22 @@
       const drawScreen = screenFitSelect.value === 'fill' ? drawFill : drawFit;
 
       if (hasScreen && hasCamera) {
-        drawScreen(screenVideo, 0, 0, CANVAS_W, CANVAS_H);
-        // Camera as PiP in bottom-right
-        const pipW = Math.round(CANVAS_W * PIP_FRACTION);
-        const pipH = pipW; // 1:1 ratio
+        drawScreen(ctx, screenVideo, 0, 0, CANVAS_W, CANVAS_H);
+        const pipW = PIP_SIZE;
+        const pipH = pipW;
         const pipX = CANVAS_W - pipW - PIP_MARGIN;
         const pipY = CANVAS_H - pipH - PIP_MARGIN;
-        // rounded rectangle clip
-        const r = 12;
-        ctx.save();
-        ctx.beginPath();
-        ctx.moveTo(pipX + r, pipY);
-        ctx.lineTo(pipX + pipW - r, pipY);
-        ctx.quadraticCurveTo(pipX + pipW, pipY, pipX + pipW, pipY + r);
-        ctx.lineTo(pipX + pipW, pipY + pipH - r);
-        ctx.quadraticCurveTo(pipX + pipW, pipY + pipH, pipX + pipW - r, pipY + pipH);
-        ctx.lineTo(pipX + r, pipY + pipH);
-        ctx.quadraticCurveTo(pipX, pipY + pipH, pipX, pipY + pipH - r);
-        ctx.lineTo(pipX, pipY + r);
-        ctx.quadraticCurveTo(pipX, pipY, pipX + r, pipY);
-        ctx.closePath();
-        ctx.clip();
-        // Draw camera cropped to center square
-        const camW = cameraVideo.videoWidth;
-        const camH = cameraVideo.videoHeight;
-        const cropSize = Math.min(camW, camH);
-        const sx = (camW - cropSize) / 2;
-        const sy = (camH - cropSize) / 2;
-        ctx.drawImage(cameraVideo, sx, sy, cropSize, cropSize, pipX, pipY, pipW, pipH);
-        ctx.restore();
+        drawPip(ctx, cameraVideo, pipX, pipY, pipW, pipH);
       } else if (hasScreen) {
-        drawScreen(screenVideo, 0, 0, CANVAS_W, CANVAS_H);
+        drawScreen(ctx, screenVideo, 0, 0, CANVAS_W, CANVAS_H);
       } else if (hasCamera) {
-        drawFit(cameraVideo, 0, 0, CANVAS_W, CANVAS_H);
+        drawFit(ctx, cameraVideo, 0, 0, CANVAS_W, CANVAS_H);
       }
 
       drawRAF = requestAnimationFrame(drawComposite);
     }
 
-    function drawFit(video, x, y, w, h) {
+    function drawFit(targetCtx, video, x, y, w, h) {
       const vw = video.videoWidth;
       const vh = video.videoHeight;
       if (!vw || !vh) return;
@@ -280,10 +355,10 @@
       const dh = vh * scale;
       const dx = x + (w - dw) / 2;
       const dy = y + (h - dh) / 2;
-      ctx.drawImage(video, dx, dy, dw, dh);
+      targetCtx.drawImage(video, dx, dy, dw, dh);
     }
 
-    function drawFill(video, x, y, w, h) {
+    function drawFill(targetCtx, video, x, y, w, h) {
       const vw = video.videoWidth;
       const vh = video.videoHeight;
       if (!vw || !vh) return;
@@ -292,12 +367,12 @@
       const dh = vh * scale;
       const dx = x + (w - dw) / 2;
       const dy = y + (h - dh) / 2;
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(x, y, w, h);
-      ctx.clip();
-      ctx.drawImage(video, dx, dy, dw, dh);
-      ctx.restore();
+      targetCtx.save();
+      targetCtx.beginPath();
+      targetCtx.rect(x, y, w, h);
+      targetCtx.clip();
+      targetCtx.drawImage(video, dx, dy, dw, dh);
+      targetCtx.restore();
     }
 
     // Audio level meter
@@ -342,13 +417,18 @@
         if (e.data.size > 0) chunks.push(e.data);
       };
 
-      recorder.onstop = async () => {
-        const blob = new Blob(chunks, { type: 'video/webm' });
-        const buffer = await blob.arrayBuffer();
-        const saved = await window.electronAPI.saveVideo(buffer, saveFolder, suffix);
-        if (saved) console.log('Saved:', saved);
-      };
+      // blobPromise resolves with { blob, path } when recording stops
+      recorder.blobPromise = new Promise((resolve) => {
+        recorder.onstop = async () => {
+          const blob = new Blob(chunks, { type: 'video/webm' });
+          const buffer = await blob.arrayBuffer();
+          const savedPath = await window.electronAPI.saveVideo(buffer, saveFolder, suffix);
+          if (savedPath) console.log('Saved:', savedPath);
+          resolve({ blob, path: savedPath });
+        };
+      });
 
+      recorder.suffix = suffix;
       return recorder;
     }
 
@@ -364,17 +444,13 @@
     function startRecording() {
       recorders = [];
 
-      // Combo (canvas composite)
-      const comboStream = addAudioToStream(canvas.captureStream(30));
-      recorders.push(createRecorder(comboStream, 'combo'));
-
-      // Individual screen
+      // Individual screen (with audio)
       if (screenStream) {
         const screenOnly = addAudioToStream(new MediaStream(screenStream.getVideoTracks()));
         recorders.push(createRecorder(screenOnly, 'screen'));
       }
 
-      // Individual camera
+      // Individual camera (with audio)
       if (cameraStream) {
         const cameraOnly = addAudioToStream(new MediaStream(cameraStream.getVideoTracks()));
         recorders.push(createRecorder(cameraOnly, 'camera'));
@@ -393,10 +469,20 @@
       timerInterval = setInterval(updateTimer, 200);
     }
 
-    function stopRecording() {
+    async function stopRecording() {
+      const recordedDuration = (Date.now() - startTime) / 1000;
+      clearInterval(timerInterval);
+
       recorders.forEach(r => {
         if (r.state !== 'inactive') r.stop();
       });
+
+      // Await all blobs
+      const results = {};
+      for (const r of recorders) {
+        results[r.suffix] = await r.blobPromise;
+      }
+
       recorders = [];
       recording = false;
       recordBtn.textContent = 'Record';
@@ -405,9 +491,16 @@
       screenSelect.disabled = false;
       cameraSelect.disabled = false;
       audioSelect.disabled = false;
-
-      clearInterval(timerInterval);
       timerEl.textContent = '00:00';
+
+      // Enter editor if we have at least a screen recording
+      if (results.screen) {
+        enterEditor(
+          results.screen.blob, results.camera?.blob || null,
+          results.screen.path, results.camera?.path || null,
+          recordedDuration
+        );
+      }
     }
 
     function updateTimer() {
@@ -416,6 +509,442 @@
       const s = String(elapsed % 60).padStart(2, '0');
       timerEl.textContent = `${m}:${s}`;
     }
+
+    // ===== Editor =====
+
+    function enterEditor(screenBlob, cameraBlob, screenPath, cameraPath, recordedDuration) {
+      // Stop live preview
+      if (drawRAF) { cancelAnimationFrame(drawRAF); drawRAF = null; }
+
+      const screenBlobUrl = URL.createObjectURL(screenBlob);
+      const cameraBlobUrl = cameraBlob ? URL.createObjectURL(cameraBlob) : null;
+
+      const defaultPipX = CANVAS_W - PIP_SIZE - PIP_MARGIN;
+      const defaultPipY = CANVAS_H - PIP_SIZE - PIP_MARGIN;
+
+      editorState = {
+        screenBlobUrl,
+        cameraBlobUrl,
+        screenPath,
+        cameraPath,
+        duration: recordedDuration,
+        currentTime: 0,
+        playing: false,
+        pipSize: PIP_SIZE,
+        keyframes: [{ time: 0, pipX: defaultPipX, pipY: defaultPipY, pipVisible: true }],
+        screenFitMode: screenFitSelect.value,
+        rendering: false,
+        renderProgress: 0,
+        hasCamera: !!cameraBlob
+      };
+
+      editorScreenVideo.src = screenBlobUrl;
+      editorScreenVideo.currentTime = 0;
+      if (cameraBlobUrl) {
+        editorCameraVideo.src = cameraBlobUrl;
+        editorCameraVideo.currentTime = 0;
+      }
+
+      // Wait for metadata to get accurate duration and source resolution
+      editorScreenVideo.onloadedmetadata = () => {
+        editorState.sourceWidth = editorScreenVideo.videoWidth;
+        editorState.sourceHeight = editorScreenVideo.videoHeight;
+        if (isFinite(editorScreenVideo.duration) && editorScreenVideo.duration > 0) {
+          editorState.duration = editorScreenVideo.duration;
+        }
+        updateEditorTimeDisplay();
+      };
+
+      // Show editor, hide recording
+      recordingView.classList.add('hidden');
+      editorView.classList.remove('hidden');
+
+      updateEditorTimeDisplay();
+      renderKeyframeMarkers();
+      editorDrawLoop();
+    }
+
+    function exitEditor() {
+      editorPause();
+      if (editorDrawRAF) { cancelAnimationFrame(editorDrawRAF); editorDrawRAF = null; }
+
+      // Revoke blob URLs
+      if (editorState) {
+        URL.revokeObjectURL(editorState.screenBlobUrl);
+        if (editorState.cameraBlobUrl) URL.revokeObjectURL(editorState.cameraBlobUrl);
+      }
+      editorScreenVideo.src = '';
+      editorCameraVideo.src = '';
+      editorState = null;
+
+      // Show recording, hide editor
+      editorView.classList.add('hidden');
+      recordingView.classList.remove('hidden');
+
+      updatePreview();
+    }
+
+    function getStateAtTime(time) {
+      const kfs = editorState.keyframes;
+      let active = kfs[0];
+      for (let i = 1; i < kfs.length; i++) {
+        if (kfs[i].time <= time) active = kfs[i];
+        else break;
+      }
+      return active;
+    }
+
+    function formatTime(seconds) {
+      const m = String(Math.floor(seconds / 60)).padStart(2, '0');
+      const s = String(Math.floor(seconds % 60)).padStart(2, '0');
+      return `${m}:${s}`;
+    }
+
+    function updateEditorTimeDisplay() {
+      if (!editorState) return;
+      editorTimeEl.textContent = `${formatTime(editorState.currentTime)} / ${formatTime(editorState.duration)}`;
+    }
+
+    function editorPlay() {
+      if (!editorState || editorState.rendering) return;
+      editorState.playing = true;
+      editorScreenVideo.play();
+      if (editorState.hasCamera) editorCameraVideo.play();
+      editorPlayBtn.textContent = 'Pause';
+    }
+
+    function editorPause() {
+      if (!editorState) return;
+      editorState.playing = false;
+      editorScreenVideo.pause();
+      if (editorState.hasCamera) editorCameraVideo.pause();
+      editorPlayBtn.textContent = 'Play';
+    }
+
+    function editorTogglePlay() {
+      if (!editorState) return;
+      if (editorState.playing) editorPause();
+      else editorPlay();
+    }
+
+    function editorSeek(time) {
+      if (!editorState) return;
+      time = Math.max(0, Math.min(time, editorState.duration));
+      editorState.currentTime = time;
+      editorScreenVideo.currentTime = time;
+      if (editorState.hasCamera) editorCameraVideo.currentTime = time;
+      updateEditorTimeDisplay();
+      updateScrubberPosition();
+    }
+
+    function updateScrubberPosition() {
+      if (!editorState || editorState.duration <= 0) return;
+      const pct = (editorState.currentTime / editorState.duration) * 100;
+      editorScrubber.style.left = pct + '%';
+    }
+
+    function editorDrawLoop() {
+      if (!editorState) return;
+
+      if (editorState.playing) {
+        editorState.currentTime = editorScreenVideo.currentTime;
+        updateEditorTimeDisplay();
+        updateScrubberPosition();
+
+        // Drift correction
+        if (editorState.hasCamera) {
+          const drift = Math.abs(editorScreenVideo.currentTime - editorCameraVideo.currentTime);
+          if (drift > 0.05) {
+            editorCameraVideo.currentTime = editorScreenVideo.currentTime;
+          }
+        }
+
+        // Auto-pause at end
+        if (editorScreenVideo.ended) {
+          editorPause();
+        }
+      }
+
+      // Draw composite frame
+      editorCtx.fillStyle = '#000';
+      editorCtx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+      const hasScreen = editorScreenVideo.videoWidth > 0;
+      const hasCamera = editorState.hasCamera && editorCameraVideo.videoWidth > 0;
+
+      const drawScreenFn = editorState.screenFitMode === 'fill' ? drawFill : drawFit;
+
+      if (hasScreen) {
+        drawScreenFn(editorCtx, editorScreenVideo, 0, 0, CANVAS_W, CANVAS_H);
+      }
+
+      if (hasCamera) {
+        const kf = getStateAtTime(editorState.currentTime);
+        if (kf.pipVisible) {
+          drawPip(editorCtx, editorCameraVideo, kf.pipX, kf.pipY, editorState.pipSize, editorState.pipSize);
+        }
+      }
+
+      editorDrawRAF = requestAnimationFrame(editorDrawLoop);
+    }
+
+    // ===== Keyframe management =====
+
+    function addKeyframe() {
+      if (!editorState || editorState.rendering) return;
+      const time = editorState.currentTime;
+      const current = getStateAtTime(time);
+
+      // Remove existing keyframe at this exact time (except t=0 default)
+      editorState.keyframes = editorState.keyframes.filter(kf => kf.time !== time || kf.time === 0);
+
+      if (time === 0) {
+        // Update the t=0 keyframe in place
+        editorState.keyframes[0].pipX = current.pipX;
+        editorState.keyframes[0].pipY = current.pipY;
+        editorState.keyframes[0].pipVisible = current.pipVisible;
+      } else {
+        editorState.keyframes.push({
+          time,
+          pipX: current.pipX,
+          pipY: current.pipY,
+          pipVisible: current.pipVisible
+        });
+      }
+
+      editorState.keyframes.sort((a, b) => a.time - b.time);
+      renderKeyframeMarkers();
+    }
+
+    function toggleCameraVisibility() {
+      if (!editorState || editorState.rendering) return;
+      const time = editorState.currentTime;
+      const current = getStateAtTime(time);
+
+      // Check if there's already a keyframe at this exact time
+      let existing = editorState.keyframes.find(kf => Math.abs(kf.time - time) < 0.001);
+      if (existing) {
+        existing.pipVisible = !existing.pipVisible;
+      } else {
+        editorState.keyframes.push({
+          time,
+          pipX: current.pipX,
+          pipY: current.pipY,
+          pipVisible: !current.pipVisible
+        });
+        editorState.keyframes.sort((a, b) => a.time - b.time);
+      }
+
+      renderKeyframeMarkers();
+    }
+
+    function deleteNearestKeyframe() {
+      if (!editorState || editorState.rendering) return;
+      const time = editorState.currentTime;
+      // Find nearest keyframe that isn't t=0
+      let nearestIdx = -1;
+      let nearestDist = Infinity;
+      for (let i = 1; i < editorState.keyframes.length; i++) {
+        const dist = Math.abs(editorState.keyframes[i].time - time);
+        if (dist < nearestDist) {
+          nearestDist = dist;
+          nearestIdx = i;
+        }
+      }
+      if (nearestIdx > 0) {
+        editorState.keyframes.splice(nearestIdx, 1);
+        renderKeyframeMarkers();
+      }
+    }
+
+    function renderKeyframeMarkers() {
+      if (!editorState) return;
+      editorKeyframeMarkers.innerHTML = '';
+      for (const kf of editorState.keyframes) {
+        const pct = (kf.time / editorState.duration) * 100;
+        const dot = document.createElement('div');
+        dot.className = 'absolute rounded-full';
+        dot.style.width = '8px';
+        dot.style.height = '8px';
+        dot.style.top = '50%';
+        dot.style.transform = 'translate(-50%, -50%)';
+        dot.style.left = pct + '%';
+        dot.style.backgroundColor = kf.pipVisible ? '#3b82f6' : '#ef4444';
+        editorKeyframeMarkers.appendChild(dot);
+      }
+    }
+
+    // ===== PiP drag-to-reposition =====
+
+    function canvasToEditorCoords(clientX, clientY) {
+      const rect = editorCanvas.getBoundingClientRect();
+      const scaleX = CANVAS_W / rect.width;
+      const scaleY = CANVAS_H / rect.height;
+      return {
+        x: (clientX - rect.left) * scaleX,
+        y: (clientY - rect.top) * scaleY
+      };
+    }
+
+    editorCanvas.addEventListener('mousedown', (e) => {
+      if (!editorState || editorState.rendering || !editorState.hasCamera) return;
+      const { x, y } = canvasToEditorCoords(e.clientX, e.clientY);
+      const kf = getStateAtTime(editorState.currentTime);
+      if (!kf.pipVisible) return;
+
+      const pipW = editorState.pipSize;
+      const pipH = editorState.pipSize;
+      if (x >= kf.pipX && x <= kf.pipX + pipW && y >= kf.pipY && y <= kf.pipY + pipH) {
+        draggingPip = true;
+        dragOffsetX = x - kf.pipX;
+        dragOffsetY = y - kf.pipY;
+        e.preventDefault();
+      }
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!draggingPip || !editorState) return;
+      const { x, y } = canvasToEditorCoords(e.clientX, e.clientY);
+      const pipW = editorState.pipSize;
+      const pipH = editorState.pipSize;
+
+      let newX = x - dragOffsetX;
+      let newY = y - dragOffsetY;
+
+      // Constrain to canvas bounds
+      newX = Math.max(0, Math.min(newX, CANVAS_W - pipW));
+      newY = Math.max(0, Math.min(newY, CANVAS_H - pipH));
+
+      // Update current keyframe's position (or the interpolated state)
+      const time = editorState.currentTime;
+      let existing = editorState.keyframes.find(kf => Math.abs(kf.time - time) < 0.001);
+      if (existing) {
+        existing.pipX = newX;
+        existing.pipY = newY;
+      } else {
+        // Create a new keyframe at this position
+        const current = getStateAtTime(time);
+        editorState.keyframes.push({
+          time,
+          pipX: newX,
+          pipY: newY,
+          pipVisible: current.pipVisible
+        });
+        editorState.keyframes.sort((a, b) => a.time - b.time);
+        renderKeyframeMarkers();
+      }
+    });
+
+    window.addEventListener('mouseup', () => {
+      draggingPip = false;
+    });
+
+    // ===== Timeline scrubber =====
+
+    editorTimeline.addEventListener('mousedown', (e) => {
+      if (!editorState || editorState.rendering) return;
+      seekFromTimeline(e);
+      const onMove = (e2) => seekFromTimeline(e2);
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    });
+
+    function seekFromTimeline(e) {
+      const rect = editorTimeline.getBoundingClientRect();
+      const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      editorSeek(pct * editorState.duration);
+    }
+
+    // ===== Editor button handlers =====
+
+    editorBackBtn.addEventListener('click', exitEditor);
+    editorPlayBtn.addEventListener('click', editorTogglePlay);
+    editorKeyframeBtn.addEventListener('click', addKeyframe);
+    editorToggleCamBtn.addEventListener('click', toggleCameraVisibility);
+    editorDeleteKfBtn.addEventListener('click', deleteNearestKeyframe);
+
+    // ===== Render pipeline =====
+
+    editorRenderBtn.addEventListener('click', async () => {
+      if (!editorState || editorState.rendering) return;
+      await renderVideo();
+    });
+
+    async function renderVideo() {
+      editorState.rendering = true;
+      editorRenderProgress.classList.remove('hidden');
+      editorRenderBar.style.width = '0%';
+      editorRenderLabel.textContent = 'Rendering...';
+      editorPause();
+
+      // Disable controls
+      editorPlayBtn.disabled = true;
+      editorKeyframeBtn.disabled = true;
+      editorToggleCamBtn.disabled = true;
+      editorDeleteKfBtn.disabled = true;
+      editorRenderBtn.disabled = true;
+      editorBackBtn.disabled = true;
+
+      try {
+        editorRenderBar.style.width = '10%';
+
+        const mp4Path = await window.electronAPI.renderComposite({
+          screenPath: editorState.screenPath,
+          cameraPath: editorState.cameraPath,
+          keyframes: editorState.keyframes,
+          pipSize: editorState.pipSize,
+          screenFitMode: editorState.screenFitMode,
+          sourceWidth: editorState.sourceWidth || CANVAS_W,
+          sourceHeight: editorState.sourceHeight || CANVAS_H,
+          outputFolder: saveFolder
+        });
+
+        editorRenderBar.style.width = '100%';
+        editorRenderLabel.textContent = 'Done! Saved: ' + mp4Path.split('/').pop();
+        console.log('Rendered:', mp4Path);
+      } catch (err) {
+        console.error('Render error:', err);
+        editorRenderLabel.textContent = 'Render failed. Check console for details.';
+        editorRenderBar.style.width = '100%';
+      }
+
+      // Re-enable controls
+      editorPlayBtn.disabled = false;
+      editorKeyframeBtn.disabled = false;
+      editorToggleCamBtn.disabled = false;
+      editorDeleteKfBtn.disabled = false;
+      editorRenderBtn.disabled = false;
+      editorBackBtn.disabled = false;
+      editorState.rendering = false;
+
+      editorSeek(0);
+    }
+
+    // ===== Keyboard shortcuts =====
+
+    document.addEventListener('keydown', (e) => {
+      if (!editorState || editorState.rendering) return;
+      // Don't capture if focus is in an input
+      if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') return;
+
+      if (e.code === 'Space') {
+        e.preventDefault();
+        editorTogglePlay();
+      } else if (e.code === 'ArrowLeft') {
+        e.preventDefault();
+        editorSeek(editorState.currentTime - 1 / 30);
+      } else if (e.code === 'ArrowRight') {
+        e.preventDefault();
+        editorSeek(editorState.currentTime + 1 / 30);
+      } else if (e.code === 'KeyK') {
+        e.preventDefault();
+        addKeyframe();
+      }
+    });
 
     // Settings
     settingsBtn.addEventListener('click', () => {
