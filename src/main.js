@@ -118,30 +118,59 @@ function buildFilterComplex(keyframes, pipSize, screenFitMode, sourceWidth, sour
     screenFilter = `[0:v]scale=${outW}:${outH}:force_original_aspect_ratio=decrease,pad=${outW}:${outH}:'(ow-iw)/2':'(oh-ih)/2':color=black[screen]`
   }
 
-  // Camera: crop center square, scale to pip size, apply rounded corner alpha mask
-  const camFilter = `[1:v]crop='min(iw,ih)':'min(iw,ih)':'(iw-min(iw,ih))/2':'(ih-min(iw,ih))/2',scale=${actualPipSize}:${actualPipSize},format=yuva420p,geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='255*lte(pow(max(0,max(${r}-X,X-${maxCoord})),2)+pow(max(0,max(${r}-Y,Y-${maxCoord})),2),${rSq})'[cam]`
+  // Camera: crop center square, scale to pip size, apply rounded corner alpha mask with fade
+  const alphaExpr = buildAlphaExpr(keyframes)
+  const roundCorner = `lte(pow(max(0,max(${r}-X,X-${maxCoord})),2)+pow(max(0,max(${r}-Y,Y-${maxCoord})),2),${rSq})`
+  const camFilter = `[1:v]crop='min(iw,ih)':'min(iw,ih)':'(iw-min(iw,ih))/2':'(ih-min(iw,ih))/2',scale=${actualPipSize}:${actualPipSize},format=yuva420p,geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='255*${roundCorner}*(${alphaExpr})'[cam]`
 
   const xExpr = buildPosExpr(scaledKeyframes, 'pipX')
   const yExpr = buildPosExpr(scaledKeyframes, 'pipY')
-  const enableExpr = buildVisExpr(keyframes)
 
-  return `${screenFilter};${camFilter};[screen][cam]overlay=x='${xExpr}':y='${yExpr}':enable='${enableExpr}':format=auto[out]`
+  return `${screenFilter};${camFilter};[screen][cam]overlay=x='${xExpr}':y='${yExpr}':format=auto[out]`
 }
+
+const TRANSITION_DURATION = 0.3
 
 function buildPosExpr(keyframes, prop) {
   if (keyframes.length === 1) return String(Math.round(keyframes[0][prop]))
   let expr = String(Math.round(keyframes[0][prop]))
   for (let i = 1; i < keyframes.length; i++) {
-    expr = `if(gte(t,${keyframes[i].time.toFixed(3)}),${Math.round(keyframes[i][prop])},${expr})`
+    const prevVal = Math.round(keyframes[i - 1][prop])
+    const currVal = Math.round(keyframes[i][prop])
+    const t = keyframes[i].time
+    const tStart = Math.max(keyframes[i - 1].time, t - TRANSITION_DURATION)
+    const dur = t - tStart
+
+    if (prevVal !== currVal && dur > 0) {
+      const diff = currVal - prevVal
+      expr = `if(gte(t,${t.toFixed(3)}),${currVal},if(gte(t,${tStart.toFixed(3)}),${prevVal}+${diff}*(t-${tStart.toFixed(3)})/${dur.toFixed(3)},${expr}))`
+    } else {
+      expr = `if(gte(t,${t.toFixed(3)}),${currVal},${expr})`
+    }
   }
   return expr
 }
 
-function buildVisExpr(keyframes) {
+function buildAlphaExpr(keyframes) {
   if (keyframes.length === 1) return keyframes[0].pipVisible ? '1' : '0'
   let expr = keyframes[0].pipVisible ? '1' : '0'
   for (let i = 1; i < keyframes.length; i++) {
-    expr = `if(gte(t,${keyframes[i].time.toFixed(3)}),${keyframes[i].pipVisible ? '1' : '0'},${expr})`
+    const prev = keyframes[i - 1]
+    const curr = keyframes[i]
+    const t = curr.time
+    const tEnd = t + TRANSITION_DURATION
+
+    if (prev.pipVisible !== curr.pipVisible) {
+      if (curr.pipVisible) {
+        // Fade in: 0 -> 1
+        expr = `if(gte(T,${tEnd.toFixed(3)}),1,if(gte(T,${t.toFixed(3)}),(T-${t.toFixed(3)})/${TRANSITION_DURATION.toFixed(3)},${expr}))`
+      } else {
+        // Fade out: 1 -> 0
+        expr = `if(gte(T,${tEnd.toFixed(3)}),0,if(gte(T,${t.toFixed(3)}),(${tEnd.toFixed(3)}-T)/${TRANSITION_DURATION.toFixed(3)},${expr}))`
+      }
+    } else {
+      expr = `if(gte(T,${t.toFixed(3)}),${curr.pipVisible ? '1' : '0'},${expr})`
+    }
   }
   return expr
 }

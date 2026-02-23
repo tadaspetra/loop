@@ -175,6 +175,7 @@
     const PIP_FRACTION = 0.25;
     const PIP_MARGIN = 20;
     const PIP_SIZE = Math.round(CANVAS_W * PIP_FRACTION);
+    const TRANSITION_DURATION = 0.3;
 
     canvas.width = CANVAS_W;
     canvas.height = CANVAS_H;
@@ -586,12 +587,47 @@
 
     function getStateAtTime(time) {
       const kfs = editorState.keyframes;
-      let active = kfs[0];
+
+      // Find active keyframe (last one at or before time)
+      let activeIdx = 0;
       for (let i = 1; i < kfs.length; i++) {
-        if (kfs[i].time <= time) active = kfs[i];
+        if (kfs[i].time <= time) activeIdx = i;
         else break;
       }
-      return active;
+
+      const active = kfs[activeIdx];
+      const prev = activeIdx > 0 ? kfs[activeIdx - 1] : null;
+      const next = activeIdx < kfs.length - 1 ? kfs[activeIdx + 1] : null;
+
+      let pipX = active.pipX;
+      let pipY = active.pipY;
+      let opacity = active.pipVisible ? 1 : 0;
+
+      // Position transition: smooth movement arriving at next keyframe
+      if (next && (next.pipX !== active.pipX || next.pipY !== active.pipY)) {
+        const transStart = Math.max(active.time, next.time - TRANSITION_DURATION);
+        const dur = next.time - transStart;
+        if (time >= transStart && dur > 0) {
+          const t = Math.min((time - transStart) / dur, 1);
+          pipX = active.pipX + (next.pipX - active.pipX) * t;
+          pipY = active.pipY + (next.pipY - active.pipY) * t;
+        }
+      }
+
+      // Fade transition: fade out/in after visibility toggle keyframe
+      if (prev && prev.pipVisible !== active.pipVisible) {
+        const elapsed = time - active.time;
+        if (elapsed < TRANSITION_DURATION) {
+          const t = elapsed / TRANSITION_DURATION;
+          if (active.pipVisible) {
+            opacity = t; // Fading in
+          } else {
+            opacity = 1 - t; // Fading out
+          }
+        }
+      }
+
+      return { pipX, pipY, pipVisible: opacity > 0, opacity };
     }
 
     function formatTime(seconds) {
@@ -680,8 +716,11 @@
 
       if (hasCamera) {
         const kf = getStateAtTime(editorState.currentTime);
-        if (kf.pipVisible) {
+        if (kf.opacity > 0) {
+          editorCtx.save();
+          editorCtx.globalAlpha = kf.opacity;
           drawPip(editorCtx, editorCameraVideo, kf.pipX, kf.pipY, editorState.pipSize, editorState.pipSize);
+          editorCtx.restore();
         }
       }
 
