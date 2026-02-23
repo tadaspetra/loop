@@ -3,8 +3,10 @@ const { app, BrowserWindow, ipcMain, dialog, desktopCapturer, shell } = require(
 const path = require('path')
 const fs = require('fs')
 
+let win = null
+
 function createWindow() {
-  const win = new BrowserWindow({
+  win = new BrowserWindow({
     width: 960,
     height: 700,
     webPreferences: {
@@ -12,6 +14,7 @@ function createWindow() {
     }
   })
 
+  win.setContentProtection(true)
   win.loadFile(path.join(__dirname, 'index.html'))
 }
 
