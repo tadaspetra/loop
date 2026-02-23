@@ -532,7 +532,9 @@
         currentTime: 0,
         playing: false,
         pipSize: PIP_SIZE,
-        keyframes: [{ time: 0, pipX: defaultPipX, pipY: defaultPipY, pipVisible: true }],
+        defaultPipX,
+        defaultPipY,
+        keyframes: [],
         screenFitMode: screenFitSelect.value,
         rendering: false,
         renderProgress: 0,
@@ -586,7 +588,9 @@
     }
 
     function getStateAtTime(time) {
-      const kfs = editorState.keyframes;
+      const defaultKf = { time: 0, pipX: editorState.defaultPipX, pipY: editorState.defaultPipY, pipVisible: true };
+      const userKfs = editorState.keyframes;
+      const kfs = userKfs.length > 0 && userKfs[0].time === 0 ? userKfs : [defaultKf, ...userKfs];
 
       // Find active keyframe (last one at or before time)
       let activeIdx = 0;
@@ -734,22 +738,15 @@
       const time = editorState.currentTime;
       const current = getStateAtTime(time);
 
-      // Remove existing keyframe at this exact time (except t=0 default)
-      editorState.keyframes = editorState.keyframes.filter(kf => kf.time !== time || kf.time === 0);
+      // Remove existing keyframe at this exact time
+      editorState.keyframes = editorState.keyframes.filter(kf => kf.time !== time);
 
-      if (time === 0) {
-        // Update the t=0 keyframe in place
-        editorState.keyframes[0].pipX = current.pipX;
-        editorState.keyframes[0].pipY = current.pipY;
-        editorState.keyframes[0].pipVisible = current.pipVisible;
-      } else {
-        editorState.keyframes.push({
-          time,
-          pipX: current.pipX,
-          pipY: current.pipY,
-          pipVisible: current.pipVisible
-        });
-      }
+      editorState.keyframes.push({
+        time,
+        pipX: current.pipX,
+        pipY: current.pipY,
+        pipVisible: current.pipVisible
+      });
 
       editorState.keyframes.sort((a, b) => a.time - b.time);
       renderKeyframeMarkers();
@@ -778,11 +775,10 @@
     }
 
     function deleteNearestKeyframe() {
-      if (!editorState || editorState.rendering) return;
+      if (!editorState || editorState.rendering || editorState.keyframes.length === 0) return;
       const time = editorState.currentTime;
-      // Find nearest keyframe that isn't t=0
-      let nearestIdx = -1;
-      let nearestDist = Infinity;
+      let nearestIdx = 0;
+      let nearestDist = Math.abs(editorState.keyframes[0].time - time);
       for (let i = 1; i < editorState.keyframes.length; i++) {
         const dist = Math.abs(editorState.keyframes[i].time - time);
         if (dist < nearestDist) {
@@ -790,10 +786,8 @@
           nearestIdx = i;
         }
       }
-      if (nearestIdx > 0) {
-        editorState.keyframes.splice(nearestIdx, 1);
-        renderKeyframeMarkers();
-      }
+      editorState.keyframes.splice(nearestIdx, 1);
+      renderKeyframeMarkers();
     }
 
     function renderKeyframeMarkers() {
@@ -931,10 +925,14 @@
       try {
         editorRenderBar.style.width = '10%';
 
+        const renderKeyframes = editorState.keyframes.length > 0 && editorState.keyframes[0].time === 0
+          ? editorState.keyframes
+          : [{ time: 0, pipX: editorState.defaultPipX, pipY: editorState.defaultPipY, pipVisible: true }, ...editorState.keyframes];
+
         const mp4Path = await window.electronAPI.renderComposite({
           screenPath: editorState.screenPath,
           cameraPath: editorState.cameraPath,
-          keyframes: editorState.keyframes,
+          keyframes: renderKeyframes,
           pipSize: editorState.pipSize,
           screenFitMode: editorState.screenFitMode,
           sourceWidth: editorState.sourceWidth || CANVAS_W,

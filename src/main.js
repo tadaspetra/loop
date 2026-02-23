@@ -121,7 +121,7 @@ function buildFilterComplex(keyframes, pipSize, screenFitMode, sourceWidth, sour
   // Camera: crop center square, scale to pip size, apply rounded corner alpha mask with fade
   const alphaExpr = buildAlphaExpr(keyframes)
   const roundCorner = `lte(pow(max(0,max(${r}-X,X-${maxCoord})),2)+pow(max(0,max(${r}-Y,Y-${maxCoord})),2),${rSq})`
-  const camFilter = `[1:v]crop='min(iw,ih)':'min(iw,ih)':'(iw-min(iw,ih))/2':'(ih-min(iw,ih))/2',scale=${actualPipSize}:${actualPipSize},format=yuva420p,geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='255*${roundCorner}*(${alphaExpr})'[cam]`
+  const camFilter = `[1:v]setpts=PTS-STARTPTS,crop='min(iw,ih)':'min(iw,ih)':'(iw-min(iw,ih))/2':'(ih-min(iw,ih))/2',scale=${actualPipSize}:${actualPipSize},format=yuva420p,geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='255*${roundCorner}*(${alphaExpr})'[cam]`
 
   const xExpr = buildPosExpr(scaledKeyframes, 'pipX')
   const yExpr = buildPosExpr(scaledKeyframes, 'pipY')
