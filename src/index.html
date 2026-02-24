@@ -675,8 +675,10 @@
         audioSendInterval = null;
       }
 
-      // Disconnect worklet
+      // Disconnect worklet (must sever micSourceNode→worklet input, not just worklet outputs)
       if (scribeWorkletNode) {
+        scribeWorkletNode.port.onmessage = null;
+        if (micSourceNode) micSourceNode.disconnect(scribeWorkletNode);
         scribeWorkletNode.disconnect();
         scribeWorkletNode = null;
       }
