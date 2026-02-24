@@ -225,6 +225,10 @@
     let dragOffsetX = 0;
     let dragOffsetY = 0;
 
+    function easeInOut(t) {
+      return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+    }
+
     // ===== Shared drawPip function =====
     function drawPip(targetCtx, video, pipX, pipY, pipW, pipH) {
       const r = 12;
@@ -247,6 +251,36 @@
       const sx = (camW - cropSize) / 2;
       const sy = (camH - cropSize) / 2;
       targetCtx.drawImage(video, sx, sy, cropSize, cropSize, pipX, pipY, pipW, pipH);
+      targetCtx.restore();
+    }
+
+    function drawCameraRect(targetCtx, video, x, y, w, h, r) {
+      const vw = video.videoWidth;
+      const vh = video.videoHeight;
+      if (!vw || !vh) return;
+      targetCtx.save();
+      targetCtx.beginPath();
+      if (r > 0.5) {
+        targetCtx.moveTo(x + r, y);
+        targetCtx.lineTo(x + w - r, y);
+        targetCtx.quadraticCurveTo(x + w, y, x + w, y + r);
+        targetCtx.lineTo(x + w, y + h - r);
+        targetCtx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+        targetCtx.lineTo(x + r, y + h);
+        targetCtx.quadraticCurveTo(x, y + h, x, y + h - r);
+        targetCtx.lineTo(x, y + r);
+        targetCtx.quadraticCurveTo(x, y, x + r, y);
+      } else {
+        targetCtx.rect(x, y, w, h);
+      }
+      targetCtx.closePath();
+      targetCtx.clip();
+      const scale = Math.max(w / vw, h / vh);
+      const dw = vw * scale;
+      const dh = vh * scale;
+      const dx = x + (w - dw) / 2;
+      const dy = y + (h - dh) / 2;
+      targetCtx.drawImage(video, dx, dy, dw, dh);
       targetCtx.restore();
     }
 
@@ -890,23 +924,19 @@
         }
       }
 
-      // Camera fullscreen state + fade
+      // Camera fullscreen state + expand/collapse transition
       let cameraFullscreen = active.cameraFullscreen || false;
-      let camFullOpacity = cameraFullscreen ? 1 : 0;
+      let camTransition = cameraFullscreen ? 1 : 0;
 
       if (prev && (prev.cameraFullscreen || false) !== cameraFullscreen) {
         const elapsed = time - active.time;
         if (elapsed < TRANSITION_DURATION) {
           const t = elapsed / TRANSITION_DURATION;
-          if (cameraFullscreen) {
-            camFullOpacity = t;
-          } else {
-            camFullOpacity = 1 - t;
-          }
+          camTransition = cameraFullscreen ? t : 1 - t;
         }
       }
 
-      return { pipX, pipY, pipVisible: opacity > 0, opacity, cameraFullscreen, camFullOpacity };
+      return { pipX, pipY, pipVisible: opacity > 0, opacity, cameraFullscreen, camTransition };
     }
 
     function formatTime(seconds) {
@@ -995,11 +1025,14 @@
 
       if (hasCamera) {
         const kf = getStateAtTime(editorState.currentTime);
-        if (kf.camFullOpacity > 0) {
-          editorCtx.save();
-          editorCtx.globalAlpha = kf.camFullOpacity;
-          drawFill(editorCtx, editorCameraVideo, 0, 0, CANVAS_W, CANVAS_H);
-          editorCtx.restore();
+        if (kf.camTransition > 0) {
+          const t = easeInOut(kf.camTransition);
+          const camX = kf.pipX * (1 - t);
+          const camY = kf.pipY * (1 - t);
+          const camW = editorState.pipSize + (CANVAS_W - editorState.pipSize) * t;
+          const camH = editorState.pipSize + (CANVAS_H - editorState.pipSize) * t;
+          const camR = 12 * (1 - t);
+          drawCameraRect(editorCtx, editorCameraVideo, camX, camY, camW, camH, camR);
         } else if (kf.opacity > 0) {
           editorCtx.save();
           editorCtx.globalAlpha = kf.opacity;
@@ -1127,7 +1160,7 @@
       if (!editorState || editorState.rendering || !editorState.hasCamera) return;
       const { x, y } = canvasToEditorCoords(e.clientX, e.clientY);
       const kf = getStateAtTime(editorState.currentTime);
-      if (!kf.pipVisible) return;
+      if (!kf.pipVisible || kf.camTransition > 0) return;
 
       const pipW = editorState.pipSize;
       const pipH = editorState.pipSize;
