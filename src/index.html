@@ -169,10 +169,8 @@
     <!-- Playback controls -->
     <div class="flex items-center justify-center gap-3">
       <button id="editorPlayBtn" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">Play</button>
-      <button id="editorKeyframeBtn" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">Add Keyframe</button>
       <button id="editorToggleCamBtn" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">Toggle Camera</button>
       <button id="editorCamFullBtn" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">Camera Full</button>
-      <button id="editorDeleteKfBtn" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">Delete Manual Keyframe</button>
     </div>
 
     <!-- Timeline scrubber -->
@@ -180,7 +178,6 @@
       <canvas id="editorWaveformCanvas" class="absolute inset-0 w-full h-full pointer-events-none z-0" style="opacity: 0.5"></canvas>
       <div id="editorSectionMarkers" class="absolute inset-0 z-1"></div>
       <div id="editorScrubber" class="absolute top-0 bottom-0 w-0.5 bg-white pointer-events-none z-20" style="left: 0%"></div>
-      <div id="editorKeyframeMarkers" class="absolute inset-0 pointer-events-none z-10"></div>
     </div>
     <div id="editorSectionTranscriptList" class="max-h-40 overflow-y-auto space-y-2 bg-gray-900/50 border border-gray-700 rounded p-2">
       <div class="text-xs text-gray-500 px-1">Section transcript will appear here after trimming.</div>
@@ -246,16 +243,13 @@
     const editorCameraVideo = document.getElementById('editorCameraVideo');
     const editorBackBtn = document.getElementById('editorBackBtn');
     const editorPlayBtn = document.getElementById('editorPlayBtn');
-    const editorKeyframeBtn = document.getElementById('editorKeyframeBtn');
     const editorToggleCamBtn = document.getElementById('editorToggleCamBtn');
     const editorCamFullBtn = document.getElementById('editorCamFullBtn');
-    const editorDeleteKfBtn = document.getElementById('editorDeleteKfBtn');
     const editorRenderBtn = document.getElementById('editorRenderBtn');
     const editorTimeEl = document.getElementById('editorTime');
     const editorTimeline = document.getElementById('editorTimeline');
     const editorSectionMarkers = document.getElementById('editorSectionMarkers');
     const editorScrubber = document.getElementById('editorScrubber');
-    const editorKeyframeMarkers = document.getElementById('editorKeyframeMarkers');
     const editorSectionTranscriptList = document.getElementById('editorSectionTranscriptList');
     const editorRenderProgress = document.getElementById('editorRenderProgress');
     const editorRenderLabel = document.getElementById('editorRenderLabel');
@@ -491,7 +485,6 @@
       waveformPeaks = null;
       renderWaveform();
       renderSectionMarkers();
-      renderKeyframeMarkers();
       updateWorkspaceHeader();
     }
 
@@ -770,7 +763,6 @@
       };
       editorState.keyframes.push(anchor);
       editorState.keyframes.sort((a, b) => a.time - b.time);
-      renderKeyframeMarkers();
       return anchor;
     }
 
@@ -2224,7 +2216,6 @@
         editorState.sections = normalizeSections(editorState.sections, editorState.duration);
         syncSectionAnchorKeyframes();
         renderSectionMarkers();
-        renderKeyframeMarkers();
         updateEditorTimeDisplay();
         scheduleProjectSave();
 
@@ -2237,7 +2228,6 @@
 
       updateEditorTimeDisplay();
       renderSectionMarkers();
-      renderKeyframeMarkers();
       const initialView = opts.initialView === 'recording' ? 'recording' : 'timeline';
       setWorkspaceView(initialView);
     }
@@ -2414,29 +2404,6 @@
 
     // ===== Keyframe management =====
 
-    function addKeyframe() {
-      if (!editorState || editorState.rendering) return;
-      const time = editorState.currentTime;
-      const current = getStateAtTime(time);
-
-      // Remove existing manual keyframe at this exact time (keep section anchors)
-      editorState.keyframes = editorState.keyframes.filter(
-        kf => Math.abs(kf.time - time) >= 0.001 || !!kf.sectionId
-      );
-
-      editorState.keyframes.push({
-        time,
-        pipX: current.pipX,
-        pipY: current.pipY,
-        pipVisible: current.pipVisible,
-        cameraFullscreen: current.cameraFullscreen || false
-      });
-
-      editorState.keyframes.sort((a, b) => a.time - b.time);
-      renderKeyframeMarkers();
-      scheduleProjectSave();
-    }
-
     function getMutableCameraKeyframe() {
       if (!editorState) return null;
 
@@ -2445,36 +2412,12 @@
         return getSectionAnchorKeyframe(selectedSection.id, true);
       }
 
-      const time = editorState.currentTime;
-      let existing = editorState.keyframes.find(kf => Math.abs(kf.time - time) < 0.001);
-      if (existing) return existing;
-
-      const current = getStateAtTime(time);
-      const manual = {
-        time,
-        pipX: current.pipX,
-        pipY: current.pipY,
-        pipVisible: current.pipVisible,
-        cameraFullscreen: current.cameraFullscreen || false
-      };
-      editorState.keyframes.push(manual);
-      editorState.keyframes.sort((a, b) => a.time - b.time);
-      return manual;
-    }
-
-    function findNearestManualKeyframeIndex(time) {
-      if (!editorState) return -1;
-      let nearestIdx = -1;
-      let nearestDist = Infinity;
-      for (let i = 0; i < editorState.keyframes.length; i++) {
-        if (editorState.keyframes[i].sectionId) continue;
-        const dist = Math.abs(editorState.keyframes[i].time - time);
-        if (dist < nearestDist) {
-          nearestDist = dist;
-          nearestIdx = i;
-        }
+      const section = findSectionForTime(editorState.currentTime);
+      if (section) {
+        return getSectionAnchorKeyframe(section.id, true);
       }
-      return nearestIdx;
+
+      return null;
     }
 
     function toggleCameraVisibility() {
@@ -2482,8 +2425,6 @@
       const target = getMutableCameraKeyframe();
       if (!target) return;
       target.pipVisible = !target.pipVisible;
-
-      renderKeyframeMarkers();
       scheduleProjectSave();
     }
 
@@ -2492,36 +2433,7 @@
       const target = getMutableCameraKeyframe();
       if (!target) return;
       target.cameraFullscreen = !(target.cameraFullscreen || false);
-
-      renderKeyframeMarkers();
       scheduleProjectSave();
-    }
-
-    function deleteNearestKeyframe() {
-      if (!editorState || editorState.rendering || editorState.keyframes.length === 0) return;
-      const nearestIdx = findNearestManualKeyframeIndex(editorState.currentTime);
-      if (nearestIdx < 0) return;
-      editorState.keyframes.splice(nearestIdx, 1);
-      renderKeyframeMarkers();
-      scheduleProjectSave();
-    }
-
-    function renderKeyframeMarkers() {
-      if (!editorState) return;
-      editorKeyframeMarkers.innerHTML = '';
-      for (const kf of editorState.keyframes) {
-        if (kf.sectionId) continue;
-        const pct = (kf.time / editorState.duration) * 100;
-        const dot = document.createElement('div');
-        dot.className = 'absolute rounded-full';
-        dot.style.width = '8px';
-        dot.style.height = '8px';
-        dot.style.top = '50%';
-        dot.style.transform = 'translate(-50%, -50%)';
-        dot.style.left = pct + '%';
-        dot.style.backgroundColor = kf.cameraFullscreen ? '#f59e0b' : (kf.pipVisible ? '#3b82f6' : '#ef4444');
-        editorKeyframeMarkers.appendChild(dot);
-      }
     }
 
     // ===== PiP drag-to-reposition =====
@@ -2558,29 +2470,12 @@
       const snapped = snapToNearestCorner(x, y);
 
       const selectedSection = getSelectedSection();
-      if (selectedSection) {
-        const anchor = getSectionAnchorKeyframe(selectedSection.id, true);
+      const section = selectedSection || findSectionForTime(editorState.currentTime);
+      if (section) {
+        const anchor = getSectionAnchorKeyframe(section.id, true);
         if (anchor) {
           anchor.pipX = snapped.x;
           anchor.pipY = snapped.y;
-        }
-      } else {
-        const time = editorState.currentTime;
-        let existing = editorState.keyframes.find(kf => Math.abs(kf.time - time) < 0.001);
-        if (existing) {
-          existing.pipX = snapped.x;
-          existing.pipY = snapped.y;
-        } else {
-          const current = getStateAtTime(time);
-          editorState.keyframes.push({
-            time,
-            pipX: snapped.x,
-            pipY: snapped.y,
-            pipVisible: current.pipVisible,
-            cameraFullscreen: current.cameraFullscreen || false
-          });
-          editorState.keyframes.sort((a, b) => a.time - b.time);
-          renderKeyframeMarkers();
         }
       }
     });
@@ -2627,10 +2522,8 @@
 
     editorBackBtn.addEventListener('click', exitEditor);
     editorPlayBtn.addEventListener('click', editorTogglePlay);
-    editorKeyframeBtn.addEventListener('click', addKeyframe);
     editorToggleCamBtn.addEventListener('click', toggleCameraVisibility);
     editorCamFullBtn.addEventListener('click', toggleCameraFullscreen);
-    editorDeleteKfBtn.addEventListener('click', deleteNearestKeyframe);
 
     // ===== Render pipeline =====
 
@@ -2648,10 +2541,8 @@
 
       // Disable controls
       editorPlayBtn.disabled = true;
-      editorKeyframeBtn.disabled = true;
       editorToggleCamBtn.disabled = true;
       editorCamFullBtn.disabled = true;
-      editorDeleteKfBtn.disabled = true;
       editorRenderBtn.disabled = true;
       editorBackBtn.disabled = true;
 
@@ -2683,10 +2574,8 @@
 
       // Re-enable controls
       editorPlayBtn.disabled = false;
-      editorKeyframeBtn.disabled = false;
       editorToggleCamBtn.disabled = false;
       editorCamFullBtn.disabled = false;
-      editorDeleteKfBtn.disabled = false;
       editorRenderBtn.disabled = false;
       editorBackBtn.disabled = false;
       editorState.rendering = false;
@@ -2781,9 +2670,6 @@
       } else if (e.code === 'Backspace' || e.code === 'Delete') {
         e.preventDefault();
         deleteSelectedSection();
-      } else if (e.code === 'KeyK') {
-        e.preventDefault();
-        addKeyframe();
       } else if (e.code === 'KeyF') {
         e.preventDefault();
         toggleCameraFullscreen();
