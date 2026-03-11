@@ -2260,45 +2260,45 @@
 
       const active = kfs[activeIdx];
       const prev = activeIdx > 0 ? kfs[activeIdx - 1] : null;
-      const next = activeIdx < kfs.length - 1 ? kfs[activeIdx + 1] : null;
 
       let pipX = active.pipX;
       let pipY = active.pipY;
       let opacity = active.pipVisible ? 1 : 0;
-
-      // Position transition: smooth movement arriving at next keyframe
-      if (next && (next.pipX !== active.pipX || next.pipY !== active.pipY)) {
-        const transStart = Math.max(active.time, next.time - TRANSITION_DURATION);
-        const dur = next.time - transStart;
-        if (time >= transStart && dur > 0) {
-          const t = Math.min((time - transStart) / dur, 1);
-          pipX = active.pipX + (next.pipX - active.pipX) * t;
-          pipY = active.pipY + (next.pipY - active.pipY) * t;
-        }
-      }
-
-      // Fade transition: fade out/in after visibility toggle keyframe
-      if (prev && prev.pipVisible !== active.pipVisible) {
-        const elapsed = time - active.time;
-        if (elapsed < TRANSITION_DURATION) {
-          const t = elapsed / TRANSITION_DURATION;
-          if (active.pipVisible) {
-            opacity = t; // Fading in
-          } else {
-            opacity = 1 - t; // Fading out
-          }
-        }
-      }
-
-      // Camera fullscreen state + expand/collapse transition
       let cameraFullscreen = active.cameraFullscreen || false;
       let camTransition = cameraFullscreen ? 1 : 0;
 
-      if (prev && (prev.cameraFullscreen || false) !== cameraFullscreen) {
+      // Unified transition from previous keyframe state (all animations at section boundary)
+      if (prev) {
         const elapsed = time - active.time;
         if (elapsed < TRANSITION_DURATION) {
           const t = elapsed / TRANSITION_DURATION;
-          camTransition = cameraFullscreen ? t : 1 - t;
+          const prevFullscreen = prev.cameraFullscreen || false;
+
+          // Fullscreen expand/collapse
+          if (prevFullscreen !== cameraFullscreen) {
+            camTransition = cameraFullscreen ? t : 1 - t;
+            // Expanding to fullscreen: use previous position as the expand origin
+            if (cameraFullscreen) {
+              pipX = prev.pipX;
+              pipY = prev.pipY;
+            }
+          }
+
+          // Position transition: only between two PiP states (skip if fullscreen involved)
+          if (!prevFullscreen && !cameraFullscreen
+              && (prev.pipX !== active.pipX || prev.pipY !== active.pipY)) {
+            pipX = prev.pipX + (active.pipX - prev.pipX) * t;
+            pipY = prev.pipY + (active.pipY - prev.pipY) * t;
+          }
+
+          // Visibility fade
+          if (prev.pipVisible !== active.pipVisible) {
+            if (active.pipVisible) {
+              opacity = t;
+            } else {
+              opacity = 1 - t;
+            }
+          }
         }
       }
 

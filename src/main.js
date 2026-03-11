@@ -540,15 +540,19 @@ function buildPosExpr(keyframes, prop) {
   if (keyframes.length === 1) return String(Math.round(keyframes[0][prop]))
   let expr = String(Math.round(keyframes[0][prop]))
   for (let i = 1; i < keyframes.length; i++) {
-    const prevVal = Math.round(keyframes[i - 1][prop])
-    const currVal = Math.round(keyframes[i][prop])
-    const t = keyframes[i].time
-    const tStart = Math.max(keyframes[i - 1].time, t - TRANSITION_DURATION)
-    const dur = t - tStart
+    const prev = keyframes[i - 1]
+    const curr = keyframes[i]
+    const prevVal = Math.round(prev[prop])
+    const currVal = Math.round(curr[prop])
+    const t = curr.time
+    const prevFull = prev.cameraFullscreen || false
+    const currFull = curr.cameraFullscreen || false
 
-    if (prevVal !== currVal && dur > 0) {
+    // Position transition only between two PiP states (skip if fullscreen involved)
+    if (prevVal !== currVal && !prevFull && !currFull) {
+      const tEnd = t + TRANSITION_DURATION
       const diff = currVal - prevVal
-      expr = `if(gte(t,${t.toFixed(3)}),${currVal},if(gte(t,${tStart.toFixed(3)}),${prevVal}+${diff}*(t-${tStart.toFixed(3)})/${dur.toFixed(3)},${expr}))`
+      expr = `if(gte(t,${tEnd.toFixed(3)}),${currVal},if(gte(t,${t.toFixed(3)}),${prevVal}+${diff}*(t-${t.toFixed(3)})/${TRANSITION_DURATION.toFixed(3)},${expr}))`
     } else {
       expr = `if(gte(t,${t.toFixed(3)}),${currVal},${expr})`
     }
