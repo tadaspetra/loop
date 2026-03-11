@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "EnterWorktree",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "MAIN=$(git worktree list --porcelain | head -1 | sed 's/^worktree //'); [ -f \"$MAIN/.env\" ] && cp \"$MAIN/.env\" .env; pnpm install",
+            "timeout": 120000
+          }
+        ]
+      }
+    ]
+  }
+}

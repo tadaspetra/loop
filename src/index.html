@@ -126,9 +126,8 @@
 
     <!-- Timeline scrubber -->
     <div id="editorTimeline" class="relative bg-gray-800 rounded h-8 cursor-pointer select-none">
-      <div id="editorSectionMarkers" class="absolute inset-0 z-0"></div>
-      <div id="editorScrubber" class="absolute top-0 bottom-0 w-0.5 bg-white pointer-events-none z-20" style="left: 0%"></div>
-      <div id="editorKeyframeMarkers" class="absolute inset-0 pointer-events-none z-10"></div>
+      <div id="editorScrubber" class="absolute top-0 bottom-0 w-0.5 bg-white pointer-events-none" style="left: 0%"></div>
+      <div id="editorKeyframeMarkers" class="absolute inset-0 pointer-events-none"></div>
     </div>
 
     <!-- Render progress -->
@@ -180,7 +179,6 @@
     const editorRenderBtn = document.getElementById('editorRenderBtn');
     const editorTimeEl = document.getElementById('editorTime');
     const editorTimeline = document.getElementById('editorTimeline');
-    const editorSectionMarkers = document.getElementById('editorSectionMarkers');
     const editorScrubber = document.getElementById('editorScrubber');
     const editorKeyframeMarkers = document.getElementById('editorKeyframeMarkers');
     const editorRenderProgress = document.getElementById('editorRenderProgress');
@@ -214,7 +212,6 @@
     const PIP_MARGIN = 20;
     const PIP_SIZE = Math.round(CANVAS_W * PIP_FRACTION);
     const TRANSITION_DURATION = 0.3;
-    const TRIM_PADDING = 0.15;
 
     canvas.width = CANVAS_W;
     canvas.height = CANVAS_H;
@@ -230,262 +227,6 @@
 
     function easeInOut(t) {
       return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
-    }
-
-    function roundMs(value) {
-      return Number(value.toFixed(3));
-    }
-
-    function buildRemappedSectionsFromSegments(segments) {
-      if (!Array.isArray(segments) || segments.length === 0) return [];
-
-      const padded = segments
-        .map((segment) => {
-          const rawStart = Number(segment.start);
-          const rawEnd = Number(segment.end);
-          if (!Number.isFinite(rawStart) || !Number.isFinite(rawEnd)) return null;
-          const start = Math.max(0, rawStart - TRIM_PADDING);
-          const end = Math.max(start, rawEnd + TRIM_PADDING);
-          return { start, end };
-        })
-        .filter(Boolean)
-        .sort((a, b) => a.start - b.start);
-
-      if (padded.length === 0) return [];
-
-      const merged = [padded[0]];
-      for (let i = 1; i < padded.length; i++) {
-        const last = merged[merged.length - 1];
-        if (padded[i].start <= last.end) {
-          last.end = Math.max(last.end, padded[i].end);
-        } else {
-          merged.push(padded[i]);
-        }
-      }
-
-      const remapped = [];
-      let timelineCursor = 0;
-      for (let i = 0; i < merged.length; i++) {
-        const segment = merged[i];
-        const sourceStart = roundMs(segment.start);
-        const sourceEnd = roundMs(segment.end);
-        const duration = Math.max(0, sourceEnd - sourceStart);
-        const start = roundMs(timelineCursor);
-        const end = roundMs(timelineCursor + duration);
-        remapped.push({
-          id: `section-${i + 1}`,
-          index: i,
-          sourceStart,
-          sourceEnd,
-          start,
-          end,
-          duration: roundMs(duration)
-        });
-        timelineCursor += duration;
-      }
-
-      return remapped;
-    }
-
-    function normalizeSections(rawSections, duration) {
-      const safeDuration = Math.max(0, Number(duration) || 0);
-      const input = Array.isArray(rawSections) ? rawSections : [];
-      const baseSections = input.length > 0
-        ? input
-        : (safeDuration > 0 ? [{ id: 'section-1', start: 0, end: safeDuration }] : []);
-
-      const normalized = baseSections
-        .map((section, idx) => {
-          let start = Number(section.start);
-          let end = Number(section.end);
-          if (!Number.isFinite(start)) start = 0;
-          if (!Number.isFinite(end)) end = start;
-          start = Math.max(0, start);
-          end = Math.max(start, end);
-
-          if (safeDuration > 0) {
-            start = Math.min(start, safeDuration);
-            end = Math.min(end, safeDuration);
-          }
-
-          return {
-            id: section.id || `section-${idx + 1}`,
-            sourceStart: Number.isFinite(Number(section.sourceStart)) ? Number(section.sourceStart) : start,
-            sourceEnd: Number.isFinite(Number(section.sourceEnd)) ? Number(section.sourceEnd) : end,
-            start: roundMs(start),
-            end: roundMs(end)
-          };
-        })
-        .filter(section => section.end - section.start > 0.0001)
-        .sort((a, b) => a.start - b.start);
-
-      if (normalized.length === 0) return [];
-
-      if (safeDuration > 0) {
-        const last = normalized[normalized.length - 1];
-        const drift = Math.abs(safeDuration - last.end);
-        if (drift <= 0.2) {
-          last.end = roundMs(safeDuration);
-        }
-      }
-
-      for (let i = 0; i < normalized.length; i++) {
-        normalized[i].index = i;
-        normalized[i].label = `Section ${i + 1}`;
-        normalized[i].duration = roundMs(Math.max(0, normalized[i].end - normalized[i].start));
-      }
-
-      return normalized;
-    }
-
-    function findSectionForTime(time) {
-      if (!editorState || !editorState.sections || editorState.sections.length === 0) return null;
-      const sections = editorState.sections;
-      for (let i = 0; i < sections.length; i++) {
-        const section = sections[i];
-        const isLast = i === sections.length - 1;
-        if (time >= section.start && (time < section.end || (isLast && time <= section.end + 0.001))) {
-          return section;
-        }
-      }
-      if (time < sections[0].start) return sections[0];
-      return sections[sections.length - 1];
-    }
-
-    function getSelectedSection() {
-      if (!editorState || !editorState.sections || editorState.sections.length === 0) return null;
-      return editorState.sections.find(section => section.id === editorState.selectedSectionId) || editorState.sections[0];
-    }
-
-    function getSectionAnchorKeyframe(sectionId, createIfMissing) {
-      if (!editorState || !sectionId) return null;
-
-      let anchor = editorState.keyframes.find(kf => kf.sectionId === sectionId);
-      if (anchor || !createIfMissing) return anchor || null;
-
-      const section = editorState.sections.find(s => s.id === sectionId);
-      if (!section) return null;
-
-      const fallback = getStateAtTime(section.start);
-      anchor = {
-        time: section.start,
-        pipX: fallback.pipX,
-        pipY: fallback.pipY,
-        pipVisible: fallback.pipVisible,
-        cameraFullscreen: fallback.cameraFullscreen || false,
-        sectionId: section.id,
-        autoSection: true
-      };
-      editorState.keyframes.push(anchor);
-      editorState.keyframes.sort((a, b) => a.time - b.time);
-      renderKeyframeMarkers();
-      return anchor;
-    }
-
-    function syncSectionAnchorKeyframes() {
-      if (!editorState || !editorState.sections || editorState.sections.length === 0) return;
-
-      const manual = editorState.keyframes.filter(kf => !kf.sectionId);
-      const sectionAnchors = editorState.sections.map((section) => {
-        const existing = editorState.keyframes.find(kf => kf.sectionId === section.id);
-        return {
-          time: section.start,
-          pipX: existing ? existing.pipX : editorState.defaultPipX,
-          pipY: existing ? existing.pipY : editorState.defaultPipY,
-          pipVisible: existing ? existing.pipVisible : true,
-          cameraFullscreen: existing ? !!existing.cameraFullscreen : false,
-          sectionId: section.id,
-          autoSection: true
-        };
-      });
-
-      editorState.keyframes = [...sectionAnchors, ...manual].sort((a, b) => a.time - b.time);
-
-      if (!editorState.sections.some(section => section.id === editorState.selectedSectionId)) {
-        editorState.selectedSectionId = editorState.sections[0].id;
-      }
-    }
-
-    function selectEditorSection(sectionId) {
-      if (!editorState || !editorState.sections || editorState.sections.length === 0) return;
-      if (!editorState.sections.some(section => section.id === sectionId)) return;
-      editorState.selectedSectionId = sectionId;
-      renderSectionMarkers();
-      updateEditorTimeDisplay();
-    }
-
-    function renderSectionMarkers() {
-      if (!editorState || !editorState.duration || !editorState.sections || editorState.sections.length === 0) {
-        editorSectionMarkers.innerHTML = '';
-        return;
-      }
-
-      editorSectionMarkers.innerHTML = '';
-      for (const section of editorState.sections) {
-        const sectionStart = (section.start / editorState.duration) * 100;
-        const sectionWidth = Math.max(0.35, ((section.end - section.start) / editorState.duration) * 100);
-        const selected = section.id === editorState.selectedSectionId;
-        const baseColor = section.index % 2 === 0 ? 'rgba(30,41,59,0.72)' : 'rgba(51,65,85,0.68)';
-
-        const band = document.createElement('div');
-        band.className = 'absolute top-0 bottom-0';
-        band.dataset.sectionId = section.id;
-        band.style.left = sectionStart + '%';
-        band.style.width = sectionWidth + '%';
-        band.style.backgroundColor = selected ? 'rgba(37,99,235,0.58)' : baseColor;
-        band.style.borderLeft = section.index === 0 ? 'none' : '1px solid rgba(15,23,42,0.9)';
-        if (selected) {
-          band.style.boxShadow = 'inset 0 0 0 2px rgba(191,219,254,0.95)';
-        }
-        band.title = `${section.label}: ${formatTime(section.start)} - ${formatTime(section.end)}`;
-        const label = document.createElement('div');
-        label.className = 'absolute text-[10px] text-gray-100 font-medium pointer-events-none';
-        label.style.left = '6px';
-        label.style.top = '50%';
-        label.style.transform = 'translateY(-50%)';
-        label.textContent = String(section.index + 1);
-        band.appendChild(label);
-        editorSectionMarkers.appendChild(band);
-
-        if (section.index < editorState.sections.length - 1) {
-          const cut = document.createElement('div');
-          cut.className = 'absolute top-0 bottom-0 pointer-events-none';
-          cut.style.left = `${(section.end / editorState.duration) * 100}%`;
-          cut.style.width = '3px';
-          cut.style.transform = 'translateX(-1.5px)';
-          cut.style.backgroundColor = 'rgba(255,255,255,0.95)';
-          editorSectionMarkers.appendChild(cut);
-        }
-      }
-    }
-
-    function getRenderKeyframes() {
-      if (!editorState) return [];
-
-      if (editorState.sections && editorState.sections.length > 0) {
-        syncSectionAnchorKeyframes();
-      }
-
-      const sorted = [...editorState.keyframes].sort((a, b) => a.time - b.time);
-      const minimal = sorted.map(kf => ({
-        time: kf.time,
-        pipX: kf.pipX,
-        pipY: kf.pipY,
-        pipVisible: kf.pipVisible,
-        cameraFullscreen: !!kf.cameraFullscreen
-      }));
-
-      if (minimal.length === 0 || minimal[0].time > 0.0001) {
-        minimal.unshift({
-          time: 0,
-          pipX: editorState.defaultPipX,
-          pipY: editorState.defaultPipY,
-          pipVisible: true,
-          cameraFullscreen: false
-        });
-      }
-
-      return minimal;
     }
 
     // ===== Shared drawPip function =====
@@ -1017,11 +758,9 @@
       if (results.screen) {
         let screenPath = results.screen.path;
         let cameraPath = results.camera?.path || null;
-        let trimSections = [];
 
         // Trim silence if we have speech segments
         const activeSegments = speechSegments.filter(s => !s.deleted);
-        const fallbackSections = buildRemappedSectionsFromSegments(activeSegments);
         if (activeSegments.length > 0) {
           // Show processing view
           recordingView.classList.add('hidden');
@@ -1037,15 +776,8 @@
             });
             screenPath = trimmed.screenPath || screenPath;
             cameraPath = trimmed.cameraPath || cameraPath;
-            trimSections = Array.isArray(trimmed.sections) && trimmed.sections.length > 0
-              ? trimmed.sections
-              : fallbackSections;
-            if (!trimmed.sections || trimmed.sections.length === 0) {
-              console.warn('Trim metadata missing from main process; using renderer-derived sections.');
-            }
           } catch (err) {
             console.error('Trim failed, using original files:', err);
-            trimSections = [];
           }
 
           processingView.classList.add('hidden');
@@ -1057,8 +789,7 @@
         enterEditor(
           results.screen.blob, results.camera?.blob || null,
           screenPath, cameraPath,
-          recordedDuration,
-          trimSections
+          recordedDuration
         );
       }
     }
@@ -1072,7 +803,7 @@
 
     // ===== Editor =====
 
-    function enterEditor(screenBlob, cameraBlob, screenPath, cameraPath, recordedDuration, rawSections) {
+    function enterEditor(screenBlob, cameraBlob, screenPath, cameraPath, recordedDuration) {
       // Stop live preview
       if (drawRAF) { cancelAnimationFrame(drawRAF); drawRAF = null; }
 
@@ -1086,16 +817,6 @@
 
       const defaultPipX = CANVAS_W - PIP_SIZE - PIP_MARGIN;
       const defaultPipY = CANVAS_H - PIP_SIZE - PIP_MARGIN;
-      const sections = normalizeSections(rawSections, recordedDuration);
-      const sectionKeyframes = sections.map(section => ({
-        time: section.start,
-        pipX: defaultPipX,
-        pipY: defaultPipY,
-        pipVisible: true,
-        cameraFullscreen: false,
-        sectionId: section.id,
-        autoSection: true
-      }));
 
       editorState = {
         screenBlobUrl,
@@ -1108,9 +829,7 @@
         pipSize: PIP_SIZE,
         defaultPipX,
         defaultPipY,
-        keyframes: sectionKeyframes,
-        sections,
-        selectedSectionId: sections[0]?.id || null,
+        keyframes: [],
         screenFitMode: screenFitSelect.value,
         rendering: false,
         renderProgress: 0,
@@ -1131,10 +850,6 @@
         if (isFinite(editorScreenVideo.duration) && editorScreenVideo.duration > 0) {
           editorState.duration = editorScreenVideo.duration;
         }
-        editorState.sections = normalizeSections(editorState.sections, editorState.duration);
-        syncSectionAnchorKeyframes();
-        renderSectionMarkers();
-        renderKeyframeMarkers();
         updateEditorTimeDisplay();
       };
 
@@ -1143,7 +858,6 @@
       editorView.classList.remove('hidden');
 
       updateEditorTimeDisplay();
-      renderSectionMarkers();
       renderKeyframeMarkers();
       editorDrawLoop();
     }
@@ -1160,7 +874,6 @@
       editorScreenVideo.src = '';
       editorCameraVideo.src = '';
       editorState = null;
-      renderSectionMarkers();
 
       // Show recording, hide editor
       editorView.classList.add('hidden');
@@ -1236,9 +949,7 @@
 
     function updateEditorTimeDisplay() {
       if (!editorState) return;
-      const selectedSection = getSelectedSection();
-      const sectionText = selectedSection ? ` | ${selectedSection.label}` : '';
-      editorTimeEl.textContent = `${formatTime(editorState.currentTime)} / ${formatTime(editorState.duration)}${sectionText}`;
+      editorTimeEl.textContent = `${formatTime(editorState.currentTime)} / ${formatTime(editorState.duration)}`;
     }
 
     function editorPlay() {
@@ -1342,10 +1053,8 @@
       const time = editorState.currentTime;
       const current = getStateAtTime(time);
 
-      // Remove existing manual keyframe at this exact time (keep section anchors)
-      editorState.keyframes = editorState.keyframes.filter(
-        kf => Math.abs(kf.time - time) >= 0.001 || !!kf.sectionId
-      );
+      // Remove existing keyframe at this exact time
+      editorState.keyframes = editorState.keyframes.filter(kf => kf.time !== time);
 
       editorState.keyframes.push({
         time,
@@ -1416,7 +1125,6 @@
           nearestIdx = i;
         }
       }
-      if (editorState.keyframes[nearestIdx].sectionId) return;
       editorState.keyframes.splice(nearestIdx, 1);
       renderKeyframeMarkers();
     }
@@ -1428,13 +1136,12 @@
         const pct = (kf.time / editorState.duration) * 100;
         const dot = document.createElement('div');
         dot.className = 'absolute rounded-full';
-        dot.style.width = kf.sectionId ? '7px' : '8px';
-        dot.style.height = kf.sectionId ? '7px' : '8px';
+        dot.style.width = '8px';
+        dot.style.height = '8px';
         dot.style.top = '50%';
         dot.style.transform = 'translate(-50%, -50%)';
         dot.style.left = pct + '%';
         dot.style.backgroundColor = kf.cameraFullscreen ? '#f59e0b' : (kf.pipVisible ? '#3b82f6' : '#ef4444');
-        if (kf.sectionId) dot.style.border = '1px solid rgba(255,255,255,0.8)';
         editorKeyframeMarkers.appendChild(dot);
       }
     }
@@ -1453,8 +1160,6 @@
 
     editorCanvas.addEventListener('mousedown', (e) => {
       if (!editorState || editorState.rendering || !editorState.hasCamera) return;
-      const activeSection = findSectionForTime(editorState.currentTime);
-      if (activeSection) selectEditorSection(activeSection.id);
       const { x, y } = canvasToEditorCoords(e.clientX, e.clientY);
       const kf = getStateAtTime(editorState.currentTime);
       if (!kf.pipVisible || kf.camTransition > 0) return;
@@ -1482,33 +1187,24 @@
       newX = Math.max(0, Math.min(newX, CANVAS_W - pipW));
       newY = Math.max(0, Math.min(newY, CANVAS_H - pipH));
 
-      // If sections are available, dragging updates the selected section anchor.
-      const selectedSection = getSelectedSection();
-      if (selectedSection) {
-        const anchor = getSectionAnchorKeyframe(selectedSection.id, true);
-        if (anchor) {
-          anchor.pipX = newX;
-          anchor.pipY = newY;
-        }
+      // Update current keyframe's position (or the interpolated state)
+      const time = editorState.currentTime;
+      let existing = editorState.keyframes.find(kf => Math.abs(kf.time - time) < 0.001);
+      if (existing) {
+        existing.pipX = newX;
+        existing.pipY = newY;
       } else {
-        // Fallback: update or create a manual keyframe at the playhead.
-        const time = editorState.currentTime;
-        let existing = editorState.keyframes.find(kf => Math.abs(kf.time - time) < 0.001);
-        if (existing) {
-          existing.pipX = newX;
-          existing.pipY = newY;
-        } else {
-          const current = getStateAtTime(time);
-          editorState.keyframes.push({
-            time,
-            pipX: newX,
-            pipY: newY,
-            pipVisible: current.pipVisible,
-            cameraFullscreen: current.cameraFullscreen || false
-          });
-          editorState.keyframes.sort((a, b) => a.time - b.time);
-          renderKeyframeMarkers();
-        }
+        // Create a new keyframe at this position
+        const current = getStateAtTime(time);
+        editorState.keyframes.push({
+          time,
+          pipX: newX,
+          pipY: newY,
+          pipVisible: current.pipVisible,
+          cameraFullscreen: current.cameraFullscreen || false
+        });
+        editorState.keyframes.sort((a, b) => a.time - b.time);
+        renderKeyframeMarkers();
       }
     });
 
@@ -1520,8 +1216,6 @@
 
     editorTimeline.addEventListener('mousedown', (e) => {
       if (!editorState || editorState.rendering) return;
-      const sectionId = e.target && e.target.dataset ? e.target.dataset.sectionId : null;
-      if (sectionId) selectEditorSection(sectionId);
       seekFromTimeline(e);
       const onMove = (e2) => seekFromTimeline(e2);
       const onUp = () => {
@@ -1573,7 +1267,9 @@
       try {
         editorRenderBar.style.width = '10%';
 
-        const renderKeyframes = getRenderKeyframes();
+        const renderKeyframes = editorState.keyframes.length > 0 && editorState.keyframes[0].time === 0
+          ? editorState.keyframes
+          : [{ time: 0, pipX: editorState.defaultPipX, pipY: editorState.defaultPipY, pipVisible: true, cameraFullscreen: false }, ...editorState.keyframes];
 
         const mp4Path = await window.electronAPI.renderComposite({
           screenPath: editorState.screenPath,
