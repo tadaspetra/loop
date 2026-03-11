@@ -9,8 +9,52 @@
 </head>
 <body class="bg-gray-900 text-white min-h-screen flex flex-col">
 
+  <!-- Project Home View -->
+  <div id="projectHomeView" class="flex-1 flex flex-col items-center justify-center p-6">
+    <div class="w-full max-w-2xl bg-gray-800 border border-gray-700 rounded-xl p-6 space-y-5">
+      <div>
+        <h1 class="text-2xl font-semibold">Projects</h1>
+        <p class="text-sm text-gray-400 mt-1">Open an existing project or create a new one to continue your timeline.</p>
+      </div>
+
+      <div class="flex gap-2">
+        <input id="newProjectName" type="text" placeholder="Project name" class="flex-1 bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500" />
+        <button id="createProjectBtn" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm font-medium transition-colors">Create</button>
+        <button id="openProjectBtn" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">Open Folder</button>
+      </div>
+
+      <div id="lastProjectRow" class="hidden flex items-center justify-between bg-gray-900 border border-gray-700 rounded px-3 py-2">
+        <div>
+          <div class="text-sm text-gray-200" id="lastProjectName">Last project</div>
+          <div class="text-xs text-gray-500 truncate" id="lastProjectPath">-</div>
+        </div>
+        <button id="resumeLastBtn" class="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">Resume Last</button>
+      </div>
+
+      <div>
+        <h2 class="text-sm text-gray-400 mb-2">Recent</h2>
+        <div id="recentProjectsList" class="space-y-2"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Workspace Header -->
+  <div id="workspaceHeader" class="hidden border-b border-gray-800 bg-gray-900/95 backdrop-blur px-4 py-3">
+    <div class="max-w-5xl mx-auto w-full flex items-center gap-3">
+      <div class="min-w-0 flex-1">
+        <div id="activeProjectName" class="text-sm font-semibold truncate">Project</div>
+        <div id="activeProjectPath" class="text-xs text-gray-500 truncate"></div>
+      </div>
+      <div class="flex items-center bg-gray-800 rounded p-1">
+        <button id="goRecordingBtn" class="px-3 py-1.5 rounded text-sm transition-colors">Recording</button>
+        <button id="goTimelineBtn" class="px-3 py-1.5 rounded text-sm transition-colors">Timeline</button>
+      </div>
+      <button id="switchProjectBtn" class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">Projects</button>
+    </div>
+  </div>
+
   <!-- Recording View -->
-  <div id="recordingView" class="flex-1 flex flex-col p-6 gap-4 max-w-4xl mx-auto w-full">
+  <div id="recordingView" class="hidden flex-1 flex flex-col p-6 gap-4 max-w-4xl mx-auto w-full">
     <!-- Source selectors -->
     <div class="flex gap-4">
       <div class="flex-1">
@@ -80,10 +124,10 @@
     <!-- Settings panel -->
     <div id="settingsPanel" class="hidden bg-gray-800 border border-gray-700 rounded p-4 space-y-4">
       <div class="flex items-center gap-3">
-        <label class="text-sm text-gray-400 shrink-0">Save to</label>
+        <label class="text-sm text-gray-400 shrink-0">Project</label>
         <span id="folderPath" class="text-sm truncate flex-1 text-gray-300">Not set</span>
         <button id="openFolderBtn" class="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors hidden">Open</button>
-        <button id="pickFolderBtn" class="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">Browse</button>
+        <button id="pickFolderBtn" class="hidden px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">Browse</button>
       </div>
       <label class="flex items-start gap-3 text-sm text-gray-300 cursor-pointer select-none">
         <input id="contentProtectionToggle" type="checkbox" class="mt-0.5 rounded border-gray-600 bg-gray-700 text-blue-500 focus:ring-blue-500" checked>
@@ -148,6 +192,22 @@
   </div>
 
   <script>
+    const projectHomeView = document.getElementById('projectHomeView');
+    const workspaceHeader = document.getElementById('workspaceHeader');
+    const newProjectNameInput = document.getElementById('newProjectName');
+    const createProjectBtn = document.getElementById('createProjectBtn');
+    const openProjectBtn = document.getElementById('openProjectBtn');
+    const lastProjectRow = document.getElementById('lastProjectRow');
+    const lastProjectName = document.getElementById('lastProjectName');
+    const lastProjectPath = document.getElementById('lastProjectPath');
+    const resumeLastBtn = document.getElementById('resumeLastBtn');
+    const recentProjectsList = document.getElementById('recentProjectsList');
+    const activeProjectNameEl = document.getElementById('activeProjectName');
+    const activeProjectPathEl = document.getElementById('activeProjectPath');
+    const goRecordingBtn = document.getElementById('goRecordingBtn');
+    const goTimelineBtn = document.getElementById('goTimelineBtn');
+    const switchProjectBtn = document.getElementById('switchProjectBtn');
+
     const screenSelect = document.getElementById('screenSource');
     const screenFitSelect = document.getElementById('screenFit');
     const cameraSelect = document.getElementById('cameraSource');
@@ -206,8 +266,14 @@
     let analyser = null;
     let meterRAF = null;
     let drawRAF = null;
-    let saveFolder = localStorage.getItem('saveFolder') || '';
-    let hideFromRecording = localStorage.getItem('hideFromRecording');
+    let saveFolder = '';
+    let hideFromRecording = 'true';
+    let activeProjectPath = '';
+    let activeProject = null;
+    let activeWorkspaceView = 'home';
+    let saveDebounceTimer = null;
+    let persistQueue = Promise.resolve();
+    let mediaInitialized = false;
     let scribeWs = null;
     let scribeWorkletNode = null;
     let speechSegments = [];
@@ -224,11 +290,6 @@
     const PIP_SIZE = Math.round(CANVAS_W * PIP_FRACTION);
     const TRANSITION_DURATION = 0.3;
     const TRIM_PADDING = 0.15;
-
-    if (hideFromRecording === null) {
-      hideFromRecording = 'true';
-      localStorage.setItem('hideFromRecording', hideFromRecording);
-    }
 
     canvas.width = CANVAS_W;
     canvas.height = CANVAS_H;
@@ -248,6 +309,270 @@
 
     function roundMs(value) {
       return Number(value.toFixed(3));
+    }
+
+    function pathToFileUrl(filePath) {
+      if (!filePath) return '';
+      const normalized = String(filePath).replace(/\\/g, '/');
+      if (normalized.startsWith('file://')) return normalized;
+      return `file://${normalized}`;
+    }
+
+    function formatProjectDate(value) {
+      if (!value) return '';
+      const dt = new Date(value);
+      if (Number.isNaN(dt.getTime())) return '';
+      return dt.toLocaleString();
+    }
+
+    function setToggleButtonState(button, active, disabled) {
+      button.disabled = !!disabled;
+      button.className = `px-3 py-1.5 rounded text-sm transition-colors ${active ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-700'} disabled:opacity-40 disabled:cursor-not-allowed`;
+    }
+
+    function updateWorkspaceHeader() {
+      const hasProject = !!activeProjectPath;
+      activeProjectNameEl.textContent = activeProject?.name || 'Project';
+      activeProjectPathEl.textContent = activeProjectPath || '';
+      workspaceHeader.classList.toggle('hidden', !hasProject || activeWorkspaceView === 'home');
+      setToggleButtonState(goRecordingBtn, activeWorkspaceView === 'recording', !hasProject || activeWorkspaceView === 'processing');
+      setToggleButtonState(goTimelineBtn, activeWorkspaceView === 'timeline', !hasProject || !editorState || activeWorkspaceView === 'processing' || recording);
+    }
+
+    function setWorkspaceView(nextView) {
+      activeWorkspaceView = nextView;
+      const showHome = nextView === 'home';
+      const showRecording = nextView === 'recording';
+      const showTimeline = nextView === 'timeline' && !!editorState;
+      const showProcessing = nextView === 'processing';
+
+      projectHomeView.classList.toggle('hidden', !showHome);
+      recordingView.classList.toggle('hidden', !showRecording);
+      editorView.classList.toggle('hidden', !showTimeline);
+      processingView.classList.toggle('hidden', !showProcessing);
+
+      if (showRecording) {
+        updatePreview();
+      } else if (drawRAF) {
+        cancelAnimationFrame(drawRAF);
+        drawRAF = null;
+      }
+
+      if (showTimeline && editorState && !editorDrawRAF) {
+        editorDrawLoop();
+      } else if (!showTimeline && editorDrawRAF) {
+        cancelAnimationFrame(editorDrawRAF);
+        editorDrawRAF = null;
+        if (editorState?.playing) editorPause();
+      }
+
+      updateWorkspaceHeader();
+    }
+
+    function getProjectTimelineSnapshot() {
+      if (!editorState) {
+        return activeProject?.timeline || {
+          duration: 0,
+          sections: [],
+          keyframes: [],
+          selectedSectionId: null,
+          screenPath: null,
+          cameraPath: null,
+          hasCamera: false,
+          sourceWidth: null,
+          sourceHeight: null
+        };
+      }
+
+      return {
+        duration: Number(editorState.duration) || 0,
+        sections: Array.isArray(editorState.sections) ? editorState.sections.map(section => ({ ...section })) : [],
+        keyframes: Array.isArray(editorState.keyframes) ? editorState.keyframes.map(kf => ({ ...kf })) : [],
+        selectedSectionId: editorState.selectedSectionId || null,
+        screenPath: editorState.screenPath || null,
+        cameraPath: editorState.cameraPath || null,
+        hasCamera: !!editorState.hasCamera,
+        sourceWidth: editorState.sourceWidth || null,
+        sourceHeight: editorState.sourceHeight || null
+      };
+    }
+
+    function buildProjectSavePayload() {
+      if (!activeProject) return null;
+      return {
+        ...activeProject,
+        settings: {
+          screenFitMode: screenFitSelect.value || 'fill',
+          hideFromRecording: hideFromRecording === 'true'
+        },
+        timeline: getProjectTimelineSnapshot()
+      };
+    }
+
+    async function persistProjectNow() {
+      if (!activeProjectPath || !activeProject) return;
+      const payload = buildProjectSavePayload();
+      if (!payload) return;
+
+      persistQueue = persistQueue.then(async () => {
+        const result = await window.electronAPI.projectSave({
+          projectPath: activeProjectPath,
+          project: payload
+        });
+        if (result?.projectPath && result?.project) {
+          activeProjectPath = result.projectPath;
+          activeProject = result.project;
+          saveFolder = activeProjectPath;
+          folderPathEl.textContent = activeProjectPath;
+          openFolderBtn.classList.toggle('hidden', !activeProjectPath);
+          updateWorkspaceHeader();
+          await window.electronAPI.projectSetLast(activeProjectPath);
+        }
+      }).catch((error) => {
+        console.error('Failed to persist project:', error);
+      });
+
+      await persistQueue;
+    }
+
+    function scheduleProjectSave() {
+      if (!activeProjectPath || !activeProject) return;
+      if (saveDebounceTimer) clearTimeout(saveDebounceTimer);
+      saveDebounceTimer = setTimeout(() => {
+        persistProjectNow().catch((error) => {
+          console.error('Failed to save project:', error);
+        });
+      }, 250);
+    }
+
+    async function flushScheduledProjectSave() {
+      if (saveDebounceTimer) {
+        clearTimeout(saveDebounceTimer);
+        saveDebounceTimer = null;
+      }
+      await persistProjectNow();
+    }
+
+    function clearEditorState() {
+      editorPause();
+      if (editorDrawRAF) {
+        cancelAnimationFrame(editorDrawRAF);
+        editorDrawRAF = null;
+      }
+
+      if (editorState) {
+        if (editorState.screenBlobUrl && editorState.screenBlobUrl.startsWith('blob:')) URL.revokeObjectURL(editorState.screenBlobUrl);
+        if (editorState.cameraBlobUrl && editorState.cameraBlobUrl.startsWith('blob:')) URL.revokeObjectURL(editorState.cameraBlobUrl);
+      }
+
+      editorScreenVideo.src = '';
+      editorCameraVideo.src = '';
+      editorState = null;
+      renderSectionMarkers();
+      renderKeyframeMarkers();
+      updateWorkspaceHeader();
+    }
+
+    function renderRecentProjects(meta) {
+      const projects = Array.isArray(meta?.projects) ? meta.projects : [];
+      const lastPath = meta?.lastProjectPath || '';
+
+      recentProjectsList.innerHTML = '';
+      if (projects.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'text-sm text-gray-500';
+        empty.textContent = 'No recent projects yet.';
+        recentProjectsList.appendChild(empty);
+      } else {
+        for (const project of projects) {
+          const btn = document.createElement('button');
+          btn.className = 'w-full text-left bg-gray-900 border border-gray-700 rounded px-3 py-2 hover:border-gray-500 transition-colors';
+          btn.type = 'button';
+          btn.dataset.projectPath = project.projectPath;
+
+          const title = document.createElement('div');
+          title.className = 'text-sm text-gray-100 truncate';
+          title.textContent = project.name || 'Untitled Project';
+          const subtitle = document.createElement('div');
+          subtitle.className = 'text-xs text-gray-500 truncate';
+          subtitle.textContent = `${project.projectPath} • ${formatProjectDate(project.updatedAt)}`;
+          btn.appendChild(title);
+          btn.appendChild(subtitle);
+          recentProjectsList.appendChild(btn);
+        }
+      }
+
+      const last = projects.find(project => project.projectPath === lastPath) || projects[0];
+      if (last) {
+        lastProjectName.textContent = last.name || 'Untitled Project';
+        lastProjectPath.textContent = last.projectPath;
+        resumeLastBtn.dataset.projectPath = last.projectPath;
+        lastProjectRow.classList.remove('hidden');
+      } else {
+        lastProjectRow.classList.add('hidden');
+        resumeLastBtn.dataset.projectPath = '';
+      }
+    }
+
+    async function refreshRecentProjects() {
+      try {
+        const recent = await window.electronAPI.projectListRecent(8);
+        renderRecentProjects(recent || {});
+      } catch (error) {
+        console.error('Failed to list recent projects:', error);
+        renderRecentProjects({ projects: [], lastProjectPath: null });
+      }
+    }
+
+    async function activateProject(projectPath, project, preferredView = 'recording') {
+      if (!projectPath || !project) return;
+
+      await flushScheduledProjectSave();
+      clearEditorState();
+
+      activeProjectPath = projectPath;
+      activeProject = project;
+      saveFolder = projectPath;
+      folderPathEl.textContent = projectPath;
+      openFolderBtn.classList.remove('hidden');
+      screenFitSelect.value = project.settings?.screenFitMode === 'fit' ? 'fit' : 'fill';
+      hideFromRecording = project.settings?.hideFromRecording === false ? 'false' : 'true';
+      await syncContentProtection();
+
+      if (project.timeline && project.timeline.screenPath) {
+        enterEditor(
+          null,
+          null,
+          project.timeline.screenPath,
+          project.timeline.cameraPath || null,
+          project.timeline.duration || 0,
+          project.timeline.sections || [],
+          {
+            keyframes: project.timeline.keyframes || [],
+            selectedSectionId: project.timeline.selectedSectionId || null,
+            hasCamera: !!project.timeline.hasCamera,
+            sourceWidth: project.timeline.sourceWidth || null,
+            sourceHeight: project.timeline.sourceHeight || null,
+            initialView: preferredView === 'recording' ? 'recording' : 'timeline'
+          }
+        );
+      } else {
+        setWorkspaceView('recording');
+      }
+
+      await ensureMediaInitialized();
+      if (activeWorkspaceView === 'recording') updatePreview();
+      await window.electronAPI.projectSetLast(projectPath);
+      updateWorkspaceHeader();
+    }
+
+    async function ensureMediaInitialized() {
+      if (mediaInitialized) return;
+      mediaInitialized = true;
+      await enumerateDevices();
+      try { await updateScreenStream(); } catch (error) { console.warn('Screen source init failed:', error); }
+      try { await updateCameraStream(); } catch (error) { console.warn('Camera source init failed:', error); }
+      try { await updateAudioStream(); } catch (error) { console.warn('Audio source init failed:', error); }
     }
 
     async function syncContentProtection() {
@@ -437,6 +762,7 @@
       editorState.selectedSectionId = sectionId;
       renderSectionMarkers();
       updateEditorTimeDisplay();
+      scheduleProjectSave();
     }
 
     function renderSectionMarkers() {
@@ -837,6 +1163,7 @@
     }
 
     async function startRecording() {
+      if (!activeProjectPath) return;
       recorders = [];
       speechSegments = [];
       audioChunkBuffer = [];
@@ -855,6 +1182,7 @@
 
       recorders.forEach(r => r.start(100));
       recording = true;
+      updateWorkspaceHeader();
       recordBtn.textContent = 'Stop';
       recordBtn.classList.replace('bg-red-600', 'bg-gray-600');
       recordBtn.classList.replace('hover:bg-red-700', 'hover:bg-gray-700');
@@ -1032,6 +1360,143 @@
       updateSegmentBadge();
     }
 
+    function buildDefaultSectionsForDuration(duration) {
+      const safeDuration = Math.max(0, Number(duration) || 0);
+      if (safeDuration <= 0) return [];
+      return [{
+        id: 'section-1',
+        index: 0,
+        label: 'Section 1',
+        sourceStart: 0,
+        sourceEnd: roundMs(safeDuration),
+        start: 0,
+        end: roundMs(safeDuration),
+        duration: roundMs(safeDuration)
+      }];
+    }
+
+    function normalizeTakeSections(rawSections, duration) {
+      const normalized = normalizeSections(rawSections, duration);
+      if (normalized.length > 0) return normalized;
+      return buildDefaultSectionsForDuration(duration);
+    }
+
+    async function concatTimelineVideos(existingPath, nextPath, suffix) {
+      if (!existingPath) return nextPath || null;
+      if (!nextPath) return existingPath;
+      const result = await window.electronAPI.concatVideos({
+        inputPaths: [existingPath, nextPath],
+        outputFolder: saveFolder,
+        suffix
+      });
+      return result?.outputPath || nextPath;
+    }
+
+    async function appendTakeToTimeline({ screenPath, cameraPath, recordedDuration, trimSections }) {
+      const takeSections = normalizeTakeSections(trimSections, recordedDuration);
+      const takeDuration = takeSections.length > 0
+        ? takeSections[takeSections.length - 1].end
+        : Math.max(0, Number(recordedDuration) || 0);
+
+      if (!editorState) {
+        enterEditor(
+          null,
+          null,
+          screenPath,
+          cameraPath,
+          takeDuration,
+          takeSections,
+          {
+            hasCamera: !!cameraPath,
+            initialView: 'timeline'
+          }
+        );
+
+        return {
+          takeSections,
+          takeDuration,
+          appendedSections: takeSections
+        };
+      }
+
+      const baseDuration = Math.max(0, Number(editorState.duration) || 0);
+      const existingSections = normalizeSections(editorState.sections, baseDuration);
+      const existingKeyframes = Array.isArray(editorState.keyframes)
+        ? editorState.keyframes.map(kf => ({ ...kf }))
+        : [];
+
+      const timelineScreenPath = await concatTimelineVideos(editorState.screenPath, screenPath, 'timeline-screen');
+      const hadCameraBefore = !!(editorState.hasCamera && editorState.cameraPath);
+      const hasCameraNow = !!cameraPath;
+      let keepCamera = false;
+      let timelineCameraPath = null;
+      if (hadCameraBefore && hasCameraNow) {
+        keepCamera = true;
+        timelineCameraPath = await concatTimelineVideos(editorState.cameraPath, cameraPath, 'timeline-camera');
+      } else if (hadCameraBefore) {
+        keepCamera = true;
+        timelineCameraPath = editorState.cameraPath;
+      }
+
+      const startIndex = existingSections.length;
+      const appendedSections = takeSections.map((section, idx) => {
+        const sectionNumber = startIndex + idx + 1;
+        return {
+          ...section,
+          id: `section-${sectionNumber}`,
+          index: sectionNumber - 1,
+          label: `Section ${sectionNumber}`,
+          start: roundMs(section.start + baseDuration),
+          end: roundMs(section.end + baseDuration),
+          duration: roundMs(section.end - section.start)
+        };
+      });
+
+      const timelineSections = [...existingSections, ...appendedSections];
+      const timelineDuration = timelineSections.length > 0
+        ? timelineSections[timelineSections.length - 1].end
+        : baseDuration + takeDuration;
+
+      const carryState = getStateAtTime(Math.max(0, baseDuration - 0.001));
+      const newAnchors = appendedSections.map((section) => ({
+        time: section.start,
+        pipX: carryState.pipX,
+        pipY: carryState.pipY,
+        pipVisible: carryState.pipVisible,
+        cameraFullscreen: !!carryState.cameraFullscreen,
+        sectionId: section.id,
+        autoSection: true
+      }));
+
+      const withoutConflictingAnchors = existingKeyframes.filter(
+        kf => !kf.sectionId || !newAnchors.some(anchor => anchor.sectionId === kf.sectionId)
+      );
+
+      enterEditor(
+        null,
+        null,
+        timelineScreenPath,
+        timelineCameraPath,
+        timelineDuration,
+        timelineSections,
+        {
+          keyframes: [...withoutConflictingAnchors, ...newAnchors].sort((a, b) => a.time - b.time),
+          selectedSectionId: appendedSections[0]?.id || editorState.selectedSectionId,
+          hasCamera: keepCamera,
+          screenFitMode: editorState.screenFitMode,
+          sourceWidth: editorState.sourceWidth,
+          sourceHeight: editorState.sourceHeight,
+          initialView: 'timeline'
+        }
+      );
+
+      return {
+        takeSections,
+        takeDuration,
+        appendedSections
+      };
+    }
+
     async function stopRecording() {
       const recordedDuration = (Date.now() - startTime) / 1000;
       clearInterval(timerInterval);
@@ -1072,6 +1537,7 @@
 
       recorders = [];
       recording = false;
+      updateWorkspaceHeader();
       recordBtn.textContent = 'Record';
       recordBtn.classList.replace('bg-gray-600', 'bg-red-600');
       recordBtn.classList.replace('hover:bg-gray-700', 'hover:bg-red-700');
@@ -1093,9 +1559,8 @@
         const activeSegments = speechSegments.filter(s => !s.deleted);
         const fallbackSections = buildRemappedSectionsFromSegments(activeSegments);
         if (activeSegments.length > 0) {
-          // Show processing view
-          recordingView.classList.add('hidden');
-          processingView.classList.remove('hidden');
+          // Show processing view while trimming.
+          setWorkspaceView('processing');
           processingStatus.textContent = `Processing ${activeSegments.length} segment${activeSegments.length !== 1 ? 's' : ''}`;
 
           try {
@@ -1117,20 +1582,36 @@
             console.error('Trim failed, using original files:', err);
             trimSections = [];
           }
-
-          processingView.classList.add('hidden');
-          recordingView.classList.remove('hidden');
         } else if (hadScribe) {
           console.warn('No speech detected, using full recording');
         }
 
-        enterEditor(
-          results.screen.blob, results.camera?.blob || null,
-          screenPath, cameraPath,
-          recordedDuration,
-          trimSections
-        );
+        try {
+          const appendResult = await appendTakeToTimeline({
+            screenPath,
+            cameraPath,
+            recordedDuration,
+            trimSections: trimSections.length > 0 ? trimSections : fallbackSections
+          });
+
+          if (activeProject) {
+            if (!Array.isArray(activeProject.takes)) activeProject.takes = [];
+            activeProject.takes.push({
+              id: `take-${Date.now()}`,
+              createdAt: new Date().toISOString(),
+              duration: appendResult.takeDuration,
+              screenPath,
+              cameraPath,
+              sections: appendResult.takeSections
+            });
+            await persistProjectNow();
+          }
+        } catch (error) {
+          console.error('Failed to append recording to project timeline:', error);
+          setWorkspaceView('recording');
+        }
       }
+      updateWorkspaceHeader();
     }
 
     function updateTimer() {
@@ -1142,16 +1623,22 @@
 
     // ===== Editor =====
 
-    function enterEditor(screenBlob, cameraBlob, screenPath, cameraPath, recordedDuration, rawSections) {
-      // Stop live preview
+    function enterEditor(screenBlob, cameraBlob, screenPath, cameraPath, recordedDuration, rawSections, opts = {}) {
+      // Stop live preview while timeline is active.
       if (drawRAF) { cancelAnimationFrame(drawRAF); drawRAF = null; }
+      if (editorDrawRAF) { cancelAnimationFrame(editorDrawRAF); editorDrawRAF = null; }
 
-      // Use file:// URLs for trimmed files, blob URLs for originals
-      const screenBlobUrl = screenPath && screenPath.includes('-trimmed')
-        ? 'file://' + screenPath
-        : URL.createObjectURL(screenBlob);
-      const cameraBlobUrl = cameraPath && cameraPath.includes('-trimmed')
-        ? 'file://' + cameraPath
+      // Clean up previous editor blob URLs when replacing timeline media.
+      if (editorState) {
+        if (editorState.screenBlobUrl && editorState.screenBlobUrl.startsWith('blob:')) URL.revokeObjectURL(editorState.screenBlobUrl);
+        if (editorState.cameraBlobUrl && editorState.cameraBlobUrl.startsWith('blob:')) URL.revokeObjectURL(editorState.cameraBlobUrl);
+      }
+
+      const screenBlobUrl = screenPath
+        ? pathToFileUrl(screenPath)
+        : (screenBlob ? URL.createObjectURL(screenBlob) : '');
+      const cameraBlobUrl = cameraPath
+        ? pathToFileUrl(cameraPath)
         : (cameraBlob ? URL.createObjectURL(cameraBlob) : null);
 
       const defaultPipX = CANVAS_W - PIP_SIZE - PIP_MARGIN;
@@ -1167,37 +1654,48 @@
         autoSection: true
       }));
 
+      const providedKeyframes = Array.isArray(opts.keyframes) && opts.keyframes.length > 0
+        ? opts.keyframes.map(kf => ({ ...kf }))
+        : null;
+      const keyframes = (providedKeyframes || sectionKeyframes).sort((a, b) => a.time - b.time);
+
       editorState = {
         screenBlobUrl,
         cameraBlobUrl,
-        screenPath,
-        cameraPath,
+        screenPath: screenPath || null,
+        cameraPath: cameraPath || null,
         duration: recordedDuration,
         currentTime: 0,
         playing: false,
         pipSize: PIP_SIZE,
         defaultPipX,
         defaultPipY,
-        keyframes: sectionKeyframes,
+        keyframes,
         sections,
-        selectedSectionId: sections[0]?.id || null,
-        screenFitMode: screenFitSelect.value,
+        selectedSectionId: opts.selectedSectionId || sections[0]?.id || null,
+        screenFitMode: opts.screenFitMode || screenFitSelect.value,
         rendering: false,
         renderProgress: 0,
-        hasCamera: !!cameraBlob
+        hasCamera: typeof opts.hasCamera === 'boolean' ? opts.hasCamera : !!(cameraBlobUrl || cameraBlob),
+        sourceWidth: opts.sourceWidth || null,
+        sourceHeight: opts.sourceHeight || null
       };
+      screenFitSelect.value = editorState.screenFitMode === 'fit' ? 'fit' : 'fill';
 
       editorScreenVideo.src = screenBlobUrl;
       editorScreenVideo.currentTime = 0;
       if (cameraBlobUrl) {
         editorCameraVideo.src = cameraBlobUrl;
         editorCameraVideo.currentTime = 0;
+      } else {
+        editorCameraVideo.src = '';
       }
 
-      // Wait for metadata to get accurate duration and source resolution
+      // Wait for metadata to get accurate duration and source resolution.
       editorScreenVideo.onloadedmetadata = () => {
-        editorState.sourceWidth = editorScreenVideo.videoWidth;
-        editorState.sourceHeight = editorScreenVideo.videoHeight;
+        if (!editorState) return;
+        editorState.sourceWidth = editorScreenVideo.videoWidth || editorState.sourceWidth;
+        editorState.sourceHeight = editorScreenVideo.videoHeight || editorState.sourceHeight;
         if (isFinite(editorScreenVideo.duration) && editorScreenVideo.duration > 0) {
           editorState.duration = editorScreenVideo.duration;
         }
@@ -1206,37 +1704,18 @@
         renderSectionMarkers();
         renderKeyframeMarkers();
         updateEditorTimeDisplay();
+        scheduleProjectSave();
       };
-
-      // Show editor, hide recording
-      recordingView.classList.add('hidden');
-      editorView.classList.remove('hidden');
 
       updateEditorTimeDisplay();
       renderSectionMarkers();
       renderKeyframeMarkers();
-      editorDrawLoop();
+      const initialView = opts.initialView === 'recording' ? 'recording' : 'timeline';
+      setWorkspaceView(initialView);
     }
 
     function exitEditor() {
-      editorPause();
-      if (editorDrawRAF) { cancelAnimationFrame(editorDrawRAF); editorDrawRAF = null; }
-
-      // Revoke blob URLs (not file:// URLs)
-      if (editorState) {
-        if (editorState.screenBlobUrl && editorState.screenBlobUrl.startsWith('blob:')) URL.revokeObjectURL(editorState.screenBlobUrl);
-        if (editorState.cameraBlobUrl && editorState.cameraBlobUrl.startsWith('blob:')) URL.revokeObjectURL(editorState.cameraBlobUrl);
-      }
-      editorScreenVideo.src = '';
-      editorCameraVideo.src = '';
-      editorState = null;
-      renderSectionMarkers();
-
-      // Show recording, hide editor
-      editorView.classList.add('hidden');
-      recordingView.classList.remove('hidden');
-
-      updatePreview();
+      setWorkspaceView('recording');
     }
 
     function getStateAtTime(time) {
@@ -1427,6 +1906,7 @@
 
       editorState.keyframes.sort((a, b) => a.time - b.time);
       renderKeyframeMarkers();
+      scheduleProjectSave();
     }
 
     function getMutableCameraKeyframe() {
@@ -1476,6 +1956,7 @@
       target.pipVisible = !target.pipVisible;
 
       renderKeyframeMarkers();
+      scheduleProjectSave();
     }
 
     function toggleCameraFullscreen() {
@@ -1485,6 +1966,7 @@
       target.cameraFullscreen = !(target.cameraFullscreen || false);
 
       renderKeyframeMarkers();
+      scheduleProjectSave();
     }
 
     function deleteNearestKeyframe() {
@@ -1493,6 +1975,7 @@
       if (nearestIdx < 0) return;
       editorState.keyframes.splice(nearestIdx, 1);
       renderKeyframeMarkers();
+      scheduleProjectSave();
     }
 
     function renderKeyframeMarkers() {
@@ -1587,7 +2070,9 @@
     });
 
     window.addEventListener('mouseup', () => {
+      const wasDragging = draggingPip;
       draggingPip = false;
+      if (wasDragging) scheduleProjectSave();
     });
 
     // ===== Timeline scrubber =====
@@ -1663,6 +2148,7 @@
         editorRenderBar.style.width = '100%';
         editorRenderLabel.textContent = 'Done! Saved: ' + mp4Path.split('/').pop();
         console.log('Rendered:', mp4Path);
+        await persistProjectNow();
       } catch (err) {
         console.error('Render error:', err);
         editorRenderLabel.textContent = 'Render failed. Check console for details.';
@@ -1714,7 +2200,7 @@
         return;
       }
 
-      if (!editorState || editorState.rendering) return;
+      if (!editorState || editorState.rendering || activeWorkspaceView !== 'timeline') return;
       // Don't capture if focus is in an input
       if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') return;
 
@@ -1742,27 +2228,26 @@
     });
 
     openFolderBtn.addEventListener('click', () => {
-      if (saveFolder) window.electronAPI.openFolder(saveFolder);
+      if (activeProjectPath) window.electronAPI.openFolder(activeProjectPath);
     });
 
-    pickFolderBtn.addEventListener('click', async () => {
-      const folder = await window.electronAPI.pickFolder();
-      if (folder) {
-        saveFolder = folder;
-        localStorage.setItem('saveFolder', folder);
-        folderPathEl.textContent = folder;
-        openFolderBtn.classList.remove('hidden');
-        updatePreview();
-      }
+    pickFolderBtn.addEventListener('click', () => {
+      setWorkspaceView('home');
     });
 
     contentProtectionToggle.addEventListener('change', async () => {
       hideFromRecording = contentProtectionToggle.checked ? 'true' : 'false';
-      localStorage.setItem('hideFromRecording', hideFromRecording);
       await syncContentProtection();
+      scheduleProjectSave();
     });
 
     // Source change handlers
+    screenFitSelect.addEventListener('change', () => {
+      if (editorState) editorState.screenFitMode = screenFitSelect.value;
+      updatePreview();
+      scheduleProjectSave();
+    });
+
     screenSelect.addEventListener('change', async () => {
       try { await updateScreenStream(); } catch (e) { console.error(e); }
       updatePreview();
@@ -1779,17 +2264,86 @@
 
     recordBtn.addEventListener('click', toggleRecording);
 
-    // Init
-    if (saveFolder) {
-      folderPathEl.textContent = saveFolder;
-      openFolderBtn.classList.remove('hidden');
+    // Workspace navigation
+    goRecordingBtn.addEventListener('click', () => {
+      if (!activeProjectPath) return;
+      setWorkspaceView('recording');
+    });
+
+    goTimelineBtn.addEventListener('click', () => {
+      if (!activeProjectPath || !editorState) return;
+      setWorkspaceView('timeline');
+    });
+
+    switchProjectBtn.addEventListener('click', async () => {
+      if (recording) return;
+      await flushScheduledProjectSave();
+      setWorkspaceView('home');
+      await refreshRecentProjects();
+    });
+
+    // Project home actions
+    async function openProjectByPath(projectPath, preferredView = 'timeline') {
+      if (!projectPath) return;
+      try {
+        const opened = await window.electronAPI.projectOpen(projectPath);
+        if (!opened?.projectPath || !opened?.project) return;
+        await activateProject(opened.projectPath, opened.project, preferredView);
+        await refreshRecentProjects();
+      } catch (error) {
+        console.error('Failed to open project:', error);
+      }
     }
+
+    createProjectBtn.addEventListener('click', async () => {
+      const parentFolder = await window.electronAPI.pickFolder();
+      if (!parentFolder) return;
+      const name = (newProjectNameInput.value || '').trim() || 'Untitled Project';
+      try {
+        const created = await window.electronAPI.projectCreate({ parentFolder, name });
+        if (!created?.projectPath || !created?.project) return;
+        newProjectNameInput.value = '';
+        await activateProject(created.projectPath, created.project, 'recording');
+        await refreshRecentProjects();
+      } catch (error) {
+        console.error('Failed to create project:', error);
+      }
+    });
+
+    openProjectBtn.addEventListener('click', async () => {
+      const folder = await window.electronAPI.pickFolder();
+      if (!folder) return;
+      await openProjectByPath(folder, 'timeline');
+    });
+
+    resumeLastBtn.addEventListener('click', async () => {
+      const projectPath = resumeLastBtn.dataset.projectPath;
+      if (!projectPath) return;
+      await openProjectByPath(projectPath, 'timeline');
+    });
+
+    recentProjectsList.addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-project-path]');
+      if (!button) return;
+      await openProjectByPath(button.dataset.projectPath, 'timeline');
+    });
+
+    newProjectNameInput.addEventListener('keydown', async (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      createProjectBtn.click();
+    });
+
+    // Init
+    setWorkspaceView('home');
     syncContentProtection();
-    enumerateDevices().then(async () => {
-      try { await updateScreenStream(); } catch (e) {}
-      try { await updateCameraStream(); } catch (e) {}
-      try { await updateAudioStream(); } catch (e) {}
-      updatePreview();
+    updateWorkspaceHeader();
+    refreshRecentProjects();
+
+    window.addEventListener('beforeunload', () => {
+      flushScheduledProjectSave().catch((error) => {
+        console.warn('Failed to flush project save on exit:', error);
+      });
     });
   </script>
 </body>
