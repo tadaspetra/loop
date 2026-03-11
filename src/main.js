@@ -66,6 +66,11 @@ function normalizeSections(rawSections = []) {
       const end = Number(section.end)
       const sourceStart = Number.isFinite(Number(section.sourceStart)) ? Number(section.sourceStart) : start
       const sourceEnd = Number.isFinite(Number(section.sourceEnd)) ? Number(section.sourceEnd) : end
+      const transcript = String(
+        typeof section.transcript === 'string'
+          ? section.transcript
+          : (typeof section.text === 'string' ? section.text : '')
+      ).replace(/\s+/g, ' ').trim()
       return {
         id: typeof section.id === 'string' && section.id ? section.id : `section-${index + 1}`,
         index: Number.isFinite(Number(section.index)) ? Number(section.index) : index,
@@ -74,7 +79,8 @@ function normalizeSections(rawSections = []) {
         end: Number.isFinite(end) ? end : 0,
         duration: Number.isFinite(Number(section.duration)) ? Number(section.duration) : Math.max(0, (Number.isFinite(end) ? end : 0) - (Number.isFinite(start) ? start : 0)),
         sourceStart: Number.isFinite(sourceStart) ? sourceStart : 0,
-        sourceEnd: Number.isFinite(sourceEnd) ? sourceEnd : 0
+        sourceEnd: Number.isFinite(sourceEnd) ? sourceEnd : 0,
+        transcript
       }
     })
     .filter(section => section.end - section.start > 0.0001)

@@ -181,6 +181,9 @@
       <div id="editorScrubber" class="absolute top-0 bottom-0 w-0.5 bg-white pointer-events-none z-20" style="left: 0%"></div>
       <div id="editorKeyframeMarkers" class="absolute inset-0 pointer-events-none z-10"></div>
     </div>
+    <div id="editorSectionTranscriptList" class="max-h-40 overflow-y-auto space-y-2 bg-gray-900/50 border border-gray-700 rounded p-2">
+      <div class="text-xs text-gray-500 px-1">Section transcript will appear here after trimming.</div>
+    </div>
 
     <!-- Render progress -->
     <div id="editorRenderProgress" class="hidden">
@@ -251,6 +254,7 @@
     const editorSectionMarkers = document.getElementById('editorSectionMarkers');
     const editorScrubber = document.getElementById('editorScrubber');
     const editorKeyframeMarkers = document.getElementById('editorKeyframeMarkers');
+    const editorSectionTranscriptList = document.getElementById('editorSectionTranscriptList');
     const editorRenderProgress = document.getElementById('editorRenderProgress');
     const editorRenderLabel = document.getElementById('editorRenderLabel');
     const editorRenderBar = document.getElementById('editorRenderBar');
@@ -309,6 +313,10 @@
 
     function roundMs(value) {
       return Number(value.toFixed(3));
+    }
+
+    function normalizeTranscriptText(value) {
+      return String(value || '').replace(/\s+/g, ' ').trim();
     }
 
     function pathToFileUrl(filePath) {
@@ -596,20 +604,33 @@
           if (!Number.isFinite(rawStart) || !Number.isFinite(rawEnd)) return null;
           const start = Math.max(0, rawStart - TRIM_PADDING);
           const end = Math.max(start, rawEnd + TRIM_PADDING);
-          return { start, end };
+          return {
+            start,
+            end,
+            transcript: normalizeTranscriptText(segment.text)
+          };
         })
         .filter(Boolean)
         .sort((a, b) => a.start - b.start);
 
       if (padded.length === 0) return [];
 
-      const merged = [padded[0]];
+      const merged = [{
+        start: padded[0].start,
+        end: padded[0].end,
+        transcripts: padded[0].transcript ? [padded[0].transcript] : []
+      }];
       for (let i = 1; i < padded.length; i++) {
         const last = merged[merged.length - 1];
         if (padded[i].start <= last.end) {
           last.end = Math.max(last.end, padded[i].end);
+          if (padded[i].transcript) last.transcripts.push(padded[i].transcript);
         } else {
-          merged.push(padded[i]);
+          merged.push({
+            start: padded[i].start,
+            end: padded[i].end,
+            transcripts: padded[i].transcript ? [padded[i].transcript] : []
+          });
         }
       }
 
@@ -629,7 +650,8 @@
           sourceEnd,
           start,
           end,
-          duration: roundMs(duration)
+          duration: roundMs(duration),
+          transcript: normalizeTranscriptText(segment.transcripts.join(' '))
         });
         timelineCursor += duration;
       }
@@ -650,6 +672,11 @@
           let end = Number(section.end);
           if (!Number.isFinite(start)) start = 0;
           if (!Number.isFinite(end)) end = start;
+          const transcript = normalizeTranscriptText(
+            typeof section.transcript === 'string'
+              ? section.transcript
+              : (typeof section.text === 'string' ? section.text : '')
+          );
           start = Math.max(0, start);
           end = Math.max(start, end);
 
@@ -663,7 +690,8 @@
             sourceStart: Number.isFinite(Number(section.sourceStart)) ? Number(section.sourceStart) : start,
             sourceEnd: Number.isFinite(Number(section.sourceEnd)) ? Number(section.sourceEnd) : end,
             start: roundMs(start),
-            end: roundMs(end)
+            end: roundMs(end),
+            transcript
           };
         })
         .filter(section => section.end - section.start > 0.0001)
@@ -765,9 +793,44 @@
       scheduleProjectSave();
     }
 
+    function renderSectionTranscriptList() {
+      if (!editorState || !editorState.sections || editorState.sections.length === 0) {
+        editorSectionTranscriptList.innerHTML = '<div class="text-xs text-gray-500 px-1">No sections available.</div>';
+        return;
+      }
+
+      editorSectionTranscriptList.innerHTML = '';
+      for (const section of editorState.sections) {
+        const selected = section.id === editorState.selectedSectionId;
+        const transcript = normalizeTranscriptText(section.transcript);
+
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.dataset.sectionId = section.id;
+        row.className = `w-full text-left rounded border px-3 py-2 transition-colors ${selected ? 'border-blue-400 bg-blue-500/10' : 'border-gray-700 bg-gray-900/40 hover:border-gray-500'}`;
+
+        const meta = document.createElement('div');
+        meta.className = 'text-xs text-gray-400';
+        meta.textContent = `${section.label} (${formatTime(section.start)} - ${formatTime(section.end)})`;
+
+        const text = document.createElement('div');
+        text.className = `mt-1 text-sm leading-snug ${transcript ? 'text-gray-200' : 'text-gray-500 italic'}`;
+        text.textContent = transcript || 'No transcript captured for this section.';
+
+        row.appendChild(meta);
+        row.appendChild(text);
+        row.addEventListener('click', () => {
+          selectEditorSection(section.id);
+        });
+
+        editorSectionTranscriptList.appendChild(row);
+      }
+    }
+
     function renderSectionMarkers() {
       if (!editorState || !editorState.duration || !editorState.sections || editorState.sections.length === 0) {
         editorSectionMarkers.innerHTML = '';
+        renderSectionTranscriptList();
         return;
       }
 
@@ -788,7 +851,10 @@
         if (selected) {
           band.style.boxShadow = 'inset 0 0 0 2px rgba(191,219,254,0.95)';
         }
-        band.title = `${section.label}: ${formatTime(section.start)} - ${formatTime(section.end)}`;
+        const transcriptPreview = normalizeTranscriptText(section.transcript);
+        band.title = transcriptPreview
+          ? `${section.label}: ${formatTime(section.start)} - ${formatTime(section.end)}\n${transcriptPreview}`
+          : `${section.label}: ${formatTime(section.start)} - ${formatTime(section.end)}`;
         const label = document.createElement('div');
         label.className = 'absolute text-[10px] text-gray-100 font-medium pointer-events-none';
         label.style.left = '6px';
@@ -808,6 +874,7 @@
           editorSectionMarkers.appendChild(cut);
         }
       }
+      renderSectionTranscriptList();
     }
 
     function getRenderKeyframes() {
@@ -1371,7 +1438,8 @@
         sourceEnd: roundMs(safeDuration),
         start: 0,
         end: roundMs(safeDuration),
-        duration: roundMs(safeDuration)
+        duration: roundMs(safeDuration),
+        transcript: ''
       }];
     }
 
@@ -1379,6 +1447,43 @@
       const normalized = normalizeSections(rawSections, duration);
       if (normalized.length > 0) return normalized;
       return buildDefaultSectionsForDuration(duration);
+    }
+
+    function attachSectionTranscripts(sections, transcriptSections) {
+      const baseSections = Array.isArray(sections) ? sections : [];
+      const transcriptSource = Array.isArray(transcriptSections) ? transcriptSections : [];
+
+      return baseSections.map((section, index) => {
+        const existing = normalizeTranscriptText(
+          typeof section.transcript === 'string'
+            ? section.transcript
+            : (typeof section.text === 'string' ? section.text : '')
+        );
+        if (existing) {
+          return { ...section, transcript: existing };
+        }
+
+        const byIndex = transcriptSource[index];
+        let transcript = normalizeTranscriptText(byIndex?.transcript || byIndex?.text || '');
+
+        if (!transcript) {
+          const sourceStart = Number(section.sourceStart);
+          const sourceEnd = Number(section.sourceEnd);
+          if (Number.isFinite(sourceStart) && Number.isFinite(sourceEnd)) {
+            const bySource = transcriptSource.find((candidate) => {
+              const candidateStart = Number(candidate?.sourceStart);
+              const candidateEnd = Number(candidate?.sourceEnd);
+              return Number.isFinite(candidateStart)
+                && Number.isFinite(candidateEnd)
+                && Math.abs(candidateStart - sourceStart) <= 0.05
+                && Math.abs(candidateEnd - sourceEnd) <= 0.05;
+            });
+            transcript = normalizeTranscriptText(bySource?.transcript || bySource?.text || '');
+          }
+        }
+
+        return { ...section, transcript };
+      });
     }
 
     async function concatTimelineVideos(existingPath, nextPath, suffix) {
@@ -1573,7 +1678,7 @@
             screenPath = trimmed.screenPath || screenPath;
             cameraPath = trimmed.cameraPath || cameraPath;
             trimSections = Array.isArray(trimmed.sections) && trimmed.sections.length > 0
-              ? trimmed.sections
+              ? attachSectionTranscripts(trimmed.sections, fallbackSections)
               : fallbackSections;
             if (!trimmed.sections || trimmed.sections.length === 0) {
               console.warn('Trim metadata missing from main process; using renderer-derived sections.');
@@ -1587,11 +1692,14 @@
         }
 
         try {
+          const sectionsForTimeline = trimSections.length > 0
+            ? attachSectionTranscripts(trimSections, fallbackSections)
+            : fallbackSections;
           const appendResult = await appendTakeToTimeline({
             screenPath,
             cameraPath,
             recordedDuration,
-            trimSections: trimSections.length > 0 ? trimSections : fallbackSections
+            trimSections: sectionsForTimeline
           });
 
           if (activeProject) {
