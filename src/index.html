@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; style-src 'self' 'unsafe-inline'; media-src 'self' blob: file:; connect-src 'self' wss://api.elevenlabs.io" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; style-src 'self' 'unsafe-inline'; media-src 'self' blob: file:; connect-src 'self' blob: file: wss://api.elevenlabs.io" />
   <script src="https://cdn.tailwindcss.com"></script>
   <title>Video Recorder</title>
 </head>
@@ -176,8 +176,9 @@
     </div>
 
     <!-- Timeline scrubber -->
-    <div id="editorTimeline" class="relative bg-gray-800 rounded h-8 cursor-pointer select-none">
-      <div id="editorSectionMarkers" class="absolute inset-0 z-0"></div>
+    <div id="editorTimeline" class="relative bg-gray-800 rounded h-12 cursor-pointer select-none">
+      <canvas id="editorWaveformCanvas" class="absolute inset-0 w-full h-full pointer-events-none z-0" style="opacity: 0.5"></canvas>
+      <div id="editorSectionMarkers" class="absolute inset-0 z-1"></div>
       <div id="editorScrubber" class="absolute top-0 bottom-0 w-0.5 bg-white pointer-events-none z-20" style="left: 0%"></div>
       <div id="editorKeyframeMarkers" class="absolute inset-0 pointer-events-none z-10"></div>
     </div>
@@ -259,6 +260,7 @@
     const editorRenderProgress = document.getElementById('editorRenderProgress');
     const editorRenderLabel = document.getElementById('editorRenderLabel');
     const editorRenderBar = document.getElementById('editorRenderBar');
+    const editorWaveformCanvas = document.getElementById('editorWaveformCanvas');
 
     let screenStream = null;
     let cameraStream = null;
@@ -307,6 +309,7 @@
     let draggingPip = false;
     let dragOffsetX = 0;
     let dragOffsetY = 0;
+    let waveformPeaks = null;
 
     function easeInOut(t) {
       return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
@@ -477,6 +480,8 @@
       editorScreenVideo.src = '';
       editorCameraVideo.src = '';
       editorState = null;
+      waveformPeaks = null;
+      renderWaveform();
       renderSectionMarkers();
       renderKeyframeMarkers();
       updateWorkspaceHeader();
@@ -825,6 +830,54 @@
         });
 
         editorSectionTranscriptList.appendChild(row);
+      }
+    }
+
+    async function extractWaveformPeaks(videoSrc, numBuckets = 800) {
+      try {
+        const response = await fetch(videoSrc);
+        const arrayBuffer = await response.arrayBuffer();
+        const offlineCtx = new OfflineAudioContext(1, 1, 44100);
+        const audioBuffer = await offlineCtx.decodeAudioData(arrayBuffer);
+        const channelData = audioBuffer.getChannelData(0);
+        const samplesPerBucket = Math.floor(channelData.length / numBuckets);
+        const peaks = new Float32Array(numBuckets);
+        for (let i = 0; i < numBuckets; i++) {
+          let max = 0;
+          const start = i * samplesPerBucket;
+          const end = Math.min(start + samplesPerBucket, channelData.length);
+          for (let j = start; j < end; j++) {
+            const abs = Math.abs(channelData[j]);
+            if (abs > max) max = abs;
+          }
+          peaks[i] = max;
+        }
+        return peaks;
+      } catch (err) {
+        console.warn('Failed to extract waveform:', err);
+        return null;
+      }
+    }
+
+    function renderWaveform() {
+      const canvas = editorWaveformCanvas;
+      const rect = canvas.parentElement.getBoundingClientRect();
+      canvas.width = Math.round(rect.width * devicePixelRatio);
+      canvas.height = Math.round(rect.height * devicePixelRatio);
+      const wCtx = canvas.getContext('2d');
+      wCtx.clearRect(0, 0, canvas.width, canvas.height);
+      if (!waveformPeaks || waveformPeaks.length === 0) return;
+
+      const w = canvas.width;
+      const h = canvas.height;
+      const midY = h / 2;
+      const barWidth = w / waveformPeaks.length;
+
+      wCtx.fillStyle = 'rgba(147, 197, 253, 0.7)';
+      for (let i = 0; i < waveformPeaks.length; i++) {
+        const barHeight = waveformPeaks[i] * midY * 0.9;
+        const x = i * barWidth;
+        wCtx.fillRect(x, midY - barHeight, Math.max(1, barWidth - 0.5), barHeight * 2);
       }
     }
 
@@ -1996,6 +2049,12 @@
         renderKeyframeMarkers();
         updateEditorTimeDisplay();
         scheduleProjectSave();
+
+        extractWaveformPeaks(screenBlobUrl).then(peaks => {
+          if (!editorState) return;
+          waveformPeaks = peaks;
+          renderWaveform();
+        });
       };
 
       updateEditorTimeDisplay();
@@ -2389,6 +2448,8 @@
     }
 
     // ===== Editor button handlers =====
+
+    new ResizeObserver(() => renderWaveform()).observe(editorTimeline);
 
     editorBackBtn.addEventListener('click', exitEditor);
     editorPlayBtn.addEventListener('click', editorTogglePlay);
