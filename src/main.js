@@ -284,12 +284,39 @@ ipcMain.handle('get-sources', async () => {
   }
 })
 
-ipcMain.handle('pick-folder', async () => {
-  const { canceled, filePaths } = await dialog.showOpenDialog({
+ipcMain.handle('pick-folder', async (event, opts = {}) => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    title: typeof opts.title === 'string' && opts.title ? opts.title : 'Choose Folder',
+    buttonLabel: typeof opts.buttonLabel === 'string' && opts.buttonLabel ? opts.buttonLabel : 'Use Folder',
+    defaultPath: app.getPath('documents') || app.getPath('home'),
     properties: ['openDirectory', 'createDirectory']
   })
   if (canceled || !filePaths.length) return null
   return filePaths[0]
+})
+
+ipcMain.handle('pick-project-location', async (event, opts = {}) => {
+  const projectName = sanitizeProjectName(opts.name || 'Untitled Project')
+  const defaultBasePath = app.getPath('documents') || app.getPath('home')
+
+  if (process.platform === 'win32') {
+    const { canceled, filePath } = await dialog.showSaveDialog(win, {
+      title: 'Create Project',
+      buttonLabel: 'Create Project',
+      defaultPath: path.join(defaultBasePath, projectName)
+    })
+    if (canceled || !filePath) return null
+    return filePath
+  }
+
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    title: `Choose where to create "${projectName}"`,
+    buttonLabel: 'Create Project Here',
+    defaultPath: defaultBasePath,
+    properties: ['openDirectory', 'createDirectory']
+  })
+  if (canceled || !filePaths.length) return null
+  return path.join(filePaths[0], projectName)
 })
 
 ipcMain.handle('open-folder', async (event, folder) => {
@@ -297,17 +324,30 @@ ipcMain.handle('open-folder', async (event, folder) => {
 })
 
 ipcMain.handle('project-create', async (event, opts = {}) => {
-  const parentFolder = typeof opts.parentFolder === 'string' ? opts.parentFolder : ''
-  if (!parentFolder) throw new Error('Missing parent folder')
-  const resolvedParent = path.resolve(parentFolder)
-  ensureDirectory(resolvedParent)
-
   const baseName = sanitizeProjectName(opts.name || 'Untitled Project')
-  let targetFolder = path.join(resolvedParent, baseName)
-  let suffix = 2
-  while (fs.existsSync(targetFolder)) {
-    targetFolder = path.join(resolvedParent, `${baseName} ${suffix}`)
-    suffix += 1
+  const explicitProjectPath = typeof opts.projectPath === 'string' ? opts.projectPath.trim() : ''
+
+  let targetFolder = ''
+  if (explicitProjectPath) {
+    targetFolder = path.resolve(explicitProjectPath)
+    const parentFolder = path.dirname(targetFolder)
+    ensureDirectory(parentFolder)
+  } else {
+    const parentFolder = typeof opts.parentFolder === 'string' ? opts.parentFolder : ''
+    if (!parentFolder) throw new Error('Missing parent folder')
+    const resolvedParent = path.resolve(parentFolder)
+    ensureDirectory(resolvedParent)
+
+    targetFolder = path.join(resolvedParent, baseName)
+    let suffix = 2
+    while (fs.existsSync(targetFolder)) {
+      targetFolder = path.join(resolvedParent, `${baseName} ${suffix}`)
+      suffix += 1
+    }
+  }
+
+  if (fs.existsSync(targetFolder) && !fs.statSync(targetFolder).isDirectory()) {
+    throw new Error('Project location must be a folder')
   }
 
   ensureDirectory(targetFolder)

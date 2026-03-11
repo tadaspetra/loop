@@ -23,6 +23,9 @@
         <button id="openProjectBtn" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">Open Folder</button>
       </div>
 
+      <div class="text-xs text-gray-500">Create asks where to store the new project folder, then the app creates it for you.</div>
+      <div id="projectHomeMessage" class="hidden rounded border px-3 py-2 text-sm"></div>
+
       <div id="lastProjectRow" class="hidden flex items-center justify-between bg-gray-900 border border-gray-700 rounded px-3 py-2">
         <div>
           <div class="text-sm text-gray-200" id="lastProjectName">Last project</div>
@@ -200,6 +203,7 @@
     const newProjectNameInput = document.getElementById('newProjectName');
     const createProjectBtn = document.getElementById('createProjectBtn');
     const openProjectBtn = document.getElementById('openProjectBtn');
+    const projectHomeMessage = document.getElementById('projectHomeMessage');
     const lastProjectRow = document.getElementById('lastProjectRow');
     const lastProjectName = document.getElementById('lastProjectName');
     const lastProjectPath = document.getElementById('lastProjectPath');
@@ -531,6 +535,25 @@
         lastProjectRow.classList.add('hidden');
         resumeLastBtn.dataset.projectPath = '';
       }
+    }
+
+    function clearProjectHomeMessage() {
+      projectHomeMessage.textContent = '';
+      projectHomeMessage.className = 'hidden rounded border px-3 py-2 text-sm';
+    }
+
+    function showProjectHomeMessage(message, tone = 'error') {
+      if (!message) {
+        clearProjectHomeMessage();
+        return;
+      }
+
+      const toneClass = tone === 'info'
+        ? 'border-blue-500/40 bg-blue-500/10 text-blue-200'
+        : 'border-red-500/40 bg-red-500/10 text-red-200';
+
+      projectHomeMessage.textContent = message;
+      projectHomeMessage.className = `rounded border px-3 py-2 text-sm ${toneClass}`;
     }
 
     async function refreshRecentProjects() {
@@ -2772,6 +2795,7 @@
     // Project home actions
     async function openProjectByPath(projectPath, preferredView = 'timeline') {
       if (!projectPath) return;
+      clearProjectHomeMessage();
       try {
         const opened = await window.electronAPI.projectOpen(projectPath);
         if (!opened?.projectPath || !opened?.project) return;
@@ -2779,26 +2803,34 @@
         await refreshRecentProjects();
       } catch (error) {
         console.error('Failed to open project:', error);
+        showProjectHomeMessage(error?.message || 'Failed to open project folder.');
       }
     }
 
     createProjectBtn.addEventListener('click', async () => {
-      const parentFolder = await window.electronAPI.pickFolder();
-      if (!parentFolder) return;
       const name = (newProjectNameInput.value || '').trim() || 'Untitled Project';
+      clearProjectHomeMessage();
+      const projectPath = await window.electronAPI.pickProjectLocation({ name });
+      if (!projectPath) return;
       try {
-        const created = await window.electronAPI.projectCreate({ parentFolder, name });
+        const created = await window.electronAPI.projectCreate({ projectPath, name });
         if (!created?.projectPath || !created?.project) return;
         newProjectNameInput.value = '';
+        clearProjectHomeMessage();
         await activateProject(created.projectPath, created.project, 'recording');
         await refreshRecentProjects();
       } catch (error) {
         console.error('Failed to create project:', error);
+        showProjectHomeMessage(error?.message || 'Failed to create project.');
       }
     });
 
     openProjectBtn.addEventListener('click', async () => {
-      const folder = await window.electronAPI.pickFolder();
+      clearProjectHomeMessage();
+      const folder = await window.electronAPI.pickFolder({
+        title: 'Open Project Folder',
+        buttonLabel: 'Open Project'
+      });
       if (!folder) return;
       await openProjectByPath(folder, 'timeline');
     });
