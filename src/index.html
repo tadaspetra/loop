@@ -3,91 +3,110 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; style-src 'self' 'unsafe-inline'; media-src 'self' blob: file:; connect-src 'self' blob: file: wss://api.elevenlabs.io" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; media-src 'self' blob: file:; connect-src 'self' blob: file: wss://api.elevenlabs.io" />
   <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
+          },
+        },
+      },
+    }
+  </script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    select { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23737373' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px center; padding-right: 32px; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #404040; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #525252; }
+  </style>
   <title>Video Recorder</title>
 </head>
-<body class="bg-gray-900 text-white min-h-screen flex flex-col">
+<body class="bg-neutral-950 text-neutral-50 min-h-screen flex flex-col font-sans antialiased">
 
   <!-- Project Home View -->
   <div id="projectHomeView" class="flex-1 flex flex-col items-center justify-center p-6">
-    <div class="w-full max-w-2xl bg-gray-800 border border-gray-700 rounded-xl p-6 space-y-5">
+    <div class="w-full max-w-2xl bg-neutral-900 border border-neutral-800 rounded-2xl p-8 space-y-6 shadow-2xl shadow-black/20">
       <div>
-        <h1 class="text-2xl font-semibold">Projects</h1>
-        <p class="text-sm text-gray-400 mt-1">Open an existing project or create a new one to continue your timeline.</p>
+        <h1 class="text-2xl font-semibold tracking-tight">Projects</h1>
+        <p class="text-sm text-neutral-400 mt-1.5">Open an existing project or create a new one to continue your timeline.</p>
       </div>
 
       <div class="flex gap-2">
-        <input id="newProjectName" type="text" placeholder="Project name" class="flex-1 bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500" />
-        <button id="createProjectBtn" type="button" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm font-medium transition-colors">Create</button>
-        <button id="openProjectBtn" type="button" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">Open Folder</button>
+        <input id="newProjectName" type="text" placeholder="Project name" class="flex-1 bg-neutral-950 border border-neutral-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-neutral-600 focus:border-neutral-600 placeholder:text-neutral-600 transition-colors" />
+        <button id="createProjectBtn" type="button" class="px-4 py-2 bg-white text-neutral-950 hover:bg-neutral-200 rounded-lg text-sm font-medium transition-colors">Create</button>
+        <button id="openProjectBtn" type="button" class="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Open Folder</button>
       </div>
 
-      <div class="text-xs text-gray-500">Create asks where to store the new project folder, then the app creates it for you.</div>
-      <div id="projectHomeMessage" class="hidden rounded border px-3 py-2 text-sm"></div>
+      <div class="text-xs text-neutral-500">Create asks where to store the new project folder, then the app creates it for you.</div>
+      <div id="projectHomeMessage" class="hidden rounded-lg border px-3 py-2 text-sm"></div>
 
-      <div id="lastProjectRow" class="hidden flex items-center justify-between bg-gray-900 border border-gray-700 rounded px-3 py-2">
-        <div>
-          <div class="text-sm text-gray-200" id="lastProjectName">Last project</div>
-          <div class="text-xs text-gray-500 truncate" id="lastProjectPath">-</div>
+      <div id="lastProjectRow" class="hidden flex items-center justify-between bg-neutral-950 border border-neutral-800 rounded-lg px-4 py-3">
+        <div class="min-w-0">
+          <div class="text-sm text-neutral-200 font-medium" id="lastProjectName">Last project</div>
+          <div class="text-xs text-neutral-500 truncate" id="lastProjectPath">-</div>
         </div>
-        <button id="resumeLastBtn" class="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">Resume Last</button>
+        <button id="resumeLastBtn" class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors shrink-0 ml-3">Resume</button>
       </div>
 
       <div>
-        <h2 class="text-sm text-gray-400 mb-2">Recent</h2>
-        <div id="recentProjectsList" class="space-y-2"></div>
+        <h2 class="text-xs font-medium text-neutral-500 uppercase tracking-wider mb-2">Recent</h2>
+        <div id="recentProjectsList" class="space-y-1.5"></div>
       </div>
     </div>
   </div>
 
   <!-- Workspace Header -->
-  <div id="workspaceHeader" class="hidden border-b border-gray-800 bg-gray-900/95 backdrop-blur px-4 py-3">
+  <div id="workspaceHeader" class="hidden border-b border-neutral-800/80 bg-neutral-950/95 backdrop-blur-md px-4 py-3">
     <div class="max-w-5xl mx-auto w-full flex items-center gap-3">
       <div class="min-w-0 flex-1">
         <div id="activeProjectName" class="text-sm font-semibold truncate">Project</div>
-        <div id="activeProjectPath" class="text-xs text-gray-500 truncate"></div>
+        <div id="activeProjectPath" class="text-xs text-neutral-500 truncate"></div>
       </div>
-      <div class="flex items-center bg-gray-800 rounded p-1">
-        <button id="goRecordingBtn" class="px-3 py-1.5 rounded text-sm transition-colors">Recording</button>
-        <button id="goTimelineBtn" class="px-3 py-1.5 rounded text-sm transition-colors">Timeline</button>
+      <div class="flex items-center bg-neutral-900 rounded-lg p-1 border border-neutral-800">
+        <button id="goRecordingBtn" class="px-3 py-1.5 rounded-md text-sm transition-colors">Recording</button>
+        <button id="goTimelineBtn" class="px-3 py-1.5 rounded-md text-sm transition-colors">Timeline</button>
       </div>
-      <button id="switchProjectBtn" class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">Projects</button>
+      <button id="switchProjectBtn" class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Projects</button>
     </div>
   </div>
 
   <!-- Recording View -->
   <div id="recordingView" class="hidden flex-1 flex flex-col p-6 gap-4 max-w-4xl mx-auto w-full">
     <!-- Source selectors -->
-    <div class="flex gap-4">
+    <div class="flex gap-3">
       <div class="flex-1">
-        <label class="block text-sm text-gray-400 mb-1">Screen</label>
-        <select id="screenSource" class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500"></select>
+        <label class="block text-xs font-medium text-neutral-500 uppercase tracking-wider mb-1.5">Screen</label>
+        <select id="screenSource" class="w-full bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-neutral-600 transition-colors"></select>
       </div>
       <div>
-        <label class="block text-sm text-gray-400 mb-1">Mode</label>
-        <select id="screenFit" class="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500">
+        <label class="block text-xs font-medium text-neutral-500 uppercase tracking-wider mb-1.5">Mode</label>
+        <select id="screenFit" class="bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-neutral-600 transition-colors">
           <option value="fill">Fill</option>
           <option value="fit">Fit</option>
         </select>
       </div>
       <div class="flex-1">
-        <label class="block text-sm text-gray-400 mb-1">Camera</label>
-        <select id="cameraSource" class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500"></select>
+        <label class="block text-xs font-medium text-neutral-500 uppercase tracking-wider mb-1.5">Camera</label>
+        <select id="cameraSource" class="w-full bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-neutral-600 transition-colors"></select>
       </div>
       <div class="flex-1">
-        <label class="block text-sm text-gray-400 mb-1">Microphone</label>
-        <select id="audioSource" class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500"></select>
+        <label class="block text-xs font-medium text-neutral-500 uppercase tracking-wider mb-1.5">Microphone</label>
+        <select id="audioSource" class="w-full bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-neutral-600 transition-colors"></select>
       </div>
     </div>
 
     <!-- Preview + Transcript -->
-    <div class="flex-1 flex gap-0 min-h-[360px] overflow-hidden">
+    <div class="flex-1 flex gap-0 min-h-[360px] overflow-hidden rounded-xl border border-neutral-800">
       <!-- Transcript panel (shown during recording) -->
-      <div id="transcriptPanel" class="hidden w-64 shrink-0 bg-gray-800 border border-gray-700 rounded-l flex flex-col overflow-hidden">
-        <div class="flex items-center justify-between px-3 py-2 border-b border-gray-700">
-          <span class="text-sm text-gray-400">Transcript</span>
-          <span id="segmentBadge" class="text-xs bg-gray-600 text-gray-300 px-2 py-0.5 rounded-full">0 segments</span>
+      <div id="transcriptPanel" class="hidden w-64 shrink-0 bg-neutral-900 border-r border-neutral-800 flex flex-col overflow-hidden">
+        <div class="flex items-center justify-between px-3 py-2.5 border-b border-neutral-800">
+          <span class="text-xs font-medium text-neutral-500 uppercase tracking-wider">Transcript</span>
+          <span id="segmentBadge" class="text-xs bg-neutral-800 text-neutral-400 px-2 py-0.5 rounded-full">0 segments</span>
         </div>
         <div id="transcriptContent" class="flex-1 overflow-y-auto px-3 py-2 text-sm leading-relaxed">
         </div>
@@ -95,7 +114,7 @@
       <!-- Preview -->
       <div class="flex-1 bg-black overflow-hidden relative flex items-center justify-center">
         <canvas id="compositeCanvas" class="w-full h-full object-contain"></canvas>
-        <div id="noPreview" class="absolute inset-0 flex items-center justify-center text-gray-500">
+        <div id="noPreview" class="absolute inset-0 flex items-center justify-center text-neutral-600">
           Select a source to start preview
         </div>
       </div>
@@ -107,36 +126,36 @@
 
     <!-- Audio meter -->
     <div class="flex items-center gap-3">
-      <span class="text-sm text-gray-400 w-10">Mic</span>
-      <div class="flex-1 bg-gray-800 rounded-full h-3 overflow-hidden">
-        <div id="audioMeter" class="bg-green-500 h-full rounded-full transition-all duration-75" style="width: 0%"></div>
+      <span class="text-xs font-medium text-neutral-500 uppercase tracking-wider w-10">Mic</span>
+      <div class="flex-1 bg-neutral-900 rounded-full h-2 overflow-hidden">
+        <div id="audioMeter" class="bg-emerald-500 h-full rounded-full transition-all duration-75" style="width: 0%"></div>
       </div>
     </div>
 
     <!-- Controls -->
     <div class="flex items-center justify-center gap-4">
-      <button id="recordBtn" class="px-6 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed" disabled>
+      <button id="recordBtn" class="px-6 py-2.5 bg-red-600 hover:bg-red-700 rounded-xl font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-lg shadow-red-600/20" disabled>
         Record
       </button>
-      <span id="timer" class="text-sm text-gray-400 font-mono w-20">00:00</span>
-      <button id="settingsBtn" class="ml-auto text-gray-400 hover:text-white transition-colors text-sm">
+      <span id="timer" class="text-sm text-neutral-500 font-mono w-20 tabular-nums">00:00</span>
+      <button id="settingsBtn" class="ml-auto text-neutral-500 hover:text-neutral-300 transition-colors text-sm">
         Settings
       </button>
     </div>
 
     <!-- Settings panel -->
-    <div id="settingsPanel" class="hidden bg-gray-800 border border-gray-700 rounded p-4 space-y-4">
+    <div id="settingsPanel" class="hidden bg-neutral-900 border border-neutral-800 rounded-xl p-4 space-y-4">
       <div class="flex items-center gap-3">
-        <label class="text-sm text-gray-400 shrink-0">Project</label>
-        <span id="folderPath" class="text-sm truncate flex-1 text-gray-300">Not set</span>
-        <button id="openFolderBtn" class="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors hidden">Open</button>
-        <button id="pickFolderBtn" class="hidden px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">Browse</button>
+        <label class="text-xs font-medium text-neutral-500 uppercase tracking-wider shrink-0">Project</label>
+        <span id="folderPath" class="text-sm truncate flex-1 text-neutral-400">Not set</span>
+        <button id="openFolderBtn" class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors hidden">Open</button>
+        <button id="pickFolderBtn" class="hidden px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Browse</button>
       </div>
-      <label class="flex items-start gap-3 text-sm text-gray-300 cursor-pointer select-none">
-        <input id="contentProtectionToggle" type="checkbox" class="mt-0.5 rounded border-gray-600 bg-gray-700 text-blue-500 focus:ring-blue-500" checked>
+      <label class="flex items-start gap-3 text-sm text-neutral-300 cursor-pointer select-none">
+        <input id="contentProtectionToggle" type="checkbox" class="mt-0.5 rounded border-neutral-700 bg-neutral-800 text-neutral-50 focus:ring-neutral-600" checked>
         <span>
           Invisible from recording
-          <span class="block text-xs text-gray-500">Turn this off when you want to capture screenshots of the app window.</span>
+          <span class="block text-xs text-neutral-500 mt-0.5">Turn this off when you want to capture screenshots of the app window.</span>
         </span>
       </label>
     </div>
@@ -144,24 +163,24 @@
 
   <!-- Processing View -->
   <div id="processingView" class="hidden flex-1 flex flex-col items-center justify-center p-6 gap-4">
-    <div id="processingTitle" class="text-xl font-medium">Trimming silence...</div>
-    <div id="processingStatus" class="text-sm text-gray-400">Processing segments</div>
-    <div class="w-64 bg-gray-800 rounded-full h-3 overflow-hidden">
-      <div id="processingBar" class="bg-blue-500 h-full rounded-full transition-all duration-300 animate-pulse" style="width: 100%"></div>
+    <div id="processingTitle" class="text-xl font-medium tracking-tight">Trimming silence...</div>
+    <div id="processingStatus" class="text-sm text-neutral-500">Processing segments</div>
+    <div class="w-64 bg-neutral-900 rounded-full h-2 overflow-hidden">
+      <div id="processingBar" class="bg-white h-full rounded-full transition-all duration-300 animate-pulse" style="width: 100%"></div>
     </div>
   </div>
 
   <!-- Editor View -->
   <div id="editorView" class="hidden flex-1 flex flex-col p-6 gap-4 max-w-5xl mx-auto w-full">
     <!-- Top toolbar -->
-    <div class="flex items-center gap-4">
-      <button id="editorBackBtn" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">Back to Recording</button>
-      <span id="editorTime" class="text-sm text-gray-400 font-mono flex-1 text-center">00:00 / 00:00</span>
-      <button id="editorRenderBtn" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm font-medium transition-colors">Render</button>
+    <div class="flex items-center gap-3">
+      <button id="editorBackBtn" class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Back</button>
+      <span id="editorTime" class="text-sm text-neutral-500 font-mono flex-1 text-center tabular-nums">00:00 / 00:00</span>
+      <button id="editorRenderBtn" class="px-4 py-1.5 bg-white text-neutral-950 hover:bg-neutral-200 rounded-lg text-sm font-medium transition-colors">Render</button>
     </div>
 
     <!-- Editor canvas -->
-    <div class="flex-1 bg-black overflow-hidden relative flex items-center justify-center min-h-[360px]">
+    <div class="flex-1 bg-black overflow-hidden relative flex items-center justify-center min-h-[360px] rounded-xl border border-neutral-800">
       <canvas id="editorCanvas" class="w-full h-full object-contain" style="aspect-ratio: 16/9;"></canvas>
     </div>
 
@@ -170,29 +189,29 @@
     <video id="editorCameraVideo" muted playsinline class="hidden"></video>
 
     <!-- Playback controls -->
-    <div class="flex items-center justify-center gap-3">
-      <button id="editorPlayBtn" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">Play</button>
-      <button id="editorToggleCamBtn" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">Toggle Camera</button>
-      <button id="editorCamFullBtn" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">Camera Full</button>
-      <button id="editorDeleteKfBtn" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">Delete Manual Keyframe</button>
-      <button id="editorApplyFutureBtn" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">Apply Style to Future</button>
+    <div class="flex items-center justify-center gap-2">
+      <button id="editorPlayBtn" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Play</button>
+      <button id="editorToggleCamBtn" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Camera</button>
+      <button id="editorCamFullBtn" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Fullscreen</button>
+      <div class="w-px h-5 bg-neutral-800 mx-1"></div>
+      <button id="editorApplyFutureBtn" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Apply to Future</button>
     </div>
 
     <!-- Timeline scrubber -->
-    <div id="editorTimeline" class="relative bg-gray-800 rounded h-12 cursor-pointer select-none">
-      <canvas id="editorWaveformCanvas" class="absolute inset-0 w-full h-full pointer-events-none z-0" style="opacity: 0.5"></canvas>
+    <div id="editorTimeline" class="relative bg-neutral-900 rounded-lg h-12 cursor-pointer select-none border border-neutral-800 overflow-hidden">
+      <canvas id="editorWaveformCanvas" class="absolute inset-0 w-full h-full pointer-events-none z-0" style="opacity: 0.4"></canvas>
       <div id="editorSectionMarkers" class="absolute inset-0 z-1"></div>
       <div id="editorScrubber" class="absolute top-0 bottom-0 w-0.5 bg-white pointer-events-none z-20" style="left: 0%"></div>
     </div>
-    <div id="editorSectionTranscriptList" class="max-h-40 overflow-y-auto space-y-2 bg-gray-900/50 border border-gray-700 rounded p-2">
-      <div class="text-xs text-gray-500 px-1">Section transcript will appear here after trimming.</div>
+    <div id="editorSectionTranscriptList" class="max-h-40 overflow-y-auto space-y-1.5 bg-neutral-950/50 border border-neutral-800 rounded-xl p-2">
+      <div class="text-xs text-neutral-500 px-1">Section transcript will appear here after trimming.</div>
     </div>
 
     <!-- Render progress -->
     <div id="editorRenderProgress" class="hidden">
-      <div class="text-sm text-gray-400 mb-1" id="editorRenderLabel">Rendering...</div>
-      <div class="bg-gray-800 rounded-full h-3 overflow-hidden">
-        <div id="editorRenderBar" class="bg-blue-500 h-full rounded-full transition-all duration-150" style="width: 0%"></div>
+      <div class="text-sm text-neutral-500 mb-1.5" id="editorRenderLabel">Rendering...</div>
+      <div class="bg-neutral-900 rounded-full h-2 overflow-hidden">
+        <div id="editorRenderBar" class="bg-white h-full rounded-full transition-all duration-150" style="width: 0%"></div>
       </div>
     </div>
   </div>
@@ -251,7 +270,6 @@
     const editorPlayBtn = document.getElementById('editorPlayBtn');
     const editorToggleCamBtn = document.getElementById('editorToggleCamBtn');
     const editorCamFullBtn = document.getElementById('editorCamFullBtn');
-    const editorDeleteKfBtn = document.getElementById('editorDeleteKfBtn');
     const editorApplyFutureBtn = document.getElementById('editorApplyFutureBtn');
     const editorRenderBtn = document.getElementById('editorRenderBtn');
     const editorTimeEl = document.getElementById('editorTime');
@@ -361,7 +379,7 @@
 
     function setToggleButtonState(button, active, disabled) {
       button.disabled = !!disabled;
-      button.className = `px-3 py-1.5 rounded text-sm transition-colors ${active ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-700'} disabled:opacity-40 disabled:cursor-not-allowed`;
+      button.className = `px-3 py-1.5 rounded-md text-sm transition-colors ${active ? 'bg-white text-neutral-950 font-medium' : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800'} disabled:opacity-40 disabled:cursor-not-allowed`;
     }
 
     function updateWorkspaceHeader() {
@@ -519,21 +537,21 @@
       recentProjectsList.innerHTML = '';
       if (projects.length === 0) {
         const empty = document.createElement('div');
-        empty.className = 'text-sm text-gray-500';
+        empty.className = 'text-sm text-neutral-600 py-2';
         empty.textContent = 'No recent projects yet.';
         recentProjectsList.appendChild(empty);
       } else {
         for (const project of projects) {
           const btn = document.createElement('button');
-          btn.className = 'w-full text-left bg-gray-900 border border-gray-700 rounded px-3 py-2 hover:border-gray-500 transition-colors';
+          btn.className = 'w-full text-left bg-neutral-950 border border-neutral-800 rounded-lg px-3.5 py-2.5 hover:bg-neutral-900 hover:border-neutral-700 transition-all';
           btn.type = 'button';
           btn.dataset.projectPath = project.projectPath;
 
           const title = document.createElement('div');
-          title.className = 'text-sm text-gray-100 truncate';
+          title.className = 'text-sm text-neutral-100 truncate font-medium';
           title.textContent = project.name || 'Untitled Project';
           const subtitle = document.createElement('div');
-          subtitle.className = 'text-xs text-gray-500 truncate';
+          subtitle.className = 'text-xs text-neutral-500 truncate mt-0.5';
           subtitle.textContent = `${project.projectPath} • ${formatProjectDate(project.updatedAt)}`;
           btn.appendChild(title);
           btn.appendChild(subtitle);
@@ -905,7 +923,7 @@
 
     function renderSectionTranscriptList() {
       if (!editorState || !editorState.sections || editorState.sections.length === 0) {
-        editorSectionTranscriptList.innerHTML = '<div class="text-xs text-gray-500 px-1">No sections available.</div>';
+        editorSectionTranscriptList.innerHTML = '<div class="text-xs text-neutral-500 px-1">No sections available.</div>';
         return;
       }
 
@@ -917,14 +935,14 @@
         const row = document.createElement('button');
         row.type = 'button';
         row.dataset.sectionId = section.id;
-        row.className = `w-full text-left rounded border px-3 py-2 transition-colors ${selected ? 'border-blue-400 bg-blue-500/10' : 'border-gray-700 bg-gray-900/40 hover:border-gray-500'}`;
+        row.className = `w-full text-left rounded-lg border px-3 py-2 transition-all ${selected ? 'border-neutral-600 bg-neutral-800/60 ring-1 ring-neutral-700' : 'border-neutral-800 bg-neutral-950/40 hover:bg-neutral-900 hover:border-neutral-700'}`;
 
         const meta = document.createElement('div');
-        meta.className = 'text-xs text-gray-400';
+        meta.className = 'text-xs text-neutral-500 font-mono tabular-nums';
         meta.textContent = `${section.label} (${formatTime(section.start)} - ${formatTime(section.end)})`;
 
         const text = document.createElement('div');
-        text.className = `mt-1 text-sm leading-snug ${transcript ? 'text-gray-200' : 'text-gray-500 italic'}`;
+        text.className = `mt-1 text-sm leading-snug ${transcript ? 'text-neutral-300' : 'text-neutral-600 italic'}`;
         text.textContent = transcript || 'No transcript captured for this section.';
 
         row.appendChild(meta);
@@ -977,7 +995,7 @@
       const midY = h / 2;
       const barWidth = w / waveformPeaks.length;
 
-      wCtx.fillStyle = 'rgba(147, 197, 253, 0.7)';
+      wCtx.fillStyle = 'rgba(163, 163, 163, 0.5)';
       for (let i = 0; i < waveformPeaks.length; i++) {
         const barHeight = waveformPeaks[i] * midY * 0.9;
         const x = i * barWidth;
@@ -997,39 +1015,40 @@
         const sectionStart = (section.start / editorState.duration) * 100;
         const sectionWidth = Math.max(0.35, ((section.end - section.start) / editorState.duration) * 100);
         const selected = section.id === editorState.selectedSectionId;
-        const baseColor = section.index % 2 === 0 ? 'rgba(30,41,59,0.72)' : 'rgba(51,65,85,0.68)';
+        const baseColor = section.index % 2 === 0 ? 'rgba(23,23,23,0.72)' : 'rgba(38,38,38,0.68)';
 
         const band = document.createElement('div');
         band.className = 'absolute top-0 bottom-0';
         band.dataset.sectionId = section.id;
         band.style.left = sectionStart + '%';
         band.style.width = sectionWidth + '%';
-        band.style.backgroundColor = selected ? 'rgba(37,99,235,0.58)' : baseColor;
-        band.style.borderLeft = section.index === 0 ? 'none' : '1px solid rgba(15,23,42,0.9)';
+        band.style.backgroundColor = selected ? 'rgba(255,255,255,0.12)' : baseColor;
+        band.style.borderLeft = section.index === 0 ? 'none' : '1px solid rgba(10,10,10,0.9)';
         if (selected) {
-          band.style.boxShadow = 'inset 0 0 0 2px rgba(191,219,254,0.95)';
+          band.style.boxShadow = 'inset 0 0 0 2px rgba(255,255,255,0.3)';
         }
         const transcriptPreview = normalizeTranscriptText(section.transcript);
         band.title = transcriptPreview
           ? `${section.label}: ${formatTime(section.start)} - ${formatTime(section.end)}\n${transcriptPreview}`
           : `${section.label}: ${formatTime(section.start)} - ${formatTime(section.end)}`;
         const label = document.createElement('div');
-        label.className = 'absolute text-[10px] text-gray-100 font-medium pointer-events-none';
+        label.className = 'absolute text-[10px] font-medium pointer-events-none';
         label.style.left = '6px';
         label.style.top = '50%';
         label.style.transform = 'translateY(-50%)';
+        label.style.color = selected ? 'rgba(255,255,255,0.9)' : 'rgba(163,163,163,0.8)';
         label.textContent = String(section.index + 1);
         band.appendChild(label);
         if (selected) {
           const leftHandle = document.createElement('div');
           leftHandle.dataset.trimEdge = 'left';
           leftHandle.dataset.sectionId = section.id;
-          leftHandle.style.cssText = 'position:absolute;top:0;bottom:0;left:0;width:6px;cursor:col-resize;z-index:30;border-left:3px solid rgba(191,219,254,0.9);';
+          leftHandle.style.cssText = 'position:absolute;top:0;bottom:0;left:0;width:6px;cursor:col-resize;z-index:30;border-left:3px solid rgba(255,255,255,0.5);';
           band.appendChild(leftHandle);
           const rightHandle = document.createElement('div');
           rightHandle.dataset.trimEdge = 'right';
           rightHandle.dataset.sectionId = section.id;
-          rightHandle.style.cssText = 'position:absolute;top:0;bottom:0;right:0;width:6px;cursor:col-resize;z-index:30;border-right:3px solid rgba(191,219,254,0.9);';
+          rightHandle.style.cssText = 'position:absolute;top:0;bottom:0;right:0;width:6px;cursor:col-resize;z-index:30;border-right:3px solid rgba(255,255,255,0.5);';
           band.appendChild(rightHandle);
         }
         editorSectionMarkers.appendChild(band);
@@ -1040,7 +1059,7 @@
           cut.style.left = `${(section.end / editorState.duration) * 100}%`;
           cut.style.width = '3px';
           cut.style.transform = 'translateX(-1.5px)';
-          cut.style.backgroundColor = 'rgba(255,255,255,0.95)';
+          cut.style.backgroundColor = 'rgba(255,255,255,0.25)';
           editorSectionMarkers.appendChild(cut);
         }
       }
@@ -1502,7 +1521,7 @@
         const avg = data.reduce((a, b) => a + b, 0) / data.length;
         const pct = Math.min(100, (avg / 128) * 100);
         audioMeter.style.width = pct + '%';
-        audioMeter.className = `h-full rounded-full transition-all duration-75 ${pct > 70 ? 'bg-red-500' : pct > 40 ? 'bg-yellow-500' : 'bg-green-500'}`;
+        audioMeter.className = `h-full rounded-full transition-all duration-75 ${pct > 70 ? 'bg-red-500' : pct > 40 ? 'bg-amber-500' : 'bg-emerald-500'}`;
         meterRAF = requestAnimationFrame(updateMeter);
       }
       updateMeter();
@@ -1625,8 +1644,8 @@
       recording = true;
       updateWorkspaceHeader();
       recordBtn.textContent = 'Stop';
-      recordBtn.classList.replace('bg-red-600', 'bg-gray-600');
-      recordBtn.classList.replace('hover:bg-red-700', 'hover:bg-gray-700');
+      recordBtn.classList.replace('bg-red-600', 'bg-neutral-700');
+      recordBtn.classList.replace('hover:bg-red-700', 'hover:bg-neutral-600');
       screenSelect.disabled = true;
       cameraSelect.disabled = true;
       audioSelect.disabled = true;
@@ -1764,7 +1783,7 @@
       if (!partial) {
         partial = document.createElement('div');
         partial.id = 'partialText';
-        partial.className = 'text-gray-500 italic';
+        partial.className = 'text-neutral-600 italic';
         transcriptContent.appendChild(partial);
       }
       partial.textContent = stripNonSpeechAnnotations(text);
@@ -1792,7 +1811,7 @@
 
       // Add committed text
       const div = document.createElement('div');
-      div.className = 'mb-2 text-gray-200 cursor-pointer rounded px-1 -mx-1 hover:bg-gray-700/50';
+      div.className = 'mb-2 text-neutral-300 cursor-pointer rounded-md px-1.5 py-0.5 -mx-1 hover:bg-neutral-800/60 transition-colors';
       div.dataset.segmentIndex = speechSegments.length - 1;
       div.textContent = cleanText;
       div.addEventListener('click', () => {
@@ -2204,8 +2223,8 @@
       recording = false;
       updateWorkspaceHeader();
       recordBtn.textContent = 'Record';
-      recordBtn.classList.replace('bg-gray-600', 'bg-red-600');
-      recordBtn.classList.replace('hover:bg-gray-700', 'hover:bg-red-700');
+      recordBtn.classList.replace('bg-neutral-700', 'bg-red-600');
+      recordBtn.classList.replace('hover:bg-neutral-600', 'hover:bg-red-700');
       screenSelect.disabled = false;
       cameraSelect.disabled = false;
       audioSelect.disabled = false;
@@ -2683,7 +2702,6 @@
     editorPlayBtn.addEventListener('click', editorTogglePlay);
     editorToggleCamBtn.addEventListener('click', toggleCameraVisibility);
     editorCamFullBtn.addEventListener('click', toggleCameraFullscreen);
-    editorDeleteKfBtn.addEventListener('click', deleteNearestKeyframe);
     editorApplyFutureBtn.addEventListener('click', applyStyleToFutureSections);
 
     // ===== Render pipeline =====
@@ -2761,7 +2779,7 @@
       selectedSegmentIndex = index;
       if (index >= 0) {
         const el = transcriptContent.querySelector(`[data-segment-index="${index}"]`);
-        if (el) el.style.outline = '2px solid rgba(96, 165, 250, 0.7)';
+        if (el) el.style.outline = '2px solid rgba(255, 255, 255, 0.3)';
       }
     }
 
