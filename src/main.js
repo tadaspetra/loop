@@ -767,15 +767,16 @@ function buildAlphaExpr(keyframes) {
 }
 
 function buildCamFullAlphaExpr(keyframes) {
-  if (keyframes.length === 1) return keyframes[0].cameraFullscreen ? '1' : '0'
-  let expr = keyframes[0].cameraFullscreen ? '1' : '0'
+  const isFullVis = kf => (kf.cameraFullscreen || false) && kf.pipVisible
+  if (keyframes.length === 1) return isFullVis(keyframes[0]) ? '1' : '0'
+  let expr = isFullVis(keyframes[0]) ? '1' : '0'
   for (let i = 1; i < keyframes.length; i++) {
     const prev = keyframes[i - 1]
     const curr = keyframes[i]
     const t = curr.time
     const tEnd = t + TRANSITION_DURATION
-    const prevFull = prev.cameraFullscreen || false
-    const currFull = curr.cameraFullscreen || false
+    const prevFull = isFullVis(prev)
+    const currFull = isFullVis(curr)
 
     if (prevFull !== currFull) {
       if (currFull) {

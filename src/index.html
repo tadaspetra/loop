@@ -2482,29 +2482,33 @@
           const t = elapsed / TRANSITION_DURATION;
           const prevFullscreen = prev.cameraFullscreen || false;
 
-          // Fullscreen expand/collapse
-          if (prevFullscreen !== cameraFullscreen) {
-            camTransition = cameraFullscreen ? t : 1 - t;
-            // Expanding to fullscreen: use previous position as the expand origin
-            if (cameraFullscreen) {
-              pipX = prev.pipX;
-              pipY = prev.pipY;
-            }
-          }
-
-          // Position transition: only between two PiP states (skip if fullscreen involved)
-          if (!prevFullscreen && !cameraFullscreen
-              && (prev.pipX !== active.pipX || prev.pipY !== active.pipY)) {
-            pipX = prev.pipX + (active.pipX - prev.pipX) * t;
-            pipY = prev.pipY + (active.pipY - prev.pipY) * t;
-          }
-
-          // Visibility fade
           if (prev.pipVisible !== active.pipVisible) {
+            // Visibility transition: fade in/out at the relevant state, no size animation
             if (active.pipVisible) {
               opacity = t;
+              camTransition = cameraFullscreen ? 1 : 0;
             } else {
               opacity = 1 - t;
+              camTransition = prevFullscreen ? 1 : 0;
+              if (!prevFullscreen) {
+                pipX = prev.pipX;
+                pipY = prev.pipY;
+              }
+            }
+          } else {
+            // No visibility change - handle position and fullscreen transitions
+            if (prevFullscreen !== cameraFullscreen) {
+              camTransition = cameraFullscreen ? t : 1 - t;
+              if (cameraFullscreen) {
+                pipX = prev.pipX;
+                pipY = prev.pipY;
+              }
+            }
+
+            if (!prevFullscreen && !cameraFullscreen
+                && (prev.pipX !== active.pipX || prev.pipY !== active.pipY)) {
+              pipX = prev.pipX + (active.pipX - prev.pipX) * t;
+              pipY = prev.pipY + (active.pipY - prev.pipY) * t;
             }
           }
         }
@@ -2654,7 +2658,9 @@
 
       if (hasCamera) {
         const kf = getStateAtTime(editorState.currentTime);
-        if (kf.camTransition > 0) {
+        if (kf.camTransition > 0 && kf.opacity > 0) {
+          editorCtx.save();
+          if (kf.opacity < 1) editorCtx.globalAlpha = kf.opacity;
           const t = easeInOut(kf.camTransition);
           const camX = kf.pipX * (1 - t);
           const camY = kf.pipY * (1 - t);
@@ -2662,6 +2668,7 @@
           const camH = editorState.pipSize + (CANVAS_H - editorState.pipSize) * t;
           const camR = 12 * (1 - t);
           drawCameraRect(editorCtx, activeVideos.camera, camX, camY, camW, camH, camR);
+          editorCtx.restore();
         } else if (kf.opacity > 0) {
           editorCtx.save();
           editorCtx.globalAlpha = kf.opacity;
