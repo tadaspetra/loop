@@ -1883,10 +1883,10 @@
         partial = document.createElement('div');
         partial.id = 'partialText';
         partial.className = 'text-neutral-600 italic';
-        transcriptContent.appendChild(partial);
+        transcriptContent.prepend(partial);
       }
       partial.textContent = stripNonSpeechAnnotations(text);
-      transcriptContent.scrollTop = transcriptContent.scrollHeight;
+      transcriptContent.scrollTop = 0;
     }
 
     function commitTranscript(data) {
@@ -1917,8 +1917,8 @@
         const idx = parseInt(div.dataset.segmentIndex, 10);
         selectSegment(selectedSegmentIndex === idx ? -1 : idx);
       });
-      transcriptContent.appendChild(div);
-      transcriptContent.scrollTop = transcriptContent.scrollHeight;
+      transcriptContent.prepend(div);
+      transcriptContent.scrollTop = 0;
 
       updateSegmentBadge();
     }
