@@ -4,3 +4,4 @@ dist
 .env
 
 .claude/worktrees/*
+pnpm-lock.yaml
