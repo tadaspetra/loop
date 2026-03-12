@@ -2545,6 +2545,7 @@
         screenFitMode: opts.screenFitMode || screenFitSelect.value,
         rendering: false,
         renderProgress: 0,
+        playbackSpeed: 1,
         hasCamera: typeof opts.hasCamera === 'boolean' ? opts.hasCamera : false,
         sourceWidth: opts.sourceWidth || null,
         sourceHeight: opts.sourceHeight || null
@@ -2676,7 +2677,8 @@
       if (!editorState) return;
       const selectedSection = getSelectedSection();
       const sectionText = selectedSection ? ` | ${selectedSection.label}` : '';
-      editorTimeEl.textContent = `${formatTime(editorState.currentTime)} / ${formatTime(editorState.duration)}${sectionText}`;
+      const speedText = editorState.playbackSpeed !== 1 ? ` [${editorState.playbackSpeed}x]` : '';
+      editorTimeEl.textContent = `${formatTime(editorState.currentTime)} / ${formatTime(editorState.duration)}${speedText}${sectionText}`;
     }
 
     function switchPlaybackSection(nextSection, opts = {}) {
@@ -2722,8 +2724,11 @@
       }
 
       if (opts.resumePlayback) {
+        const speed = editorState.playbackSpeed || 1;
+        nextVideos.screen.playbackRate = speed;
         if (nextVideos.screen.paused) nextVideos.screen.play().catch(() => {});
         if (editorState.hasCamera && nextVideos.camera && nextVideos.camera.paused) {
+          nextVideos.camera.playbackRate = speed;
           nextVideos.camera.play().catch(() => {});
         }
       }
@@ -2734,13 +2739,14 @@
     function syncCameraPlayback(videos) {
       if (!editorState?.hasCamera || !videos?.camera) return;
 
+      const baseRate = editorState.playbackSpeed || 1;
       const drift = videos.screen.currentTime - videos.camera.currentTime;
       const absDrift = Math.abs(drift);
       const now = performance.now();
 
       if (absDrift >= CAMERA_DRIFT_HARD_THRESHOLD && now >= cameraResyncCooldownUntil) {
         videos.camera.currentTime = videos.screen.currentTime;
-        videos.camera.playbackRate = 1;
+        videos.camera.playbackRate = baseRate;
         cameraResyncCooldownUntil = now + CAMERA_RESYNC_COOLDOWN_MS;
         console.debug('[Editor] Camera hard resync', {
           drift: Number(drift.toFixed(3)),
@@ -2751,8 +2757,8 @@
 
       if (absDrift >= CAMERA_DRIFT_SOFT_THRESHOLD) {
         const correction = Math.min(0.06, absDrift * 0.5);
-        const targetRate = drift > 0 ? 1 + correction : 1 - correction;
-        const clampedRate = Math.max(0.92, Math.min(1.08, targetRate));
+        const targetRate = drift > 0 ? baseRate + correction : baseRate - correction;
+        const clampedRate = Math.max(baseRate - 0.08, Math.min(baseRate + 0.08, targetRate));
         if (Math.abs(videos.camera.playbackRate - clampedRate) > 0.004) {
           videos.camera.playbackRate = clampedRate;
         }
@@ -2763,19 +2769,24 @@
           });
           lastCameraDriftLogAt = now;
         }
-      } else if (Math.abs(videos.camera.playbackRate - 1) > 0.001) {
-        videos.camera.playbackRate = 1;
+      } else if (Math.abs(videos.camera.playbackRate - baseRate) > 0.001) {
+        videos.camera.playbackRate = baseRate;
       }
     }
 
     function editorPlay() {
       if (!editorState || editorState.rendering) return;
       editorState.playing = true;
+      const speed = editorState.playbackSpeed || 1;
       if (activeTakeId) {
         const videos = getOrCreateTakeVideos(activeTakeId);
         if (videos) {
+          videos.screen.playbackRate = speed;
           videos.screen.play().catch(() => {});
-          if (editorState.hasCamera && videos.camera) videos.camera.play().catch(() => {});
+          if (editorState.hasCamera && videos.camera) {
+            videos.camera.playbackRate = speed;
+            videos.camera.play().catch(() => {});
+          }
         }
       }
       editorPlayBtn.textContent = 'Pause';
@@ -2786,6 +2797,7 @@
       editorState.playing = false;
       for (const [, videos] of takeVideoPool) {
         videos.screen.pause();
+        videos.screen.playbackRate = 1;
         if (videos.camera) {
           videos.camera.pause();
           videos.camera.playbackRate = 1;
@@ -2798,6 +2810,23 @@
       if (!editorState) return;
       if (editorState.playing) editorPause();
       else editorPlay();
+    }
+
+    function cyclePlaybackSpeed() {
+      if (!editorState) return;
+      const speeds = [1, 1.5, 2];
+      const idx = speeds.indexOf(editorState.playbackSpeed);
+      editorState.playbackSpeed = speeds[(idx + 1) % speeds.length];
+      if (editorState.playing && activeTakeId) {
+        const videos = getOrCreateTakeVideos(activeTakeId);
+        if (videos) {
+          videos.screen.playbackRate = editorState.playbackSpeed;
+          if (editorState.hasCamera && videos.camera) {
+            videos.camera.playbackRate = editorState.playbackSpeed;
+          }
+        }
+      }
+      updateEditorTimeDisplay();
     }
 
     function editorSeek(time) {
@@ -3252,6 +3281,9 @@
       } else if (e.code === 'KeyF') {
         e.preventDefault();
         toggleCameraFullscreen();
+      } else if (e.code === 'KeyL') {
+        e.preventDefault();
+        cyclePlaybackSpeed();
       }
     });
 
