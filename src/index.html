@@ -185,7 +185,7 @@
     <!-- Main content: transcript left, video + timeline right -->
     <div class="flex-1 flex gap-3 min-h-0">
       <!-- Transcript panel (left) -->
-      <div id="editorSectionTranscriptList" class="w-56 shrink-0 overflow-y-auto space-y-1.5 border border-neutral-800 rounded-xl p-2">
+      <div id="editorSectionTranscriptList" class="w-56 shrink-0 overflow-y-auto space-y-0.5">
         <div class="text-xs text-neutral-500 px-1">Section transcript will appear here after trimming.</div>
       </div>
 
@@ -1079,7 +1079,7 @@
         const row = document.createElement('button');
         row.type = 'button';
         row.dataset.sectionId = section.id;
-        row.className = `w-full text-left rounded-lg border px-3 py-2 transition-all ${selected ? 'border-neutral-600 bg-neutral-800/60 ring-1 ring-neutral-700' : 'border-neutral-800 bg-neutral-950/40 hover:bg-neutral-900 hover:border-neutral-700'}`;
+        row.className = `w-full text-left rounded-lg px-3 py-2 transition-all ${selected ? 'bg-neutral-800' : 'hover:bg-neutral-900'}`;
 
         const meta = document.createElement('div');
         meta.className = 'text-xs text-neutral-500 font-mono tabular-nums';
