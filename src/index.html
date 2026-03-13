@@ -197,6 +197,8 @@
 
       <!-- Playback controls -->
       <div class="flex items-center justify-center gap-2">
+        <button id="editorUndoBtn" title="Ctrl+Z" disabled class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors disabled:opacity-40 disabled:cursor-default disabled:hover:bg-neutral-800">Undo</button>
+        <button id="editorRedoBtn" title="Ctrl+Shift+Z" disabled class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors disabled:opacity-40 disabled:cursor-default disabled:hover:bg-neutral-800">Redo</button>
         <button id="editorPlayBtn" title="Space" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Play</button>
         <button id="editorSplitBtn" title="S" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Split</button>
         <button id="editorToggleCamBtn" title="C" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Camera</button>
@@ -205,7 +207,7 @@
         <button id="editorApplyFutureBtn" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Apply to Future</button>
       </div>
       <div class="text-[11px] text-neutral-600 text-center">
-        <span class="text-neutral-500">Space</span> play · <span class="text-neutral-500">L</span> speed · <span class="text-neutral-500">S</span> split · <span class="text-neutral-500">C</span> camera · <span class="text-neutral-500">F</span> fullscreen · <span class="text-neutral-500">← →</span> seek · <span class="text-neutral-500">⌫</span> delete section · drag camera to reposition
+        <span class="text-neutral-500">⌘Z</span> undo · <span class="text-neutral-500">⇧⌘Z</span> redo · <span class="text-neutral-500">Space</span> play · <span class="text-neutral-500">L</span> speed · <span class="text-neutral-500">S</span> split · <span class="text-neutral-500">C</span> camera · <span class="text-neutral-500">F</span> fullscreen · <span class="text-neutral-500">← →</span> seek · <span class="text-neutral-500">⌫</span> delete section · drag camera to reposition
       </div>
     </div>
   </div>
@@ -259,6 +261,8 @@
     const editorCanvas = document.getElementById('editorCanvas');
     const editorCtx = editorCanvas.getContext('2d');
     const editorRenderBtn = document.getElementById('editorRenderBtn');
+    const editorUndoBtn = document.getElementById('editorUndoBtn');
+    const editorRedoBtn = document.getElementById('editorRedoBtn');
     const editorPlayBtn = document.getElementById('editorPlayBtn');
     const editorSplitBtn = document.getElementById('editorSplitBtn');
     const editorToggleCamBtn = document.getElementById('editorToggleCamBtn');
@@ -331,12 +335,16 @@
     editorCanvas.height = CANVAS_H;
 
     // ===== Editor State =====
+    const undoStack = [];
+    const redoStack = [];
+    const MAX_UNDO = 50;
     let editorState = null;
     let editorDrawRAF = null;
     let editorPausedDrawTimer = null;
     let editorVideoFrameCallbackId = null;
     let editorVideoFrameHost = null;
     let draggingPip = false;
+    let pipDragMoved = false;
     let waveformPeaks = null;
     let timelineZoom = 1;
     let trimDragState = null;
@@ -662,10 +670,61 @@
 
       cleanupVideoPool();
       editorState = null;
+      undoStack.length = 0;
+      redoStack.length = 0;
       waveformPeaks = null;
       renderWaveform();
       renderSectionMarkers();
       updateWorkspaceHeader();
+      updateUndoRedoButtons();
+    }
+
+    function snapshotTimeline() {
+      return {
+        sections: editorState.sections.map(s => ({ ...s })),
+        keyframes: editorState.keyframes.map(kf => ({ ...kf })),
+        selectedSectionId: editorState.selectedSectionId,
+        duration: editorState.duration
+      };
+    }
+
+    function restoreSnapshot(snapshot) {
+      editorState.sections = snapshot.sections;
+      editorState.keyframes = snapshot.keyframes;
+      editorState.selectedSectionId = snapshot.selectedSectionId;
+      editorState.duration = snapshot.duration;
+      recalculateTimelinePositions();
+      syncSectionAnchorKeyframes();
+      renderSectionMarkers();
+      refreshWaveform();
+      editorSeek(Math.min(editorState.currentTime, editorState.duration));
+      updateUndoRedoButtons();
+      scheduleProjectSave();
+    }
+
+    function pushUndo() {
+      if (!editorState) return;
+      undoStack.push(snapshotTimeline());
+      if (undoStack.length > MAX_UNDO) undoStack.shift();
+      redoStack.length = 0;
+      updateUndoRedoButtons();
+    }
+
+    function editorUndo() {
+      if (!editorState || editorState.rendering || undoStack.length === 0) return;
+      redoStack.push(snapshotTimeline());
+      restoreSnapshot(undoStack.pop());
+    }
+
+    function editorRedo() {
+      if (!editorState || editorState.rendering || redoStack.length === 0) return;
+      undoStack.push(snapshotTimeline());
+      restoreSnapshot(redoStack.pop());
+    }
+
+    function updateUndoRedoButtons() {
+      editorUndoBtn.disabled = undoStack.length === 0;
+      editorRedoBtn.disabled = redoStack.length === 0;
     }
 
     function renderRecentProjects(meta) {
@@ -1009,6 +1068,8 @@
       const futureSections = editorState.sections.slice(currentIndex + 1);
       if (futureSections.length === 0) return;
 
+      pushUndo();
+
       for (const section of futureSections) {
         const anchor = getSectionAnchorKeyframe(section.id, true);
         if (!anchor) continue;
@@ -1247,6 +1308,7 @@
     function startTrimDrag(e, sectionId, edge) {
       const section = editorState.sections.find(s => s.id === sectionId);
       if (!section) return;
+      pushUndo();
       editorPause();
       e.preventDefault();
       const rect = editorTimeline.getBoundingClientRect();
@@ -1312,7 +1374,7 @@
       const sourceStartChanged = Math.abs(section.sourceStart - trimDragState.originalSourceStart) > 0.01;
       const sourceEndChanged = Math.abs(section.sourceEnd - trimDragState.originalSourceEnd) > 0.01;
       trimDragState = null;
-      if (!sourceStartChanged && !sourceEndChanged) return;
+      if (!sourceStartChanged && !sourceEndChanged) { undoStack.pop(); updateUndoRedoButtons(); return; }
       // Now reflow the full timeline
       recalculateTimelinePositions();
       syncSectionAnchorKeyframes();
@@ -2136,6 +2198,8 @@
       const selectedIndex = editorState.sections.findIndex(section => section.id === selectedSection.id);
       if (selectedIndex < 0) return;
 
+      pushUndo();
+
       // Remove the section
       editorState.sections = editorState.sections.filter(section => section.id !== selectedSection.id);
 
@@ -2197,6 +2261,8 @@
       const sourceTime = roundMs(section.sourceStart + offsetInSection);
 
       if (sourceTime - section.sourceStart < MIN_DURATION || section.sourceEnd - sourceTime < MIN_DURATION) return;
+
+      pushUndo();
 
       const sectionIndex = editorState.sections.findIndex(s => s.id === section.id);
       if (sectionIndex < 0) return;
@@ -2290,6 +2356,8 @@
           appendedSections: takeSections
         };
       }
+
+      pushUndo();
 
       const baseDuration = Math.max(0, Number(editorState.duration) || 0);
       const existingSections = editorState.sections.map(s => ({ ...s }));
@@ -2968,6 +3036,7 @@
       if (!editorState || editorState.rendering) return;
       const target = getMutableCameraKeyframe();
       if (!target) return;
+      pushUndo();
       target.pipVisible = !target.pipVisible;
       scheduleProjectSave();
     }
@@ -2976,6 +3045,7 @@
       if (!editorState || editorState.rendering) return;
       const target = getMutableCameraKeyframe();
       if (!target) return;
+      pushUndo();
       target.cameraFullscreen = !(target.cameraFullscreen || false);
       scheduleProjectSave();
     }
@@ -3003,6 +3073,8 @@
       const pipW = editorState.pipSize;
       const pipH = editorState.pipSize;
       if (x >= kf.pipX && x <= kf.pipX + pipW && y >= kf.pipY && y <= kf.pipY + pipH) {
+        pipDragMoved = false;
+        pushUndo();
         draggingPip = true;
         e.preventDefault();
       }
@@ -3010,6 +3082,7 @@
 
     window.addEventListener('mousemove', (e) => {
       if (!draggingPip || !editorState) return;
+      pipDragMoved = true;
       const { x, y } = canvasToEditorCoords(e.clientX, e.clientY);
       const snapped = snapToNearestCorner(x, y);
 
@@ -3027,7 +3100,14 @@
     window.addEventListener('mouseup', () => {
       const wasDragging = draggingPip;
       draggingPip = false;
-      if (wasDragging) scheduleProjectSave();
+      if (wasDragging) {
+        if (pipDragMoved) {
+          scheduleProjectSave();
+        } else {
+          undoStack.pop();
+          updateUndoRedoButtons();
+        }
+      }
     });
 
     // ===== Timeline scrubber =====
@@ -3113,6 +3193,8 @@
     }, { passive: false });
 
     // Back button removed; user navigates via header tabs
+    editorUndoBtn.addEventListener('click', editorUndo);
+    editorRedoBtn.addEventListener('click', editorRedo);
     editorPlayBtn.addEventListener('click', editorTogglePlay);
     editorSplitBtn.addEventListener('click', splitSectionAtPlayhead);
     editorToggleCamBtn.addEventListener('click', toggleCameraVisibility);
@@ -3146,6 +3228,8 @@
       editorPause();
 
       // Disable controls
+      editorUndoBtn.disabled = true;
+      editorRedoBtn.disabled = true;
       editorPlayBtn.disabled = true;
       editorSplitBtn.disabled = true;
       editorToggleCamBtn.disabled = true;
@@ -3189,6 +3273,7 @@
       }
 
       // Re-enable controls
+      updateUndoRedoButtons();
       editorPlayBtn.disabled = false;
       editorSplitBtn.disabled = false;
       editorToggleCamBtn.disabled = false;
@@ -3274,6 +3359,12 @@
       if (!editorState || editorState.rendering || activeWorkspaceView !== 'timeline') return;
       // Don't capture if focus is in an input
       if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') return;
+
+      if (e.code === 'KeyZ' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        if (e.shiftKey) { editorRedo(); } else { editorUndo(); }
+        return;
+      }
 
       if (e.code === 'Space') {
         e.preventDefault();
