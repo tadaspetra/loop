@@ -62,7 +62,7 @@
 
   <!-- Workspace Header -->
   <div id="workspaceHeader" class="hidden border-b border-neutral-800/80 bg-neutral-950/95 backdrop-blur-md px-4 py-3">
-    <div class="max-w-5xl mx-auto w-full flex items-center gap-3">
+    <div class="w-full flex items-center gap-3">
       <div class="min-w-0 flex-1">
         <div id="activeProjectName" class="text-sm font-semibold truncate">Project</div>
         <div id="activeProjectPath" class="text-xs text-neutral-500 truncate"></div>
@@ -71,6 +71,7 @@
         <button id="goRecordingBtn" class="px-3 py-1.5 rounded-md text-sm transition-colors">Recording</button>
         <button id="goTimelineBtn" class="px-3 py-1.5 rounded-md text-sm transition-colors">Timeline</button>
       </div>
+      <button id="editorRenderBtn" class="hidden px-4 py-1.5 bg-white text-neutral-950 hover:bg-neutral-200 rounded-lg text-sm font-medium transition-colors min-w-[80px] text-center">Render</button>
       <button id="switchProjectBtn" class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Projects</button>
     </div>
   </div>
@@ -174,49 +175,42 @@
   </div>
 
   <!-- Editor View -->
-  <div id="editorView" class="hidden flex-1 flex flex-col p-4 gap-3 w-full min-h-0">
-    <!-- Top toolbar -->
-    <div class="flex items-center gap-3">
-      <button id="editorBackBtn" class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Back</button>
-      <span id="editorTime" class="text-sm text-neutral-500 font-mono flex-1 text-center tabular-nums">00:00 / 00:00</span>
-      <button id="editorRenderBtn" class="px-4 py-1.5 bg-white text-neutral-950 hover:bg-neutral-200 rounded-lg text-sm font-medium transition-colors min-w-[80px] text-center">Render</button>
-    </div>
-
-    <!-- Main content: transcript left, video + timeline right -->
-    <div class="flex-1 flex gap-3 min-h-0">
-      <!-- Transcript panel (left) -->
-      <div id="editorSectionTranscriptList" class="w-56 shrink-0 overflow-y-auto space-y-0.5">
+  <div id="editorView" class="hidden flex-1 flex gap-3 p-4 w-full min-h-0">
+    <!-- Transcript panel (left) -->
+    <div class="w-56 shrink-0 flex flex-col gap-2 min-h-0">
+      <span id="editorTime" class="text-sm text-neutral-500 font-mono tabular-nums px-1">00:00 / 00:00</span>
+      <div id="editorSectionTranscriptList" class="flex-1 overflow-y-auto space-y-0.5 min-h-0">
         <div class="text-xs text-neutral-500 px-1">Section transcript will appear here after trimming.</div>
       </div>
+    </div>
 
-      <!-- Video + timeline (right) -->
-      <div class="flex-1 flex flex-col gap-3 min-w-0 min-h-0">
-        <!-- Editor canvas -->
-        <div class="flex-1 bg-black overflow-hidden relative flex items-center justify-center rounded-xl border border-neutral-800 min-h-0">
-          <canvas id="editorCanvas" class="w-full h-full object-contain" style="aspect-ratio: 16/9;"></canvas>
-        </div>
+    <!-- Video + timeline (right) -->
+    <div class="flex-1 flex flex-col gap-3 min-w-0 min-h-0">
+      <!-- Editor canvas -->
+      <div class="flex-1 bg-black overflow-hidden relative flex items-center justify-center rounded-xl border border-neutral-800 min-h-0">
+        <canvas id="editorCanvas" class="w-full h-full object-contain" style="aspect-ratio: 16/9;"></canvas>
+      </div>
 
-        <!-- Timeline scrubber -->
-        <div id="editorTimelineWrapper" class="rounded-lg border border-neutral-800 overflow-x-auto overflow-y-hidden">
-          <div id="editorTimeline" class="relative bg-neutral-900 h-12 cursor-pointer select-none overflow-hidden" style="min-width: 100%">
-            <canvas id="editorWaveformCanvas" class="absolute inset-0 w-full h-full pointer-events-none z-0" style="opacity: 0.4"></canvas>
-            <div id="editorSectionMarkers" class="absolute inset-0 z-1"></div>
-            <div id="editorScrubber" class="absolute top-0 bottom-0 w-0.5 bg-white pointer-events-none z-20" style="left: 0%"></div>
-          </div>
+      <!-- Timeline scrubber -->
+      <div id="editorTimelineWrapper" class="rounded-lg border border-neutral-800 overflow-x-auto overflow-y-hidden">
+        <div id="editorTimeline" class="relative bg-neutral-900 h-12 cursor-pointer select-none overflow-hidden" style="min-width: 100%">
+          <canvas id="editorWaveformCanvas" class="absolute inset-0 w-full h-full pointer-events-none z-0" style="opacity: 0.4"></canvas>
+          <div id="editorSectionMarkers" class="absolute inset-0 z-1"></div>
+          <div id="editorScrubber" class="absolute top-0 bottom-0 w-0.5 bg-white pointer-events-none z-20" style="left: 0%"></div>
         </div>
+      </div>
 
-        <!-- Playback controls -->
-        <div class="flex items-center justify-center gap-2">
-          <button id="editorPlayBtn" title="Space" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Play</button>
-          <button id="editorSplitBtn" title="S" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Split</button>
-          <button id="editorToggleCamBtn" title="C" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Camera</button>
-          <button id="editorCamFullBtn" title="F" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Fullscreen</button>
-          <div class="w-px h-5 bg-neutral-800 mx-1"></div>
-          <button id="editorApplyFutureBtn" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Apply to Future</button>
-        </div>
-        <div class="text-[11px] text-neutral-600 text-center">
-          <span class="text-neutral-500">Space</span> play · <span class="text-neutral-500">S</span> split · <span class="text-neutral-500">C</span> camera · <span class="text-neutral-500">F</span> fullscreen · <span class="text-neutral-500">← →</span> seek · <span class="text-neutral-500">⌫</span> delete section · drag camera to reposition
-        </div>
+      <!-- Playback controls -->
+      <div class="flex items-center justify-center gap-2">
+        <button id="editorPlayBtn" title="Space" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Play</button>
+        <button id="editorSplitBtn" title="S" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Split</button>
+        <button id="editorToggleCamBtn" title="C" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Camera</button>
+        <button id="editorCamFullBtn" title="F" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Fullscreen</button>
+        <div class="w-px h-5 bg-neutral-800 mx-1"></div>
+        <button id="editorApplyFutureBtn" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Apply to Future</button>
+      </div>
+      <div class="text-[11px] text-neutral-600 text-center">
+        <span class="text-neutral-500">Space</span> play · <span class="text-neutral-500">S</span> split · <span class="text-neutral-500">C</span> camera · <span class="text-neutral-500">F</span> fullscreen · <span class="text-neutral-500">← →</span> seek · <span class="text-neutral-500">⌫</span> delete section · drag camera to reposition
       </div>
     </div>
   </div>
@@ -270,13 +264,12 @@
     const editorView = document.getElementById('editorView');
     const editorCanvas = document.getElementById('editorCanvas');
     const editorCtx = editorCanvas.getContext('2d');
-    const editorBackBtn = document.getElementById('editorBackBtn');
+    const editorRenderBtn = document.getElementById('editorRenderBtn');
     const editorPlayBtn = document.getElementById('editorPlayBtn');
     const editorSplitBtn = document.getElementById('editorSplitBtn');
     const editorToggleCamBtn = document.getElementById('editorToggleCamBtn');
     const editorCamFullBtn = document.getElementById('editorCamFullBtn');
     const editorApplyFutureBtn = document.getElementById('editorApplyFutureBtn');
-    const editorRenderBtn = document.getElementById('editorRenderBtn');
     const editorTimeEl = document.getElementById('editorTime');
     const editorTimelineWrapper = document.getElementById('editorTimelineWrapper');
     const editorTimeline = document.getElementById('editorTimeline');
@@ -464,6 +457,7 @@
       workspaceHeader.classList.toggle('hidden', !hasProject || activeWorkspaceView === 'home');
       setToggleButtonState(goRecordingBtn, activeWorkspaceView === 'recording', !hasProject || activeWorkspaceView === 'processing');
       setToggleButtonState(goTimelineBtn, activeWorkspaceView === 'timeline', !hasProject || !editorState || activeWorkspaceView === 'processing' || recording);
+      editorRenderBtn.classList.toggle('hidden', activeWorkspaceView !== 'timeline');
     }
 
     function hasPendingEditorDraw() {
@@ -3102,7 +3096,7 @@
       }
     }, { passive: false });
 
-    editorBackBtn.addEventListener('click', exitEditor);
+    // Back button removed; user navigates via header tabs
     editorPlayBtn.addEventListener('click', editorTogglePlay);
     editorSplitBtn.addEventListener('click', splitSectionAtPlayhead);
     editorToggleCamBtn.addEventListener('click', toggleCameraVisibility);
@@ -3141,7 +3135,6 @@
       editorToggleCamBtn.disabled = true;
       editorCamFullBtn.disabled = true;
       editorRenderBtn.disabled = true;
-      editorBackBtn.disabled = true;
 
       try {
         const renderKeyframes = getRenderKeyframes();
@@ -3185,7 +3178,6 @@
       editorToggleCamBtn.disabled = false;
       editorCamFullBtn.disabled = false;
       editorRenderBtn.disabled = false;
-      editorBackBtn.disabled = false;
       editorState.rendering = false;
 
       editorRenderTimeout = setTimeout(() => setRenderBtnState('Render', 'idle'), 3000);
