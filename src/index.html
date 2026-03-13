@@ -29,23 +29,23 @@
 <body class="bg-neutral-950 text-neutral-50 h-screen overflow-hidden flex flex-col font-sans antialiased">
 
   <!-- Project Home View -->
-  <div id="projectHomeView" class="flex-1 flex flex-col items-center justify-center p-6">
-    <div class="w-full max-w-2xl bg-neutral-900 border border-neutral-800 rounded-2xl p-8 space-y-6 shadow-2xl shadow-black/20">
+  <div id="projectHomeView" class="flex-1 flex flex-col items-center overflow-y-auto p-6">
+    <div class="w-full max-w-lg space-y-5 py-6">
       <div>
-        <h1 class="text-2xl font-semibold tracking-tight">Projects</h1>
-        <p class="text-sm text-neutral-400 mt-1.5">Open an existing project or create a new one to continue your timeline.</p>
+        <h1 class="text-lg font-semibold tracking-tight">Projects</h1>
+        <p class="text-xs text-neutral-500 mt-1">Open an existing project or create a new one.</p>
       </div>
 
       <div class="flex gap-2">
-        <input id="newProjectName" type="text" placeholder="Project name" class="flex-1 bg-neutral-950 border border-neutral-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-neutral-600 focus:border-neutral-600 placeholder:text-neutral-600 transition-colors" />
+        <input id="newProjectName" type="text" placeholder="Project name" class="flex-1 bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-neutral-600 focus:border-neutral-600 placeholder:text-neutral-600 transition-colors" />
         <button id="createProjectBtn" type="button" class="px-4 py-2 bg-white text-neutral-950 hover:bg-neutral-200 rounded-lg text-sm font-medium transition-colors">Create</button>
         <button id="openProjectBtn" type="button" class="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Open Folder</button>
       </div>
 
-      <div class="text-xs text-neutral-500">Create asks where to store the new project folder, then the app creates it for you.</div>
+      <div class="text-[11px] text-neutral-600">Create asks where to store the new project folder, then the app creates it for you.</div>
       <div id="projectHomeMessage" class="hidden rounded-lg border px-3 py-2 text-sm"></div>
 
-      <div id="lastProjectRow" class="hidden flex items-center justify-between bg-neutral-950 border border-neutral-800 rounded-lg px-4 py-3">
+      <div id="lastProjectRow" class="hidden flex items-center justify-between bg-neutral-900 border border-neutral-800 rounded-lg px-4 py-3">
         <div class="min-w-0">
           <div class="text-sm text-neutral-200 font-medium" id="lastProjectName">Last project</div>
           <div class="text-xs text-neutral-500 truncate" id="lastProjectPath">-</div>
@@ -681,7 +681,7 @@
       } else {
         for (const project of projects) {
           const btn = document.createElement('button');
-          btn.className = 'w-full text-left bg-neutral-950 border border-neutral-800 rounded-lg px-3.5 py-2.5 hover:bg-neutral-900 hover:border-neutral-700 transition-all';
+          btn.className = 'w-full text-left bg-neutral-900 border border-neutral-800 rounded-lg px-3.5 py-2.5 hover:bg-neutral-800 hover:border-neutral-700 transition-all';
           btn.type = 'button';
           btn.dataset.projectPath = project.projectPath;
 
