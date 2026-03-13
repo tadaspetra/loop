@@ -293,6 +293,7 @@
     let audioStream = null;
     let recorders = [];
     let recording = false;
+    let screenRecInterval = null;
     let timerInterval = null;
     let startTime = 0;
     let audioContext = null;
@@ -1497,7 +1498,8 @@
           video: {
             mandatory: {
               chromeMediaSource: 'desktop',
-              chromeMediaSourceId: sourceId
+              chromeMediaSourceId: sourceId,
+              maxFrameRate: 30
             }
           }
         });
@@ -1678,7 +1680,7 @@
         options.videoBitsPerSecond = 10000000;
         options.audioBitsPerSecond = 192000;
       } else if (suffix === 'screen') {
-        options.videoBitsPerSecond = 12000000;
+        options.videoBitsPerSecond = 30000000;
         options.audioBitsPerSecond = 192000;
       }
 
@@ -1736,8 +1738,20 @@
       audioChunkBuffer = [];
 
       // Individual screen (with audio)
+      // Route through a canvas at constant 30fps to prevent keyframe flicker
+      // from variable frame rate desktop capture input
       if (screenStream) {
-        const screenOnly = addAudioToStream(new MediaStream(screenStream.getVideoTracks()));
+        const srcTrack = screenStream.getVideoTracks()[0];
+        const settings = srcTrack.getSettings();
+        const recCanvas = document.createElement('canvas');
+        recCanvas.width = settings.width || 1920;
+        recCanvas.height = settings.height || 1080;
+        const recCtx = recCanvas.getContext('2d', { alpha: false });
+        recCtx.drawImage(screenVideo, 0, 0, recCanvas.width, recCanvas.height);
+        screenRecInterval = setInterval(() => {
+          recCtx.drawImage(screenVideo, 0, 0, recCanvas.width, recCanvas.height);
+        }, 1000 / 30);
+        const screenOnly = addAudioToStream(recCanvas.captureStream(30));
         recorders.push(createRecorder(screenOnly, 'screen'));
       }
 
@@ -1747,7 +1761,7 @@
         recorders.push(createRecorder(cameraOnly, 'camera'));
       }
 
-      recorders.forEach(r => r.start(100));
+      recorders.forEach(r => r.start());
       recording = true;
       updateWorkspaceHeader();
       recordBtn.textContent = 'Stop';
@@ -1824,9 +1838,10 @@
             const merged = mergeInt16Arrays(audioChunkBuffer);
             audioChunkBuffer = [];
             const bytes = new Uint8Array(merged.buffer);
+            const CHUNK = 8192;
             let binary = '';
-            for (let i = 0; i < bytes.length; i++) {
-              binary += String.fromCharCode(bytes[i]);
+            for (let i = 0; i < bytes.length; i += CHUNK) {
+              binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
             }
             const base64 = btoa(binary);
             scribeWs.send(JSON.stringify({
@@ -2380,6 +2395,11 @@
       }
       scribeWs = null;
       audioChunkBuffer = [];
+
+      if (screenRecInterval) {
+        clearInterval(screenRecInterval);
+        screenRecInterval = null;
+      }
 
       recorders.forEach(r => {
         if (r.state !== 'inactive') r.stop();
