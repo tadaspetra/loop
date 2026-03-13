@@ -65,7 +65,7 @@
     <div class="w-full flex items-center gap-3">
       <div class="min-w-0 flex-1">
         <div id="activeProjectName" class="text-sm font-semibold truncate">Project</div>
-        <div id="activeProjectPath" class="text-xs text-neutral-500 truncate"></div>
+        <div id="activeProjectPath" class="text-xs text-neutral-500 truncate cursor-pointer hover:text-neutral-300 transition-colors"></div>
       </div>
       <div class="flex items-center bg-neutral-900 rounded-lg p-1 border border-neutral-800">
         <button id="goRecordingBtn" class="px-3 py-1.5 rounded-md text-sm transition-colors">Recording</button>
@@ -3306,6 +3306,10 @@
     // Settings panel is always visible in the left sidebar
 
     openFolderBtn.addEventListener('click', () => {
+      if (activeProjectPath) window.electronAPI.openFolder(activeProjectPath);
+    });
+
+    activeProjectPathEl.addEventListener('click', () => {
       if (activeProjectPath) window.electronAPI.openFolder(activeProjectPath);
     });
 

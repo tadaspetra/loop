@@ -679,7 +679,7 @@ ipcMain.handle('render-composite', async (event, opts) => {
     const { screenIdx } = sectionInputs[i]
     const ss = section.sourceStart.toFixed(3)
     const se = section.sourceEnd.toFixed(3)
-    filterParts.push(`[${screenIdx}:v]trim=start=${ss}:end=${se},setpts=PTS-STARTPTS[sv${i}]`)
+    filterParts.push(`[${screenIdx}:v]trim=start=${ss}:end=${se},setpts=PTS-STARTPTS,fps=fps=${targetFps}[sv${i}]`)
     filterParts.push(`[${screenIdx}:a]atrim=start=${ss}:end=${se},asetpts=PTS-STARTPTS[sa${i}]`)
   }
 
@@ -696,7 +696,7 @@ ipcMain.handle('render-composite', async (event, opts) => {
       const se = section.sourceEnd.toFixed(3)
       const dur = (section.sourceEnd - section.sourceStart).toFixed(3)
       if (cameraIdx >= 0) {
-        filterParts.push(`[${cameraIdx}:v]trim=start=${ss}:end=${se},setpts=PTS-STARTPTS[cv${i}]`)
+        filterParts.push(`[${cameraIdx}:v]trim=start=${ss}:end=${se},setpts=PTS-STARTPTS,fps=fps=${targetFps}[cv${i}]`)
       } else {
         filterParts.push(`color=black:s=1920x1080:d=${dur}[cv${i}]`)
       }
