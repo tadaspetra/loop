@@ -174,49 +174,45 @@
   </div>
 
   <!-- Editor View -->
-  <div id="editorView" class="hidden flex-1 flex flex-col p-6 gap-4 max-w-5xl mx-auto w-full">
+  <div id="editorView" class="hidden flex-1 flex flex-col p-4 gap-3 w-full min-h-0">
     <!-- Top toolbar -->
     <div class="flex items-center gap-3">
       <button id="editorBackBtn" class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Back</button>
-      <span id="editorTime" class="text-sm text-neutral-500 font-mono flex-1 text-center tabular-nums">00:00 / 00:00</span>
-      <button id="editorRenderBtn" class="px-4 py-1.5 bg-white text-neutral-950 hover:bg-neutral-200 rounded-lg text-sm font-medium transition-colors">Render</button>
-    </div>
-
-    <!-- Editor canvas -->
-    <div class="flex-1 bg-black overflow-hidden relative flex items-center justify-center min-h-[360px] rounded-xl border border-neutral-800">
-      <canvas id="editorCanvas" class="w-full h-full object-contain" style="aspect-ratio: 16/9;"></canvas>
-    </div>
-
-    <!-- Playback controls -->
-    <div class="flex items-center justify-center gap-2">
-      <button id="editorPlayBtn" title="Space" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Play</button>
-      <button id="editorSplitBtn" title="S" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Split</button>
-      <button id="editorToggleCamBtn" title="C" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Camera</button>
-      <button id="editorCamFullBtn" title="F" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Fullscreen</button>
-      <div class="w-px h-5 bg-neutral-800 mx-1"></div>
-      <button id="editorApplyFutureBtn" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Apply to Future</button>
-    </div>
-    <div class="text-[11px] text-neutral-600 text-center">
-      <span class="text-neutral-500">Space</span> play · <span class="text-neutral-500">S</span> split · <span class="text-neutral-500">C</span> camera · <span class="text-neutral-500">F</span> fullscreen · <span class="text-neutral-500">← →</span> seek · <span class="text-neutral-500">⌫</span> delete section · drag camera to reposition
-    </div>
-
-    <!-- Timeline scrubber -->
-    <div id="editorTimelineWrapper" class="rounded-lg border border-neutral-800 overflow-x-auto overflow-y-hidden">
-      <div id="editorTimeline" class="relative bg-neutral-900 h-12 cursor-pointer select-none overflow-hidden" style="min-width: 100%">
-        <canvas id="editorWaveformCanvas" class="absolute inset-0 w-full h-full pointer-events-none z-0" style="opacity: 0.4"></canvas>
-        <div id="editorSectionMarkers" class="absolute inset-0 z-1"></div>
-        <div id="editorScrubber" class="absolute top-0 bottom-0 w-0.5 bg-white pointer-events-none z-20" style="left: 0%"></div>
+      <div class="flex items-center justify-center gap-2 flex-1">
+        <button id="editorPlayBtn" title="Space" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Play</button>
+        <button id="editorSplitBtn" title="S" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Split</button>
+        <button id="editorToggleCamBtn" title="C" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Camera</button>
+        <button id="editorCamFullBtn" title="F" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Fullscreen</button>
+        <div class="w-px h-5 bg-neutral-800 mx-1"></div>
+        <button id="editorApplyFutureBtn" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Apply to Future</button>
+        <div class="w-px h-5 bg-neutral-800 mx-1"></div>
+        <span id="editorTime" class="text-sm text-neutral-500 font-mono tabular-nums">00:00 / 00:00</span>
       </div>
-    </div>
-    <div id="editorSectionTranscriptList" class="max-h-40 overflow-y-auto space-y-1.5 bg-neutral-950/50 border border-neutral-800 rounded-xl p-2">
-      <div class="text-xs text-neutral-500 px-1">Section transcript will appear here after trimming.</div>
+      <button id="editorRenderBtn" class="px-4 py-1.5 bg-white text-neutral-950 hover:bg-neutral-200 rounded-lg text-sm font-medium transition-colors min-w-[80px] text-center">Render</button>
     </div>
 
-    <!-- Render progress -->
-    <div id="editorRenderProgress" class="hidden">
-      <div class="text-sm text-neutral-500 mb-1.5" id="editorRenderLabel">Rendering...</div>
-      <div class="bg-neutral-900 rounded-full h-2 overflow-hidden">
-        <div id="editorRenderBar" class="bg-white h-full rounded-full transition-all duration-150" style="width: 0%"></div>
+    <!-- Main content: transcript left, video + timeline right -->
+    <div class="flex-1 flex gap-3 min-h-0">
+      <!-- Transcript panel (left) -->
+      <div id="editorSectionTranscriptList" class="w-56 shrink-0 overflow-y-auto space-y-1.5 border border-neutral-800 rounded-xl p-2">
+        <div class="text-xs text-neutral-500 px-1">Section transcript will appear here after trimming.</div>
+      </div>
+
+      <!-- Video + timeline (right) -->
+      <div class="flex-1 flex flex-col gap-3 min-w-0 min-h-0">
+        <!-- Editor canvas -->
+        <div class="flex-1 bg-black overflow-hidden relative flex items-center justify-center rounded-xl border border-neutral-800 min-h-0">
+          <canvas id="editorCanvas" class="w-full h-full object-contain" style="aspect-ratio: 16/9;"></canvas>
+        </div>
+
+        <!-- Timeline scrubber -->
+        <div id="editorTimelineWrapper" class="rounded-lg border border-neutral-800 overflow-x-auto overflow-y-hidden">
+          <div id="editorTimeline" class="relative bg-neutral-900 h-12 cursor-pointer select-none overflow-hidden" style="min-width: 100%">
+            <canvas id="editorWaveformCanvas" class="absolute inset-0 w-full h-full pointer-events-none z-0" style="opacity: 0.4"></canvas>
+            <div id="editorSectionMarkers" class="absolute inset-0 z-1"></div>
+            <div id="editorScrubber" class="absolute top-0 bottom-0 w-0.5 bg-white pointer-events-none z-20" style="left: 0%"></div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -283,9 +279,7 @@
     const editorSectionMarkers = document.getElementById('editorSectionMarkers');
     const editorScrubber = document.getElementById('editorScrubber');
     const editorSectionTranscriptList = document.getElementById('editorSectionTranscriptList');
-    const editorRenderProgress = document.getElementById('editorRenderProgress');
-    const editorRenderLabel = document.getElementById('editorRenderLabel');
-    const editorRenderBar = document.getElementById('editorRenderBar');
+    let editorRenderTimeout = null;
     const editorWaveformCanvas = document.getElementById('editorWaveformCanvas');
 
     let screenStream = null;
@@ -3118,11 +3112,23 @@
       await renderVideo();
     });
 
+    function setRenderBtnState(text, style = 'idle') {
+      clearTimeout(editorRenderTimeout);
+      editorRenderBtn.textContent = text;
+      if (style === 'busy') {
+        editorRenderBtn.className = 'px-4 py-1.5 bg-neutral-700 text-neutral-300 rounded-lg text-sm font-medium transition-colors min-w-[80px] text-center cursor-wait';
+      } else if (style === 'done') {
+        editorRenderBtn.className = 'px-4 py-1.5 bg-emerald-600 text-white rounded-lg text-sm font-medium transition-colors min-w-[80px] text-center';
+      } else if (style === 'error') {
+        editorRenderBtn.className = 'px-4 py-1.5 bg-red-600 text-white rounded-lg text-sm font-medium transition-colors min-w-[80px] text-center';
+      } else {
+        editorRenderBtn.className = 'px-4 py-1.5 bg-white text-neutral-950 hover:bg-neutral-200 rounded-lg text-sm font-medium transition-colors min-w-[80px] text-center';
+      }
+    }
+
     async function renderVideo() {
       editorState.rendering = true;
-      editorRenderProgress.classList.remove('hidden');
-      editorRenderBar.style.width = '0%';
-      editorRenderLabel.textContent = 'Rendering...';
+      setRenderBtnState('Rendering...', 'busy');
       editorPause();
 
       // Disable controls
@@ -3134,8 +3140,6 @@
       editorBackBtn.disabled = true;
 
       try {
-        editorRenderBar.style.width = '10%';
-
         const renderKeyframes = getRenderKeyframes();
 
         // Collect takes referenced by sections
@@ -3163,14 +3167,12 @@
           outputFolder: saveFolder
         });
 
-        editorRenderBar.style.width = '100%';
-        editorRenderLabel.textContent = 'Done! Saved: ' + mp4Path.split('/').pop();
+        setRenderBtnState('Done!', 'done');
         console.log('Rendered:', mp4Path);
         await persistProjectNow();
       } catch (err) {
         console.error('Render error:', err);
-        editorRenderLabel.textContent = 'Render failed. Check console for details.';
-        editorRenderBar.style.width = '100%';
+        setRenderBtnState('Failed', 'error');
       }
 
       // Re-enable controls
@@ -3182,6 +3184,7 @@
       editorBackBtn.disabled = false;
       editorState.rendering = false;
 
+      editorRenderTimeout = setTimeout(() => setRenderBtnState('Render', 'idle'), 3000);
       editorSeek(0);
     }
 
