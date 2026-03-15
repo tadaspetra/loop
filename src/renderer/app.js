@@ -2477,9 +2477,14 @@ import {
           if (active.pipVisible !== nextVisible) {
             // Visibility transition: fade in/out toward next state
             if (nextVisible) {
+              // Fading in: use next position (where camera will appear)
               opacity = t;
+              pipX = next.pipX;
+              pipY = next.pipY;
+              cameraFullscreen = nextFullscreen;
               camTransition = nextFullscreen ? 1 : 0;
             } else {
+              // Fading out: keep current position
               opacity = 1 - t;
               camTransition = cameraFullscreen ? 1 : 0;
             }
@@ -2487,6 +2492,11 @@ import {
             // No visibility change - handle position and fullscreen transitions
             if (cameraFullscreen !== nextFullscreen) {
               camTransition = nextFullscreen ? t : 1 - t;
+              if (!nextFullscreen) {
+                // Shrinking from fullscreen: use next pip position as destination
+                pipX = next.pipX;
+                pipY = next.pipY;
+              }
             }
 
             if (!cameraFullscreen && !nextFullscreen
