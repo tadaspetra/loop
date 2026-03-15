@@ -212,6 +212,42 @@ describe('main/services/render-service', () => {
     expect(argString).not.toContain('scale=3840:2160,crop=1920:1080:960:540[cv0]');
   });
 
+  test('renderComposite advances camera video when camera sync offset is positive', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-camera-sync-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    const cameraPath = path.join(tmpDir, 'camera.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+    fs.writeFileSync(cameraPath, 'camera', 'utf8');
+
+    const execCalls = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        takes: [{ id: 'take-1', screenPath, cameraPath }],
+        sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.0 }],
+        keyframes: [{ time: 0, pipX: 10, pipY: 10, pipVisible: true, cameraFullscreen: false }],
+        pipSize: 300,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill',
+        cameraSyncOffsetMs: 120
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 147,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        execFile: (bin, args, opts, cb) => {
+          execCalls.push({ bin, args, opts });
+          cb(null, '', '');
+        }
+      }
+    );
+
+    const argString = execCalls[0].args.join(' ');
+    expect(argString).toContain('[1:v]trim=start=0.120:end=1.120,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.120,trim=duration=1.000,setpts=PTS-STARTPTS,fps=fps=30[cv0]');
+  });
+
   test('renderComposite applies clamped section pan to background crop', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-pan-'));
     const outputDir = path.join(tmpDir, 'out');

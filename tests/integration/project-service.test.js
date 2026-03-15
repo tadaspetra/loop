@@ -45,7 +45,9 @@ describe('main/services/project-service integration', () => {
     expect(fs.existsSync(path.join(second.projectPath, 'project.json'))).toBe(true);
     expect(second.projectPath).not.toBe(first.projectPath);
     expect(first.project.settings.exportAudioPreset).toBe('compressed');
+    expect(first.project.settings.cameraSyncOffsetMs).toBe(0);
     expect(second.project.settings.exportAudioPreset).toBe('compressed');
+    expect(second.project.settings.cameraSyncOffsetMs).toBe(0);
   });
 
   test('saveProject and openProject round-trip takes and relative paths', () => {
@@ -61,7 +63,8 @@ describe('main/services/project-service integration', () => {
         ...created.project,
         settings: {
           ...created.project.settings,
-          exportAudioPreset: 'compressed'
+          exportAudioPreset: 'compressed',
+          cameraSyncOffsetMs: 145
         },
         takes: [
           {
@@ -108,6 +111,7 @@ describe('main/services/project-service integration', () => {
     expect(raw.timeline.keyframes[0].backgroundPanX).toBe(0.3);
     expect(raw.timeline.keyframes[0].backgroundPanY).toBe(-0.4);
     expect(raw.settings.exportAudioPreset).toBe('compressed');
+    expect(raw.settings.cameraSyncOffsetMs).toBe(145);
 
     const opened = service.openProject(created.projectPath);
     expect(opened.project.takes[0].screenPath).toBe(screenPath);
@@ -116,6 +120,7 @@ describe('main/services/project-service integration', () => {
     expect(opened.project.timeline.keyframes[0].backgroundPanX).toBe(0.3);
     expect(opened.project.timeline.keyframes[0].backgroundPanY).toBe(-0.4);
     expect(opened.project.settings.exportAudioPreset).toBe('compressed');
+    expect(opened.project.settings.cameraSyncOffsetMs).toBe(145);
   });
 
   test('recovery take lifecycle persists and clears payload', () => {

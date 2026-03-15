@@ -16,6 +16,11 @@ import {
   reindexSections,
   buildSplitAnchorKeyframe
 } from './features/timeline/keyframe-ops.js';
+import {
+  computeCameraPlaybackDrift,
+  normalizeCameraSyncOffsetMs,
+  resolveCameraPlaybackTargetTime
+} from './features/timeline/camera-sync.js';
 
     const projectHomeView = document.getElementById('projectHomeView');
     const workspaceHeader = document.getElementById('workspaceHeader');
@@ -35,6 +40,8 @@ import {
     const switchProjectBtn = document.getElementById('switchProjectBtn');
     const exportAudioPresetControl = document.getElementById('exportAudioPresetControl');
     const exportAudioPresetSelect = document.getElementById('exportAudioPreset');
+    const cameraSyncOffsetControl = document.getElementById('cameraSyncOffsetControl');
+    const cameraSyncOffsetInput = document.getElementById('cameraSyncOffsetMs');
 
     const screenSelect = document.getElementById('screenSource');
     const screenFitSelect = document.getElementById('screenFit');
@@ -339,6 +346,8 @@ import {
       setToggleButtonState(goTimelineBtn, activeWorkspaceView === 'timeline', !hasProject || !editorState || activeWorkspaceView === 'processing' || recording);
       recordBtn.classList.toggle('hidden', activeWorkspaceView !== 'recording');
       timerEl.classList.toggle('hidden', activeWorkspaceView !== 'recording');
+      cameraSyncOffsetControl.classList.toggle('hidden', !showTimelineTools);
+      cameraSyncOffsetControl.classList.toggle('flex', showTimelineTools);
       exportAudioPresetControl.classList.toggle('hidden', !showTimelineTools);
       exportAudioPresetControl.classList.toggle('flex', showTimelineTools);
       editorRenderBtn.classList.toggle('hidden', !showTimelineTools);
@@ -470,7 +479,8 @@ import {
         settings: {
           screenFitMode: screenFitSelect.value || 'fill',
           hideFromRecording: hideFromRecording === 'true',
-          exportAudioPreset: normalizeExportAudioPreset(exportAudioPresetSelect.value)
+          exportAudioPreset: normalizeExportAudioPreset(exportAudioPresetSelect.value),
+          cameraSyncOffsetMs: normalizeCameraSyncOffsetMs(cameraSyncOffsetInput.value)
         },
         timeline: getProjectTimelineSnapshot()
       };
@@ -701,6 +711,7 @@ import {
       screenFitSelect.value = project.settings?.screenFitMode === 'fit' ? 'fit' : 'fill';
       hideFromRecording = project.settings?.hideFromRecording === false ? 'false' : 'true';
       exportAudioPresetSelect.value = normalizeExportAudioPreset(project.settings?.exportAudioPreset);
+      cameraSyncOffsetInput.value = String(normalizeCameraSyncOffsetMs(project.settings?.cameraSyncOffsetMs));
       await syncContentProtection();
 
       if (project.timeline && Array.isArray(project.timeline.sections) && project.timeline.sections.length > 0) {
@@ -713,6 +724,7 @@ import {
             hasCamera: !!project.timeline.hasCamera,
             sourceWidth: project.timeline.sourceWidth || null,
             sourceHeight: project.timeline.sourceHeight || null,
+            cameraSyncOffsetMs: project.settings?.cameraSyncOffsetMs,
             initialView: preferredView === 'recording' ? 'recording' : 'timeline'
           }
         );
@@ -1714,7 +1726,7 @@ import {
             + `&audio_format=${audioFormat}`
             + `&commit_strategy=vad`
             + `&include_timestamps=true`
-            + `&vad_silence_threshold_secs=2.0`
+            + `&vad_silence_threshold_secs=1.0`
             + `&vad_threshold=0.8`
             + `&min_speech_duration_ms=200`
             + `&language_code=eng`;
@@ -2375,11 +2387,13 @@ import {
         rendering: false,
         renderProgress: 0,
         playbackSpeed: 1,
+        cameraSyncOffsetMs: normalizeCameraSyncOffsetMs(opts.cameraSyncOffsetMs),
         hasCamera: typeof opts.hasCamera === 'boolean' ? opts.hasCamera : false,
         sourceWidth: opts.sourceWidth || null,
         sourceHeight: opts.sourceHeight || null
       };
       screenFitSelect.value = editorState.screenFitMode === 'fit' ? 'fit' : 'fill';
+      cameraSyncOffsetInput.value = String(editorState.cameraSyncOffsetMs);
       updateSectionZoomControls();
 
       // Pre-create video elements for all referenced takes
@@ -2396,7 +2410,12 @@ import {
         const videos = getOrCreateTakeVideos(firstSection.takeId);
         if (videos) {
           videos.screen.currentTime = firstSection.sourceStart;
-          if (videos.camera) videos.camera.currentTime = firstSection.sourceStart;
+          if (videos.camera) {
+            videos.camera.currentTime = resolveCameraPlaybackTargetTime(
+              firstSection.sourceStart,
+              editorState.cameraSyncOffsetMs
+            );
+          }
         }
       }
 
@@ -2560,6 +2579,10 @@ import {
       const targetSourceTime = Number.isFinite(Number(opts.sourceTime))
         ? Number(opts.sourceTime)
         : nextSection.sourceStart;
+      const targetCameraTime = resolveCameraPlaybackTargetTime(
+        targetSourceTime,
+        editorState.cameraSyncOffsetMs
+      );
       const currentSourceTime = Number(nextVideos.screen.currentTime);
       const needsSeek = !Number.isFinite(currentSourceTime) || Math.abs(currentSourceTime - targetSourceTime) > 0.01;
 
@@ -2576,7 +2599,7 @@ import {
 
       if (needsSeek) {
         nextVideos.screen.currentTime = targetSourceTime;
-        if (nextVideos.camera) nextVideos.camera.currentTime = targetSourceTime;
+        if (nextVideos.camera) nextVideos.camera.currentTime = targetCameraTime;
       }
 
       activeTakeId = nextSection.takeId;
@@ -2609,12 +2632,19 @@ import {
       if (!editorState?.hasCamera || !videos?.camera) return;
 
       const baseRate = editorState.playbackSpeed || 1;
-      const drift = videos.screen.currentTime - videos.camera.currentTime;
+      const drift = computeCameraPlaybackDrift(
+        videos.screen.currentTime,
+        videos.camera.currentTime,
+        editorState.cameraSyncOffsetMs
+      );
       const absDrift = Math.abs(drift);
       const now = performance.now();
 
       if (absDrift >= CAMERA_DRIFT_HARD_THRESHOLD && now >= cameraResyncCooldownUntil) {
-        videos.camera.currentTime = videos.screen.currentTime;
+        videos.camera.currentTime = resolveCameraPlaybackTargetTime(
+          videos.screen.currentTime,
+          editorState.cameraSyncOffsetMs
+        );
         videos.camera.playbackRate = baseRate;
         cameraResyncCooldownUntil = now + CAMERA_RESYNC_COOLDOWN_MS;
         console.debug('[Editor] Camera hard resync', {
@@ -3159,6 +3189,7 @@ import {
           pipSize: editorState.pipSize,
           screenFitMode: editorState.screenFitMode,
           exportAudioPreset: normalizeExportAudioPreset(exportAudioPresetSelect.value),
+          cameraSyncOffsetMs: editorState.cameraSyncOffsetMs,
           sourceWidth: editorState.sourceWidth || CANVAS_W,
           sourceHeight: editorState.sourceHeight || CANVAS_H,
           outputFolder: saveFolder
@@ -3319,6 +3350,19 @@ import {
       exportAudioPresetSelect.value = normalizeExportAudioPreset(exportAudioPresetSelect.value);
       if (activeProject?.settings) {
         activeProject.settings.exportAudioPreset = exportAudioPresetSelect.value;
+      }
+      scheduleProjectSave();
+    });
+
+    cameraSyncOffsetInput.addEventListener('change', () => {
+      const normalized = normalizeCameraSyncOffsetMs(cameraSyncOffsetInput.value);
+      cameraSyncOffsetInput.value = String(normalized);
+      if (activeProject?.settings) {
+        activeProject.settings.cameraSyncOffsetMs = normalized;
+      }
+      if (editorState) {
+        editorState.cameraSyncOffsetMs = normalized;
+        editorSeek(editorState.currentTime);
       }
       scheduleProjectSave();
     });

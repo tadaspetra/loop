@@ -52,6 +52,11 @@
         <button id="goRecordingBtn" class="px-3 py-1.5 rounded-md text-sm transition-colors">Recording</button>
         <button id="goTimelineBtn" class="px-3 py-1.5 rounded-md text-sm transition-colors">Timeline</button>
       </div>
+      <label id="cameraSyncOffsetControl" class="hidden items-center gap-2 text-xs text-neutral-400" title="Positive values advance delayed camera video to match audio.">
+        <span class="uppercase tracking-wider text-neutral-500">Camera sync</span>
+        <input id="cameraSyncOffsetMs" type="number" min="-2000" max="2000" step="10" value="0" class="w-20 bg-neutral-900 border border-neutral-800 rounded-lg px-2.5 py-1.5 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-neutral-600 transition-colors" />
+        <span class="text-neutral-500">ms</span>
+      </label>
       <label id="exportAudioPresetControl" class="hidden items-center gap-2 text-xs text-neutral-400">
         <span class="uppercase tracking-wider text-neutral-500">Export audio</span>
         <select id="exportAudioPreset" class="bg-neutral-900 border border-neutral-800 rounded-lg px-2.5 py-1.5 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-neutral-600 transition-colors">

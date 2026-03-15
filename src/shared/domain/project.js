@@ -4,6 +4,8 @@ const MIN_BACKGROUND_ZOOM = 1;
 const MAX_BACKGROUND_ZOOM = 3;
 const MIN_BACKGROUND_PAN = -1;
 const MAX_BACKGROUND_PAN = 1;
+const MIN_CAMERA_SYNC_OFFSET_MS = -2000;
+const MAX_CAMERA_SYNC_OFFSET_MS = 2000;
 const EXPORT_AUDIO_PRESET_OFF = 'off';
 const EXPORT_AUDIO_PRESET_COMPRESSED = 'compressed';
 
@@ -120,6 +122,12 @@ function normalizeExportAudioPreset(value) {
     : EXPORT_AUDIO_PRESET_COMPRESSED;
 }
 
+function normalizeCameraSyncOffsetMs(value) {
+  const offset = Math.round(Number(value));
+  if (!Number.isFinite(offset)) return 0;
+  return Math.max(MIN_CAMERA_SYNC_OFFSET_MS, Math.min(MAX_CAMERA_SYNC_OFFSET_MS, offset));
+}
+
 function createDefaultProject(name = 'Untitled Project') {
   const now = new Date().toISOString();
   return {
@@ -130,7 +138,8 @@ function createDefaultProject(name = 'Untitled Project') {
     settings: {
       screenFitMode: 'fill',
       hideFromRecording: true,
-      exportAudioPreset: EXPORT_AUDIO_PRESET_COMPRESSED
+      exportAudioPreset: EXPORT_AUDIO_PRESET_COMPRESSED,
+      cameraSyncOffsetMs: 0
     },
     takes: [],
     timeline: {
@@ -164,7 +173,8 @@ function normalizeProjectData(rawProject, projectFolder) {
     settings: {
       screenFitMode: rawSettings.screenFitMode === 'fit' ? 'fit' : 'fill',
       hideFromRecording: rawSettings.hideFromRecording !== false,
-      exportAudioPreset: normalizeExportAudioPreset(rawSettings.exportAudioPreset)
+      exportAudioPreset: normalizeExportAudioPreset(rawSettings.exportAudioPreset),
+      cameraSyncOffsetMs: normalizeCameraSyncOffsetMs(rawSettings.cameraSyncOffsetMs)
     },
     takes: rawTakes.map((take, index) => ({
       id: typeof take?.id === 'string' && take.id ? take.id : `take-${index + 1}-${Date.now()}`,
@@ -205,8 +215,11 @@ module.exports = {
   normalizeBackgroundPan,
   normalizeKeyframes,
   normalizeExportAudioPreset,
+  normalizeCameraSyncOffsetMs,
   createDefaultProject,
   normalizeProjectData,
+  MIN_CAMERA_SYNC_OFFSET_MS,
+  MAX_CAMERA_SYNC_OFFSET_MS,
   EXPORT_AUDIO_PRESET_OFF,
   EXPORT_AUDIO_PRESET_COMPRESSED
 };

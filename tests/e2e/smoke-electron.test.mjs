@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -11,6 +11,23 @@ const electronBin =
   process.platform === 'win32'
     ? path.join(projectRoot, 'node_modules', '.bin', 'electron.cmd')
     : path.join(projectRoot, 'node_modules', '.bin', 'electron');
+
+function getElectronSpawnSpec() {
+  const args = getElectronArgs();
+  if (process.platform === 'win32') {
+    return {
+      command: electronBin,
+      args,
+      shell: true
+    };
+  }
+
+  return {
+    command: electronBin,
+    args,
+    shell: false
+  };
+}
 
 function getElectronArgs() {
   const args = ['.'];
@@ -27,9 +44,28 @@ function wait(ms) {
   });
 }
 
+async function terminateChild(child) {
+  if (!child || child.exitCode !== null) return;
+
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
+      stdio: 'ignore'
+    });
+    return;
+  }
+
+  child.kill('SIGTERM');
+  await wait(500);
+  if (child.exitCode === null) {
+    child.kill('SIGKILL');
+  }
+}
+
 async function runSmoke() {
-  const child = spawn(electronBin, getElectronArgs(), {
+  const spawnSpec = getElectronSpawnSpec();
+  const child = spawn(spawnSpec.command, spawnSpec.args, {
     cwd: projectRoot,
+    shell: spawnSpec.shell,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       ...process.env,
@@ -63,11 +99,7 @@ async function runSmoke() {
     throw new Error(`Electron exited unexpectedly with code ${child.exitCode}.\n${stderr}`);
   }
 
-  child.kill('SIGTERM');
-  await wait(500);
-  if (child.exitCode === null) {
-    child.kill('SIGKILL');
-  }
+  await terminateChild(child);
 }
 
 runSmoke()

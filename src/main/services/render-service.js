@@ -6,6 +6,7 @@ const {
   normalizeBackgroundZoom,
   normalizeBackgroundPan,
   normalizeExportAudioPreset,
+  normalizeCameraSyncOffsetMs,
   EXPORT_AUDIO_PRESET_COMPRESSED
 } = require('../../shared/domain/project');
 const { chooseRenderFps, probeVideoFpsWithFfmpeg } = require('./fps-service');
@@ -48,6 +49,26 @@ function buildExportAudioLabel(exportAudioPreset) {
   return 'audio_final';
 }
 
+function buildCameraTrimFilter(cameraIdx, section, targetFps, index, cameraSyncOffsetMs) {
+  const start = Number(section.sourceStart);
+  const end = Number(section.sourceEnd);
+  const duration = end - start;
+  const offsetSec = normalizeCameraSyncOffsetMs(cameraSyncOffsetMs) / 1000;
+  const label = `[cv${index}]`;
+
+  if (!Number.isFinite(offsetSec) || Math.abs(offsetSec) < 0.0005) {
+    return `[${cameraIdx}:v]trim=start=${start.toFixed(3)}:end=${end.toFixed(3)},setpts=PTS-STARTPTS,fps=fps=${targetFps}${label}`;
+  }
+
+  const sampleStart = Math.max(0, start + offsetSec);
+  const unclampedSampleEnd = Math.max(0, end + offsetSec);
+  const sampleEnd = Math.max(sampleStart + 0.001, unclampedSampleEnd);
+  const startPad = Math.max(0, -offsetSec);
+  const stopPad = Math.max(0, offsetSec);
+
+  return `[${cameraIdx}:v]trim=start=${sampleStart.toFixed(3)}:end=${sampleEnd.toFixed(3)},setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=${startPad.toFixed(3)}:stop_mode=clone:stop_duration=${stopPad.toFixed(3)},trim=duration=${duration.toFixed(3)},setpts=PTS-STARTPTS,fps=fps=${targetFps}${label}`;
+}
+
 async function renderComposite(opts = {}, deps = {}) {
   const takes = Array.isArray(opts.takes) ? opts.takes : [];
   const sections = normalizeSectionInput(opts.sections);
@@ -55,6 +76,7 @@ async function renderComposite(opts = {}, deps = {}) {
   const pipSize = Number.isFinite(Number(opts.pipSize)) ? Number(opts.pipSize) : 422;
   const screenFitMode = opts.screenFitMode === 'fit' ? 'fit' : 'fill';
   const exportAudioPreset = normalizeExportAudioPreset(opts.exportAudioPreset);
+  const cameraSyncOffsetMs = normalizeCameraSyncOffsetMs(opts.cameraSyncOffsetMs);
   const sourceWidth = Number.isFinite(Number(opts.sourceWidth)) ? Number(opts.sourceWidth) : 1920;
   const sourceHeight = Number.isFinite(Number(opts.sourceHeight)) ? Number(opts.sourceHeight) : 1080;
   const outputFolder = typeof opts.outputFolder === 'string' ? opts.outputFolder : '';
@@ -154,11 +176,9 @@ async function renderComposite(opts = {}, deps = {}) {
     for (let i = 0; i < sections.length; i += 1) {
       const section = sections[i];
       const { cameraIdx } = sectionInputs[i];
-      const start = section.sourceStart.toFixed(3);
-      const end = section.sourceEnd.toFixed(3);
       const duration = (section.sourceEnd - section.sourceStart).toFixed(3);
       if (cameraIdx >= 0) {
-        filterParts.push(`[${cameraIdx}:v]trim=start=${start}:end=${end},setpts=PTS-STARTPTS,fps=fps=${targetFps}[cv${i}]`);
+        filterParts.push(buildCameraTrimFilter(cameraIdx, section, targetFps, i, cameraSyncOffsetMs));
       } else {
         filterParts.push(`color=black:s=1920x1080:d=${duration}[cv${i}]`);
       }
@@ -234,5 +254,6 @@ async function renderComposite(opts = {}, deps = {}) {
 module.exports = {
   renderComposite,
   normalizeSectionInput,
-  assertFilePath
+  assertFilePath,
+  buildCameraTrimFilter
 };

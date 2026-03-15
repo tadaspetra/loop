@@ -6,6 +6,7 @@ const {
   toProjectRelativePath,
   normalizeSections,
   normalizeKeyframes,
+  normalizeCameraSyncOffsetMs,
   createDefaultProject,
   normalizeProjectData
 } = require('../../src/shared/domain/project');
@@ -18,7 +19,7 @@ describe('shared/domain/project', () => {
 
   test('toProjectAbsolutePath and toProjectRelativePath convert paths safely', () => {
     const projectFolder = path.join('/tmp', 'project');
-    const rel = 'takes/screen.webm';
+    const rel = path.join('takes', 'screen.webm');
     const abs = toProjectAbsolutePath(projectFolder, rel);
     expect(abs).toBe(path.join(projectFolder, rel));
     expect(toProjectRelativePath(projectFolder, abs)).toBe(rel);
@@ -113,5 +114,37 @@ describe('shared/domain/project', () => {
     expect(compressedProject.settings.exportAudioPreset).toBe('compressed');
     expect(fallbackProject.settings.exportAudioPreset).toBe('compressed');
     expect(createDefaultProject('Demo').settings.exportAudioPreset).toBe('compressed');
+  });
+
+  test('normalizeCameraSyncOffsetMs rounds and clamps camera sync offset values', () => {
+    expect(normalizeCameraSyncOffsetMs()).toBe(0);
+    expect(normalizeCameraSyncOffsetMs('125.7')).toBe(126);
+    expect(normalizeCameraSyncOffsetMs('-1999.6')).toBe(-2000);
+    expect(normalizeCameraSyncOffsetMs(5000)).toBe(2000);
+    expect(normalizeCameraSyncOffsetMs(-5000)).toBe(-2000);
+    expect(normalizeCameraSyncOffsetMs('nope')).toBe(0);
+  });
+
+  test('normalizeProjectData preserves valid camera sync offset and defaults invalid values', () => {
+    const project = normalizeProjectData(
+      {
+        settings: {
+          cameraSyncOffsetMs: 135.4
+        }
+      },
+      '/tmp/my-project'
+    );
+    const fallbackProject = normalizeProjectData(
+      {
+        settings: {
+          cameraSyncOffsetMs: 'bad'
+        }
+      },
+      '/tmp/my-project'
+    );
+
+    expect(project.settings.cameraSyncOffsetMs).toBe(135);
+    expect(fallbackProject.settings.cameraSyncOffsetMs).toBe(0);
+    expect(createDefaultProject('Demo').settings.cameraSyncOffsetMs).toBe(0);
   });
 });
