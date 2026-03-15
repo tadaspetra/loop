@@ -14,9 +14,9 @@ function buildPosExpr(keyframes, prop) {
     const currFull = curr.cameraFullscreen || false;
 
     if (prevVal !== currVal && !prevFull && !currFull) {
-      const tEnd = t + TRANSITION_DURATION;
+      const tStart = t - TRANSITION_DURATION;
       const diff = currVal - prevVal;
-      expr = `if(gte(t,${tEnd.toFixed(3)}),${currVal},if(gte(t,${t.toFixed(3)}),${prevVal}+${diff}*(t-${t.toFixed(3)})/${TRANSITION_DURATION.toFixed(3)},${expr}))`;
+      expr = `if(gte(t,${t.toFixed(3)}),${currVal},if(gte(t,${tStart.toFixed(3)}),${prevVal}+${diff}*(t-${tStart.toFixed(3)})/${TRANSITION_DURATION.toFixed(3)},${expr}))`;
     } else {
       expr = `if(gte(t,${t.toFixed(3)}),${currVal},${expr})`;
     }
@@ -32,13 +32,13 @@ function buildAlphaExpr(keyframes) {
     const prev = keyframes[i - 1];
     const curr = keyframes[i];
     const t = curr.time;
-    const tEnd = t + TRANSITION_DURATION;
 
     if (prev.pipVisible !== curr.pipVisible) {
+      const tStart = t - TRANSITION_DURATION;
       if (curr.pipVisible) {
-        expr = `if(gte(T,${tEnd.toFixed(3)}),1,if(gte(T,${t.toFixed(3)}),(T-${t.toFixed(3)})/${TRANSITION_DURATION.toFixed(3)},${expr}))`;
+        expr = `if(gte(T,${t.toFixed(3)}),1,if(gte(T,${tStart.toFixed(3)}),(T-${tStart.toFixed(3)})/${TRANSITION_DURATION.toFixed(3)},${expr}))`;
       } else {
-        expr = `if(gte(T,${tEnd.toFixed(3)}),0,if(gte(T,${t.toFixed(3)}),(${tEnd.toFixed(3)}-T)/${TRANSITION_DURATION.toFixed(3)},${expr}))`;
+        expr = `if(gte(T,${t.toFixed(3)}),0,if(gte(T,${tStart.toFixed(3)}),(${t.toFixed(3)}-T)/${TRANSITION_DURATION.toFixed(3)},${expr}))`;
       }
     } else {
       expr = `if(gte(T,${t.toFixed(3)}),${curr.pipVisible ? '1' : '0'},${expr})`;
@@ -56,15 +56,15 @@ function buildCamFullAlphaExpr(keyframes) {
     const prev = keyframes[i - 1];
     const curr = keyframes[i];
     const t = curr.time;
-    const tEnd = t + TRANSITION_DURATION;
+    const tStart = t - TRANSITION_DURATION;
     const prevFull = isFullVisible(prev);
     const currFull = isFullVisible(curr);
 
     if (prevFull !== currFull) {
       if (currFull) {
-        expr = `if(gte(T,${tEnd.toFixed(3)}),1,if(gte(T,${t.toFixed(3)}),(T-${t.toFixed(3)})/${TRANSITION_DURATION.toFixed(3)},${expr}))`;
+        expr = `if(gte(T,${t.toFixed(3)}),1,if(gte(T,${tStart.toFixed(3)}),(T-${tStart.toFixed(3)})/${TRANSITION_DURATION.toFixed(3)},${expr}))`;
       } else {
-        expr = `if(gte(T,${tEnd.toFixed(3)}),0,if(gte(T,${t.toFixed(3)}),(${tEnd.toFixed(3)}-T)/${TRANSITION_DURATION.toFixed(3)},${expr}))`;
+        expr = `if(gte(T,${t.toFixed(3)}),0,if(gte(T,${tStart.toFixed(3)}),(${t.toFixed(3)}-T)/${TRANSITION_DURATION.toFixed(3)},${expr}))`;
       }
     } else {
       expr = `if(gte(T,${t.toFixed(3)}),${currFull ? '1' : '0'},${expr})`;

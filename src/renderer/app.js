@@ -2257,7 +2257,7 @@ import {
       }
 
       const active = kfs[activeIdx];
-      const prev = activeIdx > 0 ? kfs[activeIdx - 1] : null;
+      const next = activeIdx < kfs.length - 1 ? kfs[activeIdx + 1] : null;
 
       let pipX = active.pipX;
       let pipY = active.pipY;
@@ -2265,40 +2265,33 @@ import {
       let cameraFullscreen = active.cameraFullscreen || false;
       let camTransition = cameraFullscreen ? 1 : 0;
 
-      // Unified transition from previous keyframe state (all animations at section boundary)
-      if (prev) {
-        const elapsed = time - active.time;
-        if (elapsed < TRANSITION_DURATION) {
-          const t = elapsed / TRANSITION_DURATION;
-          const prevFullscreen = prev.cameraFullscreen || false;
+      // Transition toward next keyframe at end of current section
+      if (next) {
+        const remaining = next.time - time;
+        if (remaining > 0 && remaining < TRANSITION_DURATION) {
+          const t = 1 - remaining / TRANSITION_DURATION;
+          const nextVisible = next.pipVisible !== undefined ? next.pipVisible : true;
+          const nextFullscreen = next.cameraFullscreen || false;
 
-          if (prev.pipVisible !== active.pipVisible) {
-            // Visibility transition: fade in/out at the relevant state, no size animation
-            if (active.pipVisible) {
+          if (active.pipVisible !== nextVisible) {
+            // Visibility transition: fade in/out toward next state
+            if (nextVisible) {
               opacity = t;
-              camTransition = cameraFullscreen ? 1 : 0;
+              camTransition = nextFullscreen ? 1 : 0;
             } else {
               opacity = 1 - t;
-              camTransition = prevFullscreen ? 1 : 0;
-              if (!prevFullscreen) {
-                pipX = prev.pipX;
-                pipY = prev.pipY;
-              }
+              camTransition = cameraFullscreen ? 1 : 0;
             }
           } else {
             // No visibility change - handle position and fullscreen transitions
-            if (prevFullscreen !== cameraFullscreen) {
-              camTransition = cameraFullscreen ? t : 1 - t;
-              if (cameraFullscreen) {
-                pipX = prev.pipX;
-                pipY = prev.pipY;
-              }
+            if (cameraFullscreen !== nextFullscreen) {
+              camTransition = nextFullscreen ? t : 1 - t;
             }
 
-            if (!prevFullscreen && !cameraFullscreen
-                && (prev.pipX !== active.pipX || prev.pipY !== active.pipY)) {
-              pipX = prev.pipX + (active.pipX - prev.pipX) * t;
-              pipY = prev.pipY + (active.pipY - prev.pipY) * t;
+            if (!cameraFullscreen && !nextFullscreen
+                && (active.pipX !== next.pipX || active.pipY !== next.pipY)) {
+              pipX = active.pipX + (next.pipX - active.pipX) * t;
+              pipY = active.pipY + (next.pipY - active.pipY) * t;
             }
           }
         }
