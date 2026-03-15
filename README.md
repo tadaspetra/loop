@@ -2,6 +2,8 @@
 
 Flow is a desktop app for recording screen-based videos, transcribing speech in real time, cutting dead space from the transcript, and turning raw takes into a clean edited MP4.
 
+The goal: I want to focus 100% of my time on the the video content and have AI take care of the rest.
+
 Built with Electron, ffmpeg, and ElevenLabs Scribe, Flow keeps the editing loop short: record, trim by speech, adjust the timeline, render.
 
 ## What Flow Does
