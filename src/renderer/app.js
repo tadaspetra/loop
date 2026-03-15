@@ -2428,9 +2428,9 @@ import {
       let opacity = active.pipVisible ? 1 : 0;
       let cameraFullscreen = active.cameraFullscreen || false;
       let camTransition = cameraFullscreen ? 1 : 0;
-      const backgroundZoom = clampSectionZoom(active.backgroundZoom);
-      const backgroundPanX = clampSectionPan(active.backgroundPanX);
-      const backgroundPanY = clampSectionPan(active.backgroundPanY);
+      let backgroundZoom = clampSectionZoom(active.backgroundZoom);
+      let backgroundPanX = clampSectionPan(active.backgroundPanX);
+      let backgroundPanY = clampSectionPan(active.backgroundPanY);
 
       // Transition toward next keyframe at end of current section
       if (next) {
@@ -2470,6 +2470,16 @@ import {
               pipX = active.pipX + (next.pipX - active.pipX) * t;
               pipY = active.pipY + (next.pipY - active.pipY) * t;
             }
+          }
+
+          if (Math.abs(backgroundZoom - clampSectionZoom(next.backgroundZoom)) > 0.0001) {
+            backgroundZoom = backgroundZoom + (clampSectionZoom(next.backgroundZoom) - backgroundZoom) * t;
+          }
+          if (Math.abs(backgroundPanX - clampSectionPan(next.backgroundPanX)) > 0.0001) {
+            backgroundPanX = backgroundPanX + (clampSectionPan(next.backgroundPanX) - backgroundPanX) * t;
+          }
+          if (Math.abs(backgroundPanY - clampSectionPan(next.backgroundPanY)) > 0.0001) {
+            backgroundPanY = backgroundPanY + (clampSectionPan(next.backgroundPanY) - backgroundPanY) * t;
           }
         }
       }
@@ -2727,42 +2737,35 @@ import {
       const activeVideos = activeTakeId ? getOrCreateTakeVideos(activeTakeId) : null;
       const hasScreen = activeVideos && activeVideos.screen.videoWidth > 0;
       const hasCamera = editorState.hasCamera && activeVideos?.camera && activeVideos.camera.videoWidth > 0;
-      const activeSection = findSectionForTime(editorState.currentTime);
-      const backgroundZoom = activeSection
-        ? getSectionBackgroundZoom(activeSection.id)
-        : DEFAULT_SECTION_ZOOM;
-      const backgroundPan = activeSection
-        ? getSectionBackgroundPan(activeSection.id)
-        : { x: 0, y: 0 };
+      const state = getStateAtTime(editorState.currentTime);
 
       if (hasScreen) {
         drawEditorScreenWithZoom(
           editorCtx,
           activeVideos.screen,
           editorState.screenFitMode,
-          backgroundZoom,
-          backgroundPan.x,
-          backgroundPan.y
+          state.backgroundZoom,
+          state.backgroundPanX,
+          state.backgroundPanY
         );
       }
 
       if (hasCamera) {
-        const kf = getStateAtTime(editorState.currentTime);
-        if (kf.camTransition > 0 && kf.opacity > 0) {
+        if (state.camTransition > 0 && state.opacity > 0) {
           editorCtx.save();
-          if (kf.opacity < 1) editorCtx.globalAlpha = kf.opacity;
-          const t = easeInOut(kf.camTransition);
-          const camX = kf.pipX * (1 - t);
-          const camY = kf.pipY * (1 - t);
+          if (state.opacity < 1) editorCtx.globalAlpha = state.opacity;
+          const t = easeInOut(state.camTransition);
+          const camX = state.pipX * (1 - t);
+          const camY = state.pipY * (1 - t);
           const camW = editorState.pipSize + (CANVAS_W - editorState.pipSize) * t;
           const camH = editorState.pipSize + (CANVAS_H - editorState.pipSize) * t;
           const camR = 12 * (1 - t);
           drawCameraRect(editorCtx, activeVideos.camera, camX, camY, camW, camH, camR);
           editorCtx.restore();
-        } else if (kf.opacity > 0) {
+        } else if (state.opacity > 0) {
           editorCtx.save();
-          editorCtx.globalAlpha = kf.opacity;
-          drawPip(editorCtx, activeVideos.camera, kf.pipX, kf.pipY, editorState.pipSize, editorState.pipSize);
+          editorCtx.globalAlpha = state.opacity;
+          drawPip(editorCtx, activeVideos.camera, state.pipX, state.pipY, editorState.pipSize, editorState.pipSize);
           editorCtx.restore();
         }
       }

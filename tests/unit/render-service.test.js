@@ -114,7 +114,7 @@ describe('main/services/render-service', () => {
         outputFolder: outputDir,
         takes: [{ id: 'take-1', screenPath, cameraPath }],
         sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.0, backgroundZoom: 2 }],
-        keyframes: [{ time: 0, pipX: 10, pipY: 10, pipVisible: true, cameraFullscreen: false }],
+        keyframes: [{ time: 0, pipX: 10, pipY: 10, pipVisible: true, cameraFullscreen: false, backgroundZoom: 2, backgroundPanX: 0, backgroundPanY: 0 }],
         pipSize: 300,
         sourceWidth: 1920,
         sourceHeight: 1080,
@@ -132,7 +132,7 @@ describe('main/services/render-service', () => {
     );
 
     const argString = execCalls[0].args.join(' ');
-    expect(argString).toContain('scale=3840:2160,crop=1920:1080:960:540,setsar=1[sv0]');
+    expect(argString).toContain("[screen_raw]setpts=PTS-STARTPTS[screen_base];[screen_base]zoompan=z='2.000'");
     expect(argString).toContain('[1:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,fps=fps=30[cv0]');
     expect(argString).not.toContain('scale=3840:2160,crop=1920:1080:960:540[cv0]');
   });
@@ -158,7 +158,7 @@ describe('main/services/render-service', () => {
             backgroundPanY: -1
           }
         ],
-        keyframes: [{ time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }],
+        keyframes: [{ time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false, backgroundZoom: 2, backgroundPanX: 1, backgroundPanY: -1 }],
         pipSize: 300,
         sourceWidth: 1920,
         sourceHeight: 1080,
@@ -176,6 +176,46 @@ describe('main/services/render-service', () => {
     );
 
     const argString = execCalls[0].args.join(' ');
-    expect(argString).toContain('crop=1920:1080:1920:0,setsar=1[sv0]');
+    expect(argString).toContain("zoompan=z='2.000':x='(iw-iw/zoom)*((1.000)+1)/2':y='(ih-ih/zoom)*((-1.000)+1)/2'");
+  });
+
+  test('renderComposite animates background zoom and pan through section boundaries', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-animated-bg-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+
+    const execCalls = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        takes: [{ id: 'take-1', screenPath, cameraPath: null }],
+        sections: [
+          { takeId: 'take-1', sourceStart: 0, sourceEnd: 1.0, backgroundZoom: 1, backgroundPanX: 0, backgroundPanY: 0 },
+          { takeId: 'take-1', sourceStart: 1.0, sourceEnd: 2.0, backgroundZoom: 2, backgroundPanX: 1, backgroundPanY: -1 }
+        ],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false, backgroundZoom: 1, backgroundPanX: 0, backgroundPanY: 0 },
+          { time: 1, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false, backgroundZoom: 2, backgroundPanX: 1, backgroundPanY: -1 }
+        ],
+        pipSize: 300,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill'
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 999,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        execFile: (bin, args, opts, cb) => {
+          execCalls.push({ bin, args, opts });
+          cb(null, '', '');
+        }
+      }
+    );
+
+    const argString = execCalls[0].args.join(' ');
+    expect(argString).toContain('if(gte(it,1.000),2.000');
+    expect(argString).toContain('if(gte(it,0.700),1.000+1.000*(it-0.700)/0.300');
   });
 });

@@ -7,6 +7,31 @@ function resolveOutputSize(sourceWidth, _sourceHeight) {
   return { outW, outH };
 }
 
+function buildNumericExpr(keyframes, prop, precision = 3, defaultValue = 0, timeVar = 't') {
+  const firstValue = Number.isFinite(Number(keyframes[0]?.[prop]))
+    ? Number(keyframes[0][prop])
+    : defaultValue;
+  if (keyframes.length === 1) return firstValue.toFixed(precision);
+
+  let expr = firstValue.toFixed(precision);
+  for (let i = 1; i < keyframes.length; i += 1) {
+    const prev = keyframes[i - 1];
+    const curr = keyframes[i];
+    const prevVal = Number.isFinite(Number(prev?.[prop])) ? Number(prev[prop]) : defaultValue;
+    const currVal = Number.isFinite(Number(curr?.[prop])) ? Number(curr[prop]) : defaultValue;
+    const t = curr.time;
+    const tStart = t - TRANSITION_DURATION;
+    const diff = currVal - prevVal;
+
+    if (Math.abs(diff) > 0.0001) {
+      expr = `if(gte(${timeVar},${t.toFixed(3)}),${currVal.toFixed(precision)},if(gte(${timeVar},${tStart.toFixed(3)}),${prevVal.toFixed(precision)}+${diff.toFixed(precision)}*(${timeVar}-${tStart.toFixed(3)})/${TRANSITION_DURATION.toFixed(3)},${expr}))`;
+    } else {
+      expr = `if(gte(${timeVar},${t.toFixed(3)}),${currVal.toFixed(precision)},${expr})`;
+    }
+  }
+  return expr;
+}
+
 function buildPosExpr(keyframes, prop) {
   if (keyframes.length === 1) return String(Math.round(keyframes[0][prop]));
 
@@ -86,6 +111,49 @@ function buildCamFullAlphaExpr(keyframes) {
   return expr;
 }
 
+function buildScreenFilter(
+  keyframes,
+  screenFitMode,
+  sourceWidth,
+  sourceHeight,
+  canvasW,
+  _canvasH,
+  outputLabel = '[screen]',
+  screenPreprocessed = false,
+  targetFps = 30
+) {
+  const { outW, outH } = resolveOutputSize(sourceWidth, sourceHeight);
+  const normalizedKeyframes = (Array.isArray(keyframes) ? keyframes : []).map((keyframe) => ({
+    ...keyframe,
+    backgroundZoom: Number.isFinite(Number(keyframe?.backgroundZoom)) ? Number(keyframe.backgroundZoom) : 1,
+    backgroundPanX: Number.isFinite(Number(keyframe?.backgroundPanX)) ? Number(keyframe.backgroundPanX) : 0,
+    backgroundPanY: Number.isFinite(Number(keyframe?.backgroundPanY)) ? Number(keyframe.backgroundPanY) : 0
+  }));
+
+  const baseFilter =
+    screenPreprocessed
+      ? '[0:v]setpts=PTS-STARTPTS[screen_base]'
+      : screenFitMode === 'fill'
+        ? `[0:v]scale=${outW}:${outH}:force_original_aspect_ratio=increase,crop=${outW}:${outH}[screen_base]`
+        : `[0:v]scale=${outW}:${outH}:force_original_aspect_ratio=decrease,pad=${outW}:${outH}:'(ow-iw)/2':'(oh-ih)/2':color=black[screen_base]`;
+
+  const hasBackgroundAnimation = normalizedKeyframes.some((keyframe) => {
+    return Math.abs(keyframe.backgroundZoom - 1) > 0.0001
+      || Math.abs(keyframe.backgroundPanX) > 0.0001
+      || Math.abs(keyframe.backgroundPanY) > 0.0001;
+  });
+
+  if (!hasBackgroundAnimation) {
+    return baseFilter.replace('[screen_base]', outputLabel);
+  }
+
+  const zoomExpr = buildNumericExpr(normalizedKeyframes, 'backgroundZoom', 3, 1, 'it');
+  const panXExpr = buildNumericExpr(normalizedKeyframes, 'backgroundPanX', 3, 0, 'it');
+  const panYExpr = buildNumericExpr(normalizedKeyframes, 'backgroundPanY', 3, 0, 'it');
+  const animatedFilter = `[screen_base]zoompan=z='${zoomExpr}':x='(iw-iw/zoom)*((${panXExpr})+1)/2':y='(ih-ih/zoom)*((${panYExpr})+1)/2':d=1:s=${outW}x${outH}:fps=${targetFps},setsar=1${outputLabel}`;
+  return `${baseFilter};${animatedFilter}`;
+}
+
 function buildFilterComplex(
   keyframes,
   pipSize,
@@ -94,7 +162,8 @@ function buildFilterComplex(
   sourceHeight,
   canvasW,
   _canvasH,
-  screenPreprocessed = false
+  screenPreprocessed = false,
+  targetFps = 30
 ) {
   const { outW, outH } = resolveOutputSize(sourceWidth, sourceHeight);
 
@@ -110,12 +179,17 @@ function buildFilterComplex(
     pipY: Math.round(keyframe.pipY * scale)
   }));
 
-  const screenFilter =
-    screenPreprocessed
-      ? '[0:v]setpts=PTS-STARTPTS[screen]'
-      : screenFitMode === 'fill'
-        ? `[0:v]scale=${outW}:${outH}:force_original_aspect_ratio=increase,crop=${outW}:${outH}[screen]`
-        : `[0:v]scale=${outW}:${outH}:force_original_aspect_ratio=decrease,pad=${outW}:${outH}:'(ow-iw)/2':'(oh-ih)/2':color=black[screen]`;
+  const screenFilter = buildScreenFilter(
+    keyframes,
+    screenFitMode,
+    sourceWidth,
+    sourceHeight,
+    canvasW,
+    _canvasH,
+    '[screen]',
+    screenPreprocessed,
+    targetFps
+  );
 
   const hasPip = keyframes.some((keyframe) => keyframe.pipVisible);
   const hasCamFull = keyframes.some((keyframe) => keyframe.cameraFullscreen);
@@ -152,6 +226,8 @@ function buildFilterComplex(
 module.exports = {
   TRANSITION_DURATION,
   resolveOutputSize,
+  buildNumericExpr,
+  buildScreenFilter,
   buildPosExpr,
   buildAlphaExpr,
   buildCamFullAlphaExpr,

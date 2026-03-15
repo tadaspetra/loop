@@ -4,20 +4,7 @@ const { execFile } = require('child_process');
 const { fs, ensureDirectory } = require('../infra/file-system');
 const { normalizeBackgroundZoom, normalizeBackgroundPan } = require('../../shared/domain/project');
 const { chooseRenderFps, probeVideoFpsWithFfmpeg } = require('./fps-service');
-const { buildFilterComplex, resolveOutputSize } = require('./render-filter-service');
-
-function roundEven(value, minValue) {
-  let rounded = Math.max(minValue, Math.round(value));
-  if (rounded % 2 !== 0) rounded -= 1;
-  if (rounded < minValue) rounded = minValue;
-  return rounded;
-}
-
-function resolveCropOffset(extraPixels, pan) {
-  if (extraPixels <= 0) return 0;
-  const normalizedPan = normalizeBackgroundPan(pan);
-  return Math.round(((normalizedPan + 1) / 2) * extraPixels);
-}
+const { buildFilterComplex, buildScreenFilter } = require('./render-filter-service');
 
 function normalizeSectionInput(rawSections) {
   const sections = Array.isArray(rawSections) ? rawSections : [];
@@ -72,11 +59,6 @@ async function renderComposite(opts = {}, deps = {}) {
   const outputPath = path.join(outputFolder, `recording-${now()}-edited.mp4`);
   const canvasW = 1920;
   const canvasH = 1080;
-  const { outW, outH } = resolveOutputSize(sourceWidth, sourceHeight);
-  const baseScreenFilter =
-    screenFitMode === 'fill'
-      ? `scale=${outW}:${outH}:force_original_aspect_ratio=increase,crop=${outW}:${outH}`
-      : `scale=${outW}:${outH}:force_original_aspect_ratio=decrease,pad=${outW}:${outH}:'(ow-iw)/2':'(oh-ih)/2':color=black`;
 
   const takeMap = new Map();
   for (const take of takes) {
@@ -138,17 +120,8 @@ async function renderComposite(opts = {}, deps = {}) {
     const { screenIdx } = sectionInputs[i];
     const start = section.sourceStart.toFixed(3);
     const end = section.sourceEnd.toFixed(3);
-    const zoom = normalizeBackgroundZoom(section.backgroundZoom);
-    let zoomedScreenFilter = baseScreenFilter;
-    if (zoom > 1.0001) {
-      const zoomedW = roundEven(outW * zoom, outW);
-      const zoomedH = roundEven(outH * zoom, outH);
-      const cropX = resolveCropOffset(zoomedW - outW, section.backgroundPanX);
-      const cropY = resolveCropOffset(zoomedH - outH, section.backgroundPanY);
-      zoomedScreenFilter = `${baseScreenFilter},scale=${zoomedW}:${zoomedH},crop=${outW}:${outH}:${cropX}:${cropY}`;
-    }
     filterParts.push(
-      `[${screenIdx}:v]trim=start=${start}:end=${end},setpts=PTS-STARTPTS,fps=fps=${targetFps},${zoomedScreenFilter},setsar=1[sv${i}]`
+      `[${screenIdx}:v]trim=start=${start}:end=${end},setpts=PTS-STARTPTS,fps=fps=${targetFps},setsar=1[sv${i}]`
     );
     filterParts.push(`[${screenIdx}:a]atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS[sa${i}]`);
   }
@@ -180,14 +153,26 @@ async function renderComposite(opts = {}, deps = {}) {
       sourceHeight,
       canvasW,
       canvasH,
-      true
+      true,
+      targetFps
     );
     const adaptedOverlay = overlayFilter
       .replace(/\[0:v\]/g, '[screen_raw]')
       .replace(/\[1:v\]/g, '[camera_raw]');
     filterParts.push(adaptedOverlay);
   } else {
-    filterParts.push('[screen_raw]setpts=PTS-STARTPTS[out]');
+    const screenOnlyFilter = buildScreenFilter(
+      keyframes,
+      screenFitMode,
+      sourceWidth,
+      sourceHeight,
+      canvasW,
+      canvasH,
+      '[out]',
+      true,
+      targetFps
+    ).replace(/\[0:v\]/g, '[screen_raw]');
+    filterParts.push(screenOnlyFilter);
   }
 
   filterParts.push(`[out]fps=fps=${targetFps}:round=near[out_cfr]`);

@@ -1,5 +1,6 @@
 const {
   buildPosExpr,
+  buildNumericExpr,
   buildAlphaExpr,
   buildCamFullAlphaExpr,
   buildFilterComplex
@@ -64,11 +65,26 @@ describe('main/services/render-filter-service', () => {
     expect(expr).toContain('if(gte(t,1.700),200');
   });
 
+  test('buildNumericExpr transitions before the next section time', () => {
+    const expr = buildNumericExpr(
+      [
+        { time: 0, backgroundZoom: 1 },
+        { time: 2, backgroundZoom: 2 }
+      ],
+      'backgroundZoom',
+      3,
+      0,
+      'it'
+    );
+    expect(expr).toContain('if(gte(it,2.000),2.000');
+    expect(expr).toContain('if(gte(it,1.700),1.000+1.000*(it-1.700)/0.300');
+  });
+
   test('buildFilterComplex returns overlay pipeline string', () => {
     const filter = buildFilterComplex(
       [
-        { time: 0, pipX: 100, pipY: 100, pipVisible: true, cameraFullscreen: false },
-        { time: 2, pipX: 120, pipY: 120, pipVisible: true, cameraFullscreen: false }
+        { time: 0, pipX: 100, pipY: 100, pipVisible: true, cameraFullscreen: false, backgroundZoom: 1, backgroundPanX: 0, backgroundPanY: 0 },
+        { time: 2, pipX: 120, pipY: 120, pipVisible: true, cameraFullscreen: false, backgroundZoom: 2, backgroundPanX: 1, backgroundPanY: -1 }
       ],
       320,
       'fill',
@@ -80,6 +96,8 @@ describe('main/services/render-filter-service', () => {
     expect(filter).toContain('[screen]');
     expect(filter).toContain('[cam]');
     expect(filter).toContain('overlay');
+    expect(filter).toContain("zoompan=z='if(gte(it,2.000),2.000");
+    expect(filter).toContain(":x='(iw-iw/zoom)*((if(gte(it,2.000),1.000");
   });
 
   test('buildFilterComplex can skip screen scaling when preprocessed', () => {
