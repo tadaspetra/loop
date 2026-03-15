@@ -89,5 +89,29 @@ describe('shared/domain/project', () => {
     expect(project.timeline.keyframes[0].backgroundPanY).toBe(-0.5);
     expect(project.settings.screenFitMode).toBe('fill');
     expect(project.settings.hideFromRecording).toBe(true);
+    expect(project.settings.exportAudioPreset).toBe('compressed');
+  });
+
+  test('normalizeProjectData preserves valid export audio preset and falls back invalid values', () => {
+    const compressedProject = normalizeProjectData(
+      {
+        settings: {
+          exportAudioPreset: 'compressed'
+        }
+      },
+      '/tmp/my-project'
+    );
+    const fallbackProject = normalizeProjectData(
+      {
+        settings: {
+          exportAudioPreset: 'loud'
+        }
+      },
+      '/tmp/my-project'
+    );
+
+    expect(compressedProject.settings.exportAudioPreset).toBe('compressed');
+    expect(fallbackProject.settings.exportAudioPreset).toBe('compressed');
+    expect(createDefaultProject('Demo').settings.exportAudioPreset).toBe('compressed');
   });
 });

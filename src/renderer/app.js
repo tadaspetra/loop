@@ -33,6 +33,8 @@ import {
     const goRecordingBtn = document.getElementById('goRecordingBtn');
     const goTimelineBtn = document.getElementById('goTimelineBtn');
     const switchProjectBtn = document.getElementById('switchProjectBtn');
+    const exportAudioPresetControl = document.getElementById('exportAudioPresetControl');
+    const exportAudioPresetSelect = document.getElementById('exportAudioPreset');
 
     const screenSelect = document.getElementById('screenSource');
     const screenFitSelect = document.getElementById('screenFit');
@@ -122,6 +124,8 @@ import {
     const DEFAULT_SECTION_ZOOM = 1;
     const MIN_SECTION_PAN = -1;
     const MAX_SECTION_PAN = 1;
+    const EXPORT_AUDIO_PRESET_OFF = 'off';
+    const EXPORT_AUDIO_PRESET_COMPRESSED = 'compressed';
 
     function snapToNearestCorner(cursorX, cursorY) {
       const midX = CANVAS_W / 2;
@@ -146,6 +150,12 @@ import {
       const pan = Number(value);
       if (!Number.isFinite(pan)) return 0;
       return Math.max(MIN_SECTION_PAN, Math.min(MAX_SECTION_PAN, pan));
+    }
+
+    function normalizeExportAudioPreset(value) {
+      return value === EXPORT_AUDIO_PRESET_OFF
+        ? EXPORT_AUDIO_PRESET_OFF
+        : EXPORT_AUDIO_PRESET_COMPRESSED;
     }
 
     function getZoomCropBounds(zoom) {
@@ -321,6 +331,7 @@ import {
 
     function updateWorkspaceHeader() {
       const hasProject = !!activeProjectPath;
+      const showTimelineTools = hasProject && activeWorkspaceView === 'timeline';
       activeProjectNameEl.textContent = activeProject?.name || 'Project';
       activeProjectPathEl.textContent = activeProjectPath || '';
       workspaceHeader.classList.toggle('hidden', !hasProject || activeWorkspaceView === 'home');
@@ -328,7 +339,9 @@ import {
       setToggleButtonState(goTimelineBtn, activeWorkspaceView === 'timeline', !hasProject || !editorState || activeWorkspaceView === 'processing' || recording);
       recordBtn.classList.toggle('hidden', activeWorkspaceView !== 'recording');
       timerEl.classList.toggle('hidden', activeWorkspaceView !== 'recording');
-      editorRenderBtn.classList.toggle('hidden', activeWorkspaceView !== 'timeline');
+      exportAudioPresetControl.classList.toggle('hidden', !showTimelineTools);
+      exportAudioPresetControl.classList.toggle('flex', showTimelineTools);
+      editorRenderBtn.classList.toggle('hidden', !showTimelineTools);
     }
 
     function hasPendingEditorDraw() {
@@ -456,7 +469,8 @@ import {
         ...activeProject,
         settings: {
           screenFitMode: screenFitSelect.value || 'fill',
-          hideFromRecording: hideFromRecording === 'true'
+          hideFromRecording: hideFromRecording === 'true',
+          exportAudioPreset: normalizeExportAudioPreset(exportAudioPresetSelect.value)
         },
         timeline: getProjectTimelineSnapshot()
       };
@@ -686,6 +700,7 @@ import {
       openFolderBtn.classList.remove('hidden');
       screenFitSelect.value = project.settings?.screenFitMode === 'fit' ? 'fit' : 'fill';
       hideFromRecording = project.settings?.hideFromRecording === false ? 'false' : 'true';
+      exportAudioPresetSelect.value = normalizeExportAudioPreset(project.settings?.exportAudioPreset);
       await syncContentProtection();
 
       if (project.timeline && Array.isArray(project.timeline.sections) && project.timeline.sections.length > 0) {
@@ -3143,6 +3158,7 @@ import {
           keyframes: renderKeyframes,
           pipSize: editorState.pipSize,
           screenFitMode: editorState.screenFitMode,
+          exportAudioPreset: normalizeExportAudioPreset(exportAudioPresetSelect.value),
           sourceWidth: editorState.sourceWidth || CANVAS_W,
           sourceHeight: editorState.sourceHeight || CANVAS_H,
           outputFolder: saveFolder
@@ -3296,6 +3312,14 @@ import {
     contentProtectionToggle.addEventListener('change', async () => {
       hideFromRecording = contentProtectionToggle.checked ? 'true' : 'false';
       await syncContentProtection();
+      scheduleProjectSave();
+    });
+
+    exportAudioPresetSelect.addEventListener('change', () => {
+      exportAudioPresetSelect.value = normalizeExportAudioPreset(exportAudioPresetSelect.value);
+      if (activeProject?.settings) {
+        activeProject.settings.exportAudioPreset = exportAudioPresetSelect.value;
+      }
       scheduleProjectSave();
     });
 

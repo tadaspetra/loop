@@ -52,6 +52,13 @@
         <button id="goRecordingBtn" class="px-3 py-1.5 rounded-md text-sm transition-colors">Recording</button>
         <button id="goTimelineBtn" class="px-3 py-1.5 rounded-md text-sm transition-colors">Timeline</button>
       </div>
+      <label id="exportAudioPresetControl" class="hidden items-center gap-2 text-xs text-neutral-400">
+        <span class="uppercase tracking-wider text-neutral-500">Export audio</span>
+        <select id="exportAudioPreset" class="bg-neutral-900 border border-neutral-800 rounded-lg px-2.5 py-1.5 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-neutral-600 transition-colors">
+          <option value="off">Off</option>
+          <option value="compressed" selected>Compressed</option>
+        </select>
+      </label>
       <button id="recordBtn" class="hidden px-4 py-1.5 bg-red-600 hover:bg-red-700 rounded-lg text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed" disabled>Record</button>
       <span id="timer" class="hidden text-sm text-neutral-500 font-mono tabular-nums">00:00</span>
       <button id="editorRenderBtn" class="hidden px-4 py-1.5 bg-white text-neutral-950 hover:bg-neutral-200 rounded-lg text-sm font-medium transition-colors min-w-[80px] text-center">Render</button>

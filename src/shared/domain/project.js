@@ -4,6 +4,8 @@ const MIN_BACKGROUND_ZOOM = 1;
 const MAX_BACKGROUND_ZOOM = 3;
 const MIN_BACKGROUND_PAN = -1;
 const MAX_BACKGROUND_PAN = 1;
+const EXPORT_AUDIO_PRESET_OFF = 'off';
+const EXPORT_AUDIO_PRESET_COMPRESSED = 'compressed';
 
 function createProjectId() {
   return `project-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -112,6 +114,12 @@ function normalizeKeyframes(rawKeyframes = []) {
     .sort((a, b) => a.time - b.time);
 }
 
+function normalizeExportAudioPreset(value) {
+  return value === EXPORT_AUDIO_PRESET_OFF
+    ? EXPORT_AUDIO_PRESET_OFF
+    : EXPORT_AUDIO_PRESET_COMPRESSED;
+}
+
 function createDefaultProject(name = 'Untitled Project') {
   const now = new Date().toISOString();
   return {
@@ -121,7 +129,8 @@ function createDefaultProject(name = 'Untitled Project') {
     updatedAt: now,
     settings: {
       screenFitMode: 'fill',
-      hideFromRecording: true
+      hideFromRecording: true,
+      exportAudioPreset: EXPORT_AUDIO_PRESET_COMPRESSED
     },
     takes: [],
     timeline: {
@@ -154,7 +163,8 @@ function normalizeProjectData(rawProject, projectFolder) {
     updatedAt: typeof project.updatedAt === 'string' ? project.updatedAt : now,
     settings: {
       screenFitMode: rawSettings.screenFitMode === 'fit' ? 'fit' : 'fill',
-      hideFromRecording: rawSettings.hideFromRecording !== false
+      hideFromRecording: rawSettings.hideFromRecording !== false,
+      exportAudioPreset: normalizeExportAudioPreset(rawSettings.exportAudioPreset)
     },
     takes: rawTakes.map((take, index) => ({
       id: typeof take?.id === 'string' && take.id ? take.id : `take-${index + 1}-${Date.now()}`,
@@ -194,6 +204,9 @@ module.exports = {
   normalizeBackgroundZoom,
   normalizeBackgroundPan,
   normalizeKeyframes,
+  normalizeExportAudioPreset,
   createDefaultProject,
-  normalizeProjectData
+  normalizeProjectData,
+  EXPORT_AUDIO_PRESET_OFF,
+  EXPORT_AUDIO_PRESET_COMPRESSED
 };

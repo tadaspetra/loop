@@ -98,6 +98,81 @@ describe('main/services/render-service', () => {
     expect(execCalls).toHaveLength(1);
     expect(execCalls[0].bin).toBe('/usr/bin/ffmpeg');
     expect(execCalls[0].args.join(' ')).toContain('-filter_complex');
+    expect(execCalls[0].args.join(' ')).toContain('[audio_out]acompressor=');
+    expect(execCalls[0].args.join(' ')).toContain('-map [audio_final]');
+  });
+
+  test('renderComposite keeps default audio mapping when export audio preset is off', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-audio-off-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+
+    const execCalls = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        takes: [{ id: 'take-1', screenPath, cameraPath: null }],
+        sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.25 }],
+        keyframes: [{ time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }],
+        pipSize: 300,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill',
+        exportAudioPreset: 'off'
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 321,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        execFile: (bin, args, opts, cb) => {
+          execCalls.push({ bin, args, opts });
+          cb(null, '', '');
+        }
+      }
+    );
+
+    const argString = execCalls[0].args.join(' ');
+    expect(argString).toContain('[screen_raw][audio_out]');
+    expect(argString).toContain('-map [audio_out]');
+    expect(argString).not.toContain('acompressor=');
+    expect(argString).not.toContain('[audio_final]');
+  });
+
+  test('renderComposite applies compressor filter when export audio preset is compressed', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-audio-compressed-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+
+    const execCalls = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        takes: [{ id: 'take-1', screenPath, cameraPath: null }],
+        sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.25 }],
+        keyframes: [{ time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }],
+        pipSize: 300,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill',
+        exportAudioPreset: 'compressed'
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 654,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        execFile: (bin, args, opts, cb) => {
+          execCalls.push({ bin, args, opts });
+          cb(null, '', '');
+        }
+      }
+    );
+
+    const argString = execCalls[0].args.join(' ');
+    expect(argString).toContain('[audio_out]acompressor=');
+    expect(argString).toContain('[audio_final]');
+    expect(argString).toContain('-map [audio_final]');
   });
 
   test('renderComposite applies section zoom to background only', async () => {

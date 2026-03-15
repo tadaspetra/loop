@@ -2,7 +2,12 @@ const path = require('path');
 const { execFile } = require('child_process');
 
 const { fs, ensureDirectory } = require('../infra/file-system');
-const { normalizeBackgroundZoom, normalizeBackgroundPan } = require('../../shared/domain/project');
+const {
+  normalizeBackgroundZoom,
+  normalizeBackgroundPan,
+  normalizeExportAudioPreset,
+  EXPORT_AUDIO_PRESET_COMPRESSED
+} = require('../../shared/domain/project');
 const { chooseRenderFps, probeVideoFpsWithFfmpeg } = require('./fps-service');
 const { buildFilterComplex, buildScreenFilter } = require('./render-filter-service');
 
@@ -34,12 +39,22 @@ function assertFilePath(filePath, label) {
   }
 }
 
+function buildExportAudioLabel(exportAudioPreset) {
+  if (exportAudioPreset !== EXPORT_AUDIO_PRESET_COMPRESSED) {
+    return 'audio_out';
+  }
+
+  // Keep the first preset conservative so dialog remains natural while peaks get leveled.
+  return 'audio_final';
+}
+
 async function renderComposite(opts = {}, deps = {}) {
   const takes = Array.isArray(opts.takes) ? opts.takes : [];
   const sections = normalizeSectionInput(opts.sections);
   const keyframes = Array.isArray(opts.keyframes) ? opts.keyframes : [];
   const pipSize = Number.isFinite(Number(opts.pipSize)) ? Number(opts.pipSize) : 422;
   const screenFitMode = opts.screenFitMode === 'fit' ? 'fit' : 'fill';
+  const exportAudioPreset = normalizeExportAudioPreset(opts.exportAudioPreset);
   const sourceWidth = Number.isFinite(Number(opts.sourceWidth)) ? Number(opts.sourceWidth) : 1920;
   const sourceHeight = Number.isFinite(Number(opts.sourceHeight)) ? Number(opts.sourceHeight) : 1080;
   const outputFolder = typeof opts.outputFolder === 'string' ? opts.outputFolder : '';
@@ -128,6 +143,12 @@ async function renderComposite(opts = {}, deps = {}) {
 
   const screenLabels = sections.map((_, index) => `[sv${index}][sa${index}]`).join('');
   filterParts.push(`${screenLabels}concat=n=${sections.length}:v=1:a=1[screen_raw][audio_out]`);
+  const exportAudioLabel = buildExportAudioLabel(exportAudioPreset);
+  if (exportAudioLabel === 'audio_final') {
+    filterParts.push(
+      '[audio_out]acompressor=threshold=0.125:ratio=3:attack=20:release=250:makeup=1.5[audio_final]'
+    );
+  }
 
   if (hasCamera) {
     for (let i = 0; i < sections.length; i += 1) {
@@ -176,7 +197,7 @@ async function renderComposite(opts = {}, deps = {}) {
   }
 
   filterParts.push(`[out]fps=fps=${targetFps}:round=near[out_cfr]`);
-  args.push('-filter_complex', filterParts.join(';'), '-map', '[out_cfr]', '-map', '[audio_out]');
+  args.push('-filter_complex', filterParts.join(';'), '-map', '[out_cfr]', '-map', `[${exportAudioLabel}]`);
   args.push(
     '-r',
     String(targetFps),
