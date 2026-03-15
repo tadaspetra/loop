@@ -172,6 +172,22 @@ import {
       };
     }
 
+    function panToFocusCoord(zoom, pan, defaultCoord = 0.5) {
+      const normalizedZoom = clampSectionZoom(zoom);
+      if (normalizedZoom <= 1.0001) return defaultCoord;
+      const cropFraction = 1 / normalizedZoom;
+      return cropFraction / 2 + ((clampSectionPan(pan) + 1) / 2) * (1 - cropFraction);
+    }
+
+    function focusToPanCoord(zoom, focus, defaultPan = 0) {
+      const normalizedZoom = clampSectionZoom(zoom);
+      if (normalizedZoom <= 1.0001) return defaultPan;
+      const cropFraction = 1 / normalizedZoom;
+      const availableFraction = 1 - cropFraction;
+      if (availableFraction <= 0.000001) return defaultPan;
+      return clampSectionPan((((focus - cropFraction / 2) / availableFraction) * 2) - 1);
+    }
+
     const TRANSITION_DURATION = 0.3;
     const CAMERA_DRIFT_SOFT_THRESHOLD = 0.015;
     const CAMERA_DRIFT_HARD_THRESHOLD = 0.18;
@@ -1471,7 +1487,7 @@ import {
       targetCtx.restore();
     }
 
-    function drawEditorScreenWithZoom(targetCtx, video, fitMode, backgroundZoom, backgroundPanX = 0, backgroundPanY = 0) {
+    function drawEditorScreenWithZoom(targetCtx, video, fitMode, backgroundZoom, backgroundPanX = 0, backgroundPanY = 0, backgroundFocusX = null, backgroundFocusY = null) {
       if (!editorZoomBufferCtx) return;
       const zoom = clampSectionZoom(backgroundZoom);
       const drawBase = fitMode === 'fill' ? drawFill : drawFit;
@@ -1485,7 +1501,11 @@ import {
       editorZoomBufferCtx.fillRect(0, 0, CANVAS_W, CANVAS_H);
       drawBase(editorZoomBufferCtx, video, 0, 0, CANVAS_W, CANVAS_H);
 
-      const { sourceW, sourceH, sourceX, sourceY } = resolveZoomCrop(zoom, backgroundPanX, backgroundPanY);
+      const { sourceW, sourceH } = resolveZoomCrop(zoom, backgroundPanX, backgroundPanY);
+      const focusX = backgroundFocusX ?? panToFocusCoord(zoom, backgroundPanX, 0.5);
+      const focusY = backgroundFocusY ?? panToFocusCoord(zoom, backgroundPanY, 0.5);
+      const sourceX = Math.max(0, Math.min(CANVAS_W - sourceW, focusX * CANVAS_W - sourceW / 2));
+      const sourceY = Math.max(0, Math.min(CANVAS_H - sourceH, focusY * CANVAS_H - sourceH / 2));
       targetCtx.drawImage(
         editorZoomBuffer,
         sourceX,
@@ -2431,6 +2451,8 @@ import {
       let backgroundZoom = clampSectionZoom(active.backgroundZoom);
       let backgroundPanX = clampSectionPan(active.backgroundPanX);
       let backgroundPanY = clampSectionPan(active.backgroundPanY);
+      let backgroundFocusX = panToFocusCoord(backgroundZoom, backgroundPanX, 0.5);
+      let backgroundFocusY = panToFocusCoord(backgroundZoom, backgroundPanY, 0.5);
 
       // Transition toward next keyframe at end of current section
       if (next) {
@@ -2475,12 +2497,12 @@ import {
           if (Math.abs(backgroundZoom - clampSectionZoom(next.backgroundZoom)) > 0.0001) {
             backgroundZoom = backgroundZoom + (clampSectionZoom(next.backgroundZoom) - backgroundZoom) * t;
           }
-          if (Math.abs(backgroundPanX - clampSectionPan(next.backgroundPanX)) > 0.0001) {
-            backgroundPanX = backgroundPanX + (clampSectionPan(next.backgroundPanX) - backgroundPanX) * t;
-          }
-          if (Math.abs(backgroundPanY - clampSectionPan(next.backgroundPanY)) > 0.0001) {
-            backgroundPanY = backgroundPanY + (clampSectionPan(next.backgroundPanY) - backgroundPanY) * t;
-          }
+          const nextFocusX = panToFocusCoord(next.backgroundZoom, next.backgroundPanX, 0.5);
+          const nextFocusY = panToFocusCoord(next.backgroundZoom, next.backgroundPanY, 0.5);
+          backgroundFocusX = backgroundFocusX + (nextFocusX - backgroundFocusX) * t;
+          backgroundFocusY = backgroundFocusY + (nextFocusY - backgroundFocusY) * t;
+          backgroundPanX = focusToPanCoord(backgroundZoom, backgroundFocusX, backgroundPanX);
+          backgroundPanY = focusToPanCoord(backgroundZoom, backgroundFocusY, backgroundPanY);
         }
       }
 
@@ -2493,7 +2515,9 @@ import {
         camTransition,
         backgroundZoom,
         backgroundPanX,
-        backgroundPanY
+        backgroundPanY,
+        backgroundFocusX,
+        backgroundFocusY
       };
     }
 
@@ -2746,7 +2770,9 @@ import {
           editorState.screenFitMode,
           state.backgroundZoom,
           state.backgroundPanX,
-          state.backgroundPanY
+          state.backgroundPanY,
+          state.backgroundFocusX,
+          state.backgroundFocusY
         );
       }
 

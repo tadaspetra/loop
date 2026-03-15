@@ -32,6 +32,14 @@ function buildNumericExpr(keyframes, prop, precision = 3, defaultValue = 0, time
   return expr;
 }
 
+function panToFocusCoord(zoom, pan, defaultCoord = 0.5) {
+  const normalizedZoom = Number.isFinite(Number(zoom)) ? Number(zoom) : 1;
+  const normalizedPan = Number.isFinite(Number(pan)) ? Number(pan) : 0;
+  if (normalizedZoom <= 1.0001) return defaultCoord;
+  const cropFraction = 1 / normalizedZoom;
+  return cropFraction / 2 + ((normalizedPan + 1) / 2) * (1 - cropFraction);
+}
+
 function buildPosExpr(keyframes, prop) {
   if (keyframes.length === 1) return String(Math.round(keyframes[0][prop]));
 
@@ -127,7 +135,9 @@ function buildScreenFilter(
     ...keyframe,
     backgroundZoom: Number.isFinite(Number(keyframe?.backgroundZoom)) ? Number(keyframe.backgroundZoom) : 1,
     backgroundPanX: Number.isFinite(Number(keyframe?.backgroundPanX)) ? Number(keyframe.backgroundPanX) : 0,
-    backgroundPanY: Number.isFinite(Number(keyframe?.backgroundPanY)) ? Number(keyframe.backgroundPanY) : 0
+    backgroundPanY: Number.isFinite(Number(keyframe?.backgroundPanY)) ? Number(keyframe.backgroundPanY) : 0,
+    backgroundFocusX: panToFocusCoord(keyframe?.backgroundZoom, keyframe?.backgroundPanX, 0.5),
+    backgroundFocusY: panToFocusCoord(keyframe?.backgroundZoom, keyframe?.backgroundPanY, 0.5)
   }));
 
   const baseFilter =
@@ -148,9 +158,9 @@ function buildScreenFilter(
   }
 
   const zoomExpr = buildNumericExpr(normalizedKeyframes, 'backgroundZoom', 3, 1, 'it');
-  const panXExpr = buildNumericExpr(normalizedKeyframes, 'backgroundPanX', 3, 0, 'it');
-  const panYExpr = buildNumericExpr(normalizedKeyframes, 'backgroundPanY', 3, 0, 'it');
-  const animatedFilter = `[screen_base]zoompan=z='${zoomExpr}':x='(iw-iw/zoom)*((${panXExpr})+1)/2':y='(ih-ih/zoom)*((${panYExpr})+1)/2':d=1:s=${outW}x${outH}:fps=${targetFps},setsar=1${outputLabel}`;
+  const focusXExpr = buildNumericExpr(normalizedKeyframes, 'backgroundFocusX', 6, 0.5, 'it');
+  const focusYExpr = buildNumericExpr(normalizedKeyframes, 'backgroundFocusY', 6, 0.5, 'it');
+  const animatedFilter = `[screen_base]zoompan=z='${zoomExpr}':x='max(0,min(iw-iw/zoom,iw*(${focusXExpr})-iw/zoom/2))':y='max(0,min(ih-ih/zoom,ih*(${focusYExpr})-ih/zoom/2))':d=1:s=${outW}x${outH}:fps=${targetFps},setsar=1${outputLabel}`;
   return `${baseFilter};${animatedFilter}`;
 }
 
@@ -228,6 +238,7 @@ module.exports = {
   resolveOutputSize,
   buildNumericExpr,
   buildScreenFilter,
+  panToFocusCoord,
   buildPosExpr,
   buildAlphaExpr,
   buildCamFullAlphaExpr,

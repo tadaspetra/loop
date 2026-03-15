@@ -3,7 +3,8 @@ const {
   buildNumericExpr,
   buildAlphaExpr,
   buildCamFullAlphaExpr,
-  buildFilterComplex
+  buildFilterComplex,
+  panToFocusCoord
 } = require('../../src/main/services/render-filter-service');
 
 describe('main/services/render-filter-service', () => {
@@ -80,6 +81,12 @@ describe('main/services/render-filter-service', () => {
     expect(expr).toContain('if(gte(it,1.700),1.000+1.000*(it-1.700)/0.300');
   });
 
+  test('panToFocusCoord converts section pan into focus position', () => {
+    expect(panToFocusCoord(1, 1)).toBe(0.5);
+    expect(panToFocusCoord(2, 1)).toBe(0.75);
+    expect(panToFocusCoord(2, -1)).toBe(0.25);
+  });
+
   test('buildFilterComplex returns overlay pipeline string', () => {
     const filter = buildFilterComplex(
       [
@@ -97,7 +104,7 @@ describe('main/services/render-filter-service', () => {
     expect(filter).toContain('[cam]');
     expect(filter).toContain('overlay');
     expect(filter).toContain("zoompan=z='if(gte(it,2.000),2.000");
-    expect(filter).toContain(":x='(iw-iw/zoom)*((if(gte(it,2.000),1.000");
+    expect(filter).toContain(":x='max(0,min(iw-iw/zoom,iw*(if(gte(it,2.000),0.750000");
   });
 
   test('buildFilterComplex can skip screen scaling when preprocessed', () => {

@@ -176,7 +176,7 @@ describe('main/services/render-service', () => {
     );
 
     const argString = execCalls[0].args.join(' ');
-    expect(argString).toContain("zoompan=z='2.000':x='(iw-iw/zoom)*((1.000)+1)/2':y='(ih-ih/zoom)*((-1.000)+1)/2'");
+    expect(argString).toContain("zoompan=z='2.000':x='max(0,min(iw-iw/zoom,iw*(0.750000)-iw/zoom/2))':y='max(0,min(ih-ih/zoom,ih*(0.250000)-ih/zoom/2))'");
   });
 
   test('renderComposite animates background zoom and pan through section boundaries', async () => {
