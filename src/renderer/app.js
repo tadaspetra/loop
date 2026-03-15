@@ -11,6 +11,11 @@ import {
   normalizeTakeSections,
   attachSectionTranscripts
 } from './features/timeline/section-utils.js';
+import {
+  generateSectionId,
+  reindexSections,
+  buildSplitAnchorKeyframe
+} from './features/timeline/keyframe-ops.js';
 
     const projectHomeView = document.getElementById('projectHomeView');
     const workspaceHeader = document.getElementById('workspaceHeader');
@@ -1793,16 +1798,15 @@ import {
         return;
       }
 
-      // Remap manual keyframes
-      const manualKeyframes = remapManualKeyframesAfterSectionDelete(editorState.keyframes, selectedSection);
-      editorState.keyframes = manualKeyframes;
+      // Remove deleted section's anchor, keep remaining anchors, remap manual keyframes
+      const remainingAnchors = editorState.keyframes.filter(
+        kf => kf.sectionId && kf.sectionId !== selectedSection.id
+      );
+      const remappedManual = remapManualKeyframesAfterSectionDelete(editorState.keyframes, selectedSection);
+      editorState.keyframes = [...remainingAnchors, ...remappedManual];
 
-      // Re-index sections
-      for (let i = 0; i < editorState.sections.length; i++) {
-        editorState.sections[i].id = `section-${i + 1}`;
-        editorState.sections[i].index = i;
-        editorState.sections[i].label = `Section ${i + 1}`;
-      }
+      // Update indices and labels only — keep existing IDs stable
+      reindexSections(editorState.sections);
 
       recalculateTimelinePositions();
       syncSectionAnchorKeyframes();
@@ -1834,17 +1838,10 @@ import {
       const sectionIndex = editorState.sections.findIndex(s => s.id === section.id);
       if (sectionIndex < 0) return;
 
-      // Save camera state for all sections by their current position
-      const savedStates = editorState.sections.map(s => {
-        const kf = editorState.keyframes.find(k => k.sectionId === s.id);
-        return kf ? { pipX: kf.pipX, pipY: kf.pipY, pipVisible: kf.pipVisible, cameraFullscreen: kf.cameraFullscreen } : null;
-      });
-
-      const manualKeyframes = editorState.keyframes.filter(kf => !kf.sectionId);
-
       // Split: modify original in place (becomes left half), insert new right half
+      const newSectionId = generateSectionId();
       const rightSection = {
-        id: 'temp', index: 0, label: 'temp',
+        id: newSectionId, index: 0, label: 'temp',
         start: 0, end: 0, duration: 0,
         sourceStart: sourceTime,
         sourceEnd: section.sourceEnd,
@@ -1855,38 +1852,20 @@ import {
       section.sourceEnd = sourceTime;
       editorState.sections.splice(sectionIndex + 1, 0, rightSection);
 
-      // Re-index all sections
-      for (let i = 0; i < editorState.sections.length; i++) {
-        editorState.sections[i].id = `section-${i + 1}`;
-        editorState.sections[i].index = i;
-        editorState.sections[i].label = `Section ${i + 1}`;
-      }
+      // Update indices and labels only — keep existing IDs stable
+      reindexSections(editorState.sections);
 
       recalculateTimelinePositions();
 
-      // Rebuild section anchors preserving correct camera states
-      const newAnchors = editorState.sections.map((s, i) => {
-        let state;
-        if (i <= sectionIndex) {
-          state = savedStates[i];
-        } else if (i === sectionIndex + 1) {
-          state = savedStates[sectionIndex]; // Right half inherits from original
-        } else {
-          state = savedStates[i - 1]; // Shifted by 1
-        }
-        return {
-          time: s.start,
-          pipX: state?.pipX ?? editorState.defaultPipX,
-          pipY: state?.pipY ?? editorState.defaultPipY,
-          pipVisible: state?.pipVisible ?? true,
-          cameraFullscreen: state?.cameraFullscreen ?? false,
-          sectionId: s.id,
-          autoSection: true
-        };
-      });
+      // Add one anchor keyframe for the new right-half section (inherits from parent)
+      const newAnchor = buildSplitAnchorKeyframe(
+        editorState.keyframes, section.id, newSectionId,
+        rightSection.start, { pipX: editorState.defaultPipX, pipY: editorState.defaultPipY }
+      );
+      editorState.keyframes.push(newAnchor);
+      editorState.keyframes.sort((a, b) => a.time - b.time);
 
-      editorState.keyframes = [...newAnchors, ...manualKeyframes].sort((a, b) => a.time - b.time);
-      editorState.selectedSectionId = editorState.sections[sectionIndex + 1].id;
+      editorState.selectedSectionId = newSectionId;
 
       renderSectionMarkers();
       refreshWaveform();
