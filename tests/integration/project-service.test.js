@@ -69,7 +69,20 @@ describe('main/services/project-service integration', () => {
         timeline: {
           duration: 2.5,
           sections: [{ start: 0, end: 2.5, sourceStart: 0, sourceEnd: 2.5, takeId: 'take-1' }],
-          keyframes: [],
+          keyframes: [
+            {
+              time: 0,
+              pipX: 40,
+              pipY: 50,
+              pipVisible: true,
+              cameraFullscreen: false,
+              backgroundZoom: 2.2,
+              backgroundPanX: 0.3,
+              backgroundPanY: -0.4,
+              sectionId: 'section-1',
+              autoSection: true
+            }
+          ],
           selectedSectionId: null,
           hasCamera: true,
           sourceWidth: 1920,
@@ -85,10 +98,16 @@ describe('main/services/project-service integration', () => {
     );
     expect(raw.takes[0].screenPath).toBe('screen.webm');
     expect(raw.takes[0].cameraPath).toBe('camera.webm');
+    expect(raw.timeline.keyframes[0].backgroundZoom).toBe(2.2);
+    expect(raw.timeline.keyframes[0].backgroundPanX).toBe(0.3);
+    expect(raw.timeline.keyframes[0].backgroundPanY).toBe(-0.4);
 
     const opened = service.openProject(created.projectPath);
     expect(opened.project.takes[0].screenPath).toBe(screenPath);
     expect(opened.project.timeline.sections).toHaveLength(1);
+    expect(opened.project.timeline.keyframes[0].backgroundZoom).toBe(2.2);
+    expect(opened.project.timeline.keyframes[0].backgroundPanX).toBe(0.3);
+    expect(opened.project.timeline.keyframes[0].backgroundPanY).toBe(-0.4);
   });
 
   test('recovery take lifecycle persists and clears payload', () => {

@@ -51,4 +51,21 @@ describe('main/services/render-filter-service', () => {
     expect(filter).toContain('[cam]');
     expect(filter).toContain('overlay');
   });
+
+  test('buildFilterComplex can skip screen scaling when preprocessed', () => {
+    const filter = buildFilterComplex(
+      [
+        { time: 0, pipX: 100, pipY: 100, pipVisible: true, cameraFullscreen: false },
+        { time: 2, pipX: 120, pipY: 120, pipVisible: true, cameraFullscreen: false }
+      ],
+      320,
+      'fill',
+      1920,
+      1080,
+      1920,
+      1080,
+      true
+    );
+    expect(filter).toContain('[0:v]setpts=PTS-STARTPTS[screen]');
+  });
 });

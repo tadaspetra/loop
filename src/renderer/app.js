@@ -65,6 +65,8 @@ import {
     const editorSplitBtn = document.getElementById('editorSplitBtn');
     const editorToggleCamBtn = document.getElementById('editorToggleCamBtn');
     const editorCamFullBtn = document.getElementById('editorCamFullBtn');
+    const editorBgZoomInput = document.getElementById('editorBgZoomInput');
+    const editorBgZoomValue = document.getElementById('editorBgZoomValue');
     const editorApplyFutureBtn = document.getElementById('editorApplyFutureBtn');
     const editorTimeEl = document.getElementById('editorTime');
     const editorTimelineWrapper = document.getElementById('editorTimelineWrapper');
@@ -110,6 +112,11 @@ import {
     const PIP_FRACTION = 0.22;
     const PIP_MARGIN = 20;
     const PIP_SIZE = Math.round(CANVAS_W * PIP_FRACTION);
+    const MIN_SECTION_ZOOM = 1;
+    const MAX_SECTION_ZOOM = 3;
+    const DEFAULT_SECTION_ZOOM = 1;
+    const MIN_SECTION_PAN = -1;
+    const MAX_SECTION_PAN = 1;
 
     function snapToNearestCorner(cursorX, cursorY) {
       const midX = CANVAS_W / 2;
@@ -119,6 +126,47 @@ import {
         y: cursorY < midY ? PIP_MARGIN : CANVAS_H - PIP_SIZE - PIP_MARGIN
       };
     }
+
+    function clampSectionZoom(value) {
+      const zoom = Number(value);
+      if (!Number.isFinite(zoom)) return DEFAULT_SECTION_ZOOM;
+      return Math.max(MIN_SECTION_ZOOM, Math.min(MAX_SECTION_ZOOM, zoom));
+    }
+
+    function formatSectionZoom(value) {
+      return `${clampSectionZoom(value).toFixed(2)}x`;
+    }
+
+    function clampSectionPan(value) {
+      const pan = Number(value);
+      if (!Number.isFinite(pan)) return 0;
+      return Math.max(MIN_SECTION_PAN, Math.min(MAX_SECTION_PAN, pan));
+    }
+
+    function getZoomCropBounds(zoom) {
+      const clampedZoom = clampSectionZoom(zoom);
+      const sourceW = CANVAS_W / clampedZoom;
+      const sourceH = CANVAS_H / clampedZoom;
+      return {
+        sourceW,
+        sourceH,
+        maxOffsetX: Math.max(0, (CANVAS_W - sourceW) / 2),
+        maxOffsetY: Math.max(0, (CANVAS_H - sourceH) / 2)
+      };
+    }
+
+    function resolveZoomCrop(zoom, panX = 0, panY = 0) {
+      const { sourceW, sourceH, maxOffsetX, maxOffsetY } = getZoomCropBounds(zoom);
+      return {
+        sourceW,
+        sourceH,
+        sourceX: maxOffsetX + clampSectionPan(panX) * maxOffsetX,
+        sourceY: maxOffsetY + clampSectionPan(panY) * maxOffsetY,
+        maxOffsetX,
+        maxOffsetY
+      };
+    }
+
     const TRANSITION_DURATION = 0.3;
     const CAMERA_DRIFT_SOFT_THRESHOLD = 0.015;
     const CAMERA_DRIFT_HARD_THRESHOLD = 0.18;
@@ -145,12 +193,20 @@ import {
     let waveformPeaks = null;
     let timelineZoom = 1;
     let trimDragState = null;
+    let sectionZoomDragActive = false;
+    let draggingBackground = false;
+    let backgroundDragMoved = false;
+    let backgroundDragState = null;
     let takeAudioBufferCache = new Map(); // takeId -> AudioBuffer
     let takeVideoPool = new Map(); // takeId -> { screen: HTMLVideoElement, camera: HTMLVideoElement|null }
     let activeTakeId = null;
     let activePlaybackSection = null;
     let cameraResyncCooldownUntil = 0;
     let lastCameraDriftLogAt = 0;
+    const editorZoomBuffer = document.createElement('canvas');
+    editorZoomBuffer.width = CANVAS_W;
+    editorZoomBuffer.height = CANVAS_H;
+    const editorZoomBufferCtx = editorZoomBuffer.getContext('2d');
 
     function getOrCreateTakeVideos(takeId) {
       if (takeVideoPool.has(takeId)) return takeVideoPool.get(takeId);
@@ -358,7 +414,14 @@ import {
       return {
         duration: Number(editorState.duration) || 0,
         sections: Array.isArray(editorState.sections) ? editorState.sections.map(section => ({ ...section })) : [],
-        keyframes: Array.isArray(editorState.keyframes) ? editorState.keyframes.map(kf => ({ ...kf })) : [],
+        keyframes: Array.isArray(editorState.keyframes)
+          ? editorState.keyframes.map(kf => ({
+            ...kf,
+            backgroundZoom: clampSectionZoom(kf.backgroundZoom),
+            backgroundPanX: clampSectionPan(kf.backgroundPanX),
+            backgroundPanY: clampSectionPan(kf.backgroundPanY)
+          }))
+          : [],
         selectedSectionId: editorState.selectedSectionId || null,
         hasCamera: !!editorState.hasCamera,
         sourceWidth: editorState.sourceWidth || null,
@@ -464,6 +527,7 @@ import {
       waveformPeaks = null;
       renderWaveform();
       renderSectionMarkers();
+      updateSectionZoomControls();
       updateWorkspaceHeader();
       updateUndoRedoButtons();
     }
@@ -485,6 +549,7 @@ import {
       recalculateTimelinePositions();
       syncSectionAnchorKeyframes();
       renderSectionMarkers();
+      updateSectionZoomControls();
       refreshWaveform();
       editorSeek(Math.min(editorState.currentTime, editorState.duration));
       updateUndoRedoButtons();
@@ -664,6 +729,31 @@ import {
       return editorState.sections.find(section => section.id === editorState.selectedSectionId) || editorState.sections[0];
     }
 
+    function getSectionBackgroundZoom(sectionId) {
+      if (!editorState || !sectionId) return DEFAULT_SECTION_ZOOM;
+      const anchor = editorState.keyframes.find(kf => kf.sectionId === sectionId);
+      return clampSectionZoom(anchor?.backgroundZoom);
+    }
+
+    function getSectionBackgroundPan(sectionId) {
+      if (!editorState || !sectionId) return { x: 0, y: 0 };
+      const anchor = editorState.keyframes.find(kf => kf.sectionId === sectionId);
+      return {
+        x: clampSectionPan(anchor?.backgroundPanX),
+        y: clampSectionPan(anchor?.backgroundPanY)
+      };
+    }
+
+    function updateSectionZoomControls() {
+      if (!editorBgZoomInput || !editorBgZoomValue) return;
+      const selectedSection = getSelectedSection();
+      const disabled = !editorState || editorState.rendering || !selectedSection;
+      const zoom = selectedSection ? getSectionBackgroundZoom(selectedSection.id) : DEFAULT_SECTION_ZOOM;
+      editorBgZoomInput.disabled = disabled;
+      editorBgZoomInput.value = String(zoom);
+      editorBgZoomValue.textContent = formatSectionZoom(zoom);
+    }
+
     function getSectionAnchorKeyframe(sectionId, createIfMissing) {
       if (!editorState || !sectionId) return null;
 
@@ -680,6 +770,9 @@ import {
         pipY: fallback.pipY,
         pipVisible: fallback.pipVisible,
         cameraFullscreen: fallback.cameraFullscreen || false,
+        backgroundZoom: clampSectionZoom(fallback.backgroundZoom),
+        backgroundPanX: clampSectionPan(fallback.backgroundPanX),
+        backgroundPanY: clampSectionPan(fallback.backgroundPanY),
         sectionId: section.id,
         autoSection: true
       };
@@ -691,7 +784,14 @@ import {
     function syncSectionAnchorKeyframes() {
       if (!editorState || !editorState.sections || editorState.sections.length === 0) return;
 
-      const manual = editorState.keyframes.filter(kf => !kf.sectionId);
+      const manual = editorState.keyframes
+        .filter(kf => !kf.sectionId)
+        .map(kf => ({
+          ...kf,
+          backgroundZoom: clampSectionZoom(kf.backgroundZoom),
+          backgroundPanX: clampSectionPan(kf.backgroundPanX),
+          backgroundPanY: clampSectionPan(kf.backgroundPanY)
+        }));
       const sectionAnchors = editorState.sections.map((section) => {
         const existing = editorState.keyframes.find(kf => kf.sectionId === section.id);
         return {
@@ -700,6 +800,9 @@ import {
           pipY: existing ? existing.pipY : editorState.defaultPipY,
           pipVisible: existing ? existing.pipVisible : true,
           cameraFullscreen: existing ? !!existing.cameraFullscreen : false,
+          backgroundZoom: existing ? clampSectionZoom(existing.backgroundZoom) : DEFAULT_SECTION_ZOOM,
+          backgroundPanX: existing ? clampSectionPan(existing.backgroundPanX) : 0,
+          backgroundPanY: existing ? clampSectionPan(existing.backgroundPanY) : 0,
           sectionId: section.id,
           autoSection: true
         };
@@ -715,8 +818,10 @@ import {
     function selectEditorSection(sectionId) {
       if (!editorState || !editorState.sections || editorState.sections.length === 0) return;
       if (!editorState.sections.some(section => section.id === sectionId)) return;
+      commitSectionZoomChange();
       editorState.selectedSectionId = sectionId;
       renderSectionMarkers();
+      updateSectionZoomControls();
       updateEditorTimeDisplay();
       scheduleProjectSave();
     }
@@ -743,9 +848,13 @@ import {
         anchor.pipY = currentAnchor.pipY;
         anchor.pipVisible = currentAnchor.pipVisible;
         anchor.cameraFullscreen = currentAnchor.cameraFullscreen;
+        anchor.backgroundZoom = clampSectionZoom(currentAnchor.backgroundZoom);
+        anchor.backgroundPanX = clampSectionPan(currentAnchor.backgroundPanX);
+        anchor.backgroundPanY = clampSectionPan(currentAnchor.backgroundPanY);
       }
 
       renderSectionMarkers();
+      updateSectionZoomControls();
       editorSeek(editorState.currentTime);
       updateEditorTimeDisplay();
       scheduleProjectSave();
@@ -1063,7 +1172,10 @@ import {
         pipX: kf.pipX,
         pipY: kf.pipY,
         pipVisible: kf.pipVisible,
-        cameraFullscreen: !!kf.cameraFullscreen
+        cameraFullscreen: !!kf.cameraFullscreen,
+        backgroundZoom: clampSectionZoom(kf.backgroundZoom),
+        backgroundPanX: clampSectionPan(kf.backgroundPanX),
+        backgroundPanY: clampSectionPan(kf.backgroundPanY)
       }));
 
       if (minimal.length === 0 || minimal[0].time > 0.0001) {
@@ -1072,11 +1184,32 @@ import {
           pipX: editorState.defaultPipX,
           pipY: editorState.defaultPipY,
           pipVisible: true,
-          cameraFullscreen: false
+          cameraFullscreen: false,
+          backgroundZoom: DEFAULT_SECTION_ZOOM,
+          backgroundPanX: 0,
+          backgroundPanY: 0
         });
       }
 
       return minimal;
+    }
+
+    function getRenderSections() {
+      if (!editorState) return [];
+      if (editorState.sections && editorState.sections.length > 0) {
+        syncSectionAnchorKeyframes();
+      }
+      return editorState.sections.map((section) => {
+        const anchor = getSectionAnchorKeyframe(section.id, true);
+        return {
+          takeId: section.takeId,
+          sourceStart: section.sourceStart,
+          sourceEnd: section.sourceEnd,
+          backgroundZoom: clampSectionZoom(anchor?.backgroundZoom),
+          backgroundPanX: clampSectionPan(anchor?.backgroundPanX),
+          backgroundPanY: clampSectionPan(anchor?.backgroundPanY)
+        };
+      });
     }
 
     // ===== Shared drawPip function =====
@@ -1331,6 +1464,34 @@ import {
       targetCtx.clip();
       targetCtx.drawImage(video, dx, dy, dw, dh);
       targetCtx.restore();
+    }
+
+    function drawEditorScreenWithZoom(targetCtx, video, fitMode, backgroundZoom, backgroundPanX = 0, backgroundPanY = 0) {
+      if (!editorZoomBufferCtx) return;
+      const zoom = clampSectionZoom(backgroundZoom);
+      const drawBase = fitMode === 'fill' ? drawFill : drawFit;
+
+      if (zoom <= 1.0001) {
+        drawBase(targetCtx, video, 0, 0, CANVAS_W, CANVAS_H);
+        return;
+      }
+
+      editorZoomBufferCtx.fillStyle = '#000';
+      editorZoomBufferCtx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+      drawBase(editorZoomBufferCtx, video, 0, 0, CANVAS_W, CANVAS_H);
+
+      const { sourceW, sourceH, sourceX, sourceY } = resolveZoomCrop(zoom, backgroundPanX, backgroundPanY);
+      targetCtx.drawImage(
+        editorZoomBuffer,
+        sourceX,
+        sourceY,
+        sourceW,
+        sourceH,
+        0,
+        0,
+        CANVAS_W,
+        CANVAS_H
+      );
     }
 
     // Audio level meter
@@ -1726,7 +1887,10 @@ import {
           pipX: keyframe.pipX,
           pipY: keyframe.pipY,
           pipVisible: keyframe.pipVisible !== false,
-          cameraFullscreen: !!keyframe.cameraFullscreen
+          cameraFullscreen: !!keyframe.cameraFullscreen,
+          backgroundZoom: clampSectionZoom(keyframe.backgroundZoom),
+          backgroundPanX: clampSectionPan(keyframe.backgroundPanX),
+          backgroundPanY: clampSectionPan(keyframe.backgroundPanY)
         });
       }
       return anchors;
@@ -1837,7 +2001,17 @@ import {
       // Save camera state for all sections by their current position
       const savedStates = editorState.sections.map(s => {
         const kf = editorState.keyframes.find(k => k.sectionId === s.id);
-        return kf ? { pipX: kf.pipX, pipY: kf.pipY, pipVisible: kf.pipVisible, cameraFullscreen: kf.cameraFullscreen } : null;
+        return kf
+          ? {
+            pipX: kf.pipX,
+            pipY: kf.pipY,
+            pipVisible: kf.pipVisible,
+            cameraFullscreen: kf.cameraFullscreen,
+            backgroundZoom: clampSectionZoom(kf.backgroundZoom),
+            backgroundPanX: clampSectionPan(kf.backgroundPanX),
+            backgroundPanY: clampSectionPan(kf.backgroundPanY)
+          }
+          : null;
       });
 
       const manualKeyframes = editorState.keyframes.filter(kf => !kf.sectionId);
@@ -1880,6 +2054,9 @@ import {
           pipY: state?.pipY ?? editorState.defaultPipY,
           pipVisible: state?.pipVisible ?? true,
           cameraFullscreen: state?.cameraFullscreen ?? false,
+          backgroundZoom: clampSectionZoom(state?.backgroundZoom),
+          backgroundPanX: clampSectionPan(state?.backgroundPanX),
+          backgroundPanY: clampSectionPan(state?.backgroundPanY),
           sectionId: s.id,
           autoSection: true
         };
@@ -1959,6 +2136,9 @@ import {
         pipY: carryState.pipY,
         pipVisible: carryState.pipVisible,
         cameraFullscreen: !!carryState.cameraFullscreen,
+        backgroundZoom: clampSectionZoom(carryState.backgroundZoom),
+        backgroundPanX: clampSectionPan(carryState.backgroundPanX),
+        backgroundPanY: clampSectionPan(carryState.backgroundPanY),
         sectionId: section.id,
         autoSection: true
       }));
@@ -2163,12 +2343,20 @@ import {
         pipY: defaultPipY,
         pipVisible: true,
         cameraFullscreen: false,
+        backgroundZoom: DEFAULT_SECTION_ZOOM,
+        backgroundPanX: 0,
+        backgroundPanY: 0,
         sectionId: section.id,
         autoSection: true
       }));
 
       const providedKeyframes = Array.isArray(opts.keyframes) && opts.keyframes.length > 0
-        ? opts.keyframes.map(kf => ({ ...kf }))
+        ? opts.keyframes.map(kf => ({
+          ...kf,
+          backgroundZoom: clampSectionZoom(kf.backgroundZoom),
+          backgroundPanX: clampSectionPan(kf.backgroundPanX),
+          backgroundPanY: clampSectionPan(kf.backgroundPanY)
+        }))
         : null;
       const keyframes = (providedKeyframes || sectionKeyframes).sort((a, b) => a.time - b.time);
 
@@ -2191,6 +2379,7 @@ import {
         sourceHeight: opts.sourceHeight || null
       };
       screenFitSelect.value = editorState.screenFitMode === 'fit' ? 'fit' : 'fill';
+      updateSectionZoomControls();
 
       // Pre-create video elements for all referenced takes
       const referencedTakeIds = new Set(sections.map(s => s.takeId).filter(Boolean));
@@ -2245,7 +2434,16 @@ import {
     }
 
     function getStateAtTime(time) {
-      const defaultKf = { time: 0, pipX: editorState.defaultPipX, pipY: editorState.defaultPipY, pipVisible: true, cameraFullscreen: false };
+      const defaultKf = {
+        time: 0,
+        pipX: editorState.defaultPipX,
+        pipY: editorState.defaultPipY,
+        pipVisible: true,
+        cameraFullscreen: false,
+        backgroundZoom: DEFAULT_SECTION_ZOOM,
+        backgroundPanX: 0,
+        backgroundPanY: 0
+      };
       const userKfs = editorState.keyframes;
       const kfs = userKfs.length > 0 && userKfs[0].time === 0 ? userKfs : [defaultKf, ...userKfs];
 
@@ -2264,6 +2462,9 @@ import {
       let opacity = active.pipVisible ? 1 : 0;
       let cameraFullscreen = active.cameraFullscreen || false;
       let camTransition = cameraFullscreen ? 1 : 0;
+      const backgroundZoom = clampSectionZoom(active.backgroundZoom);
+      const backgroundPanX = clampSectionPan(active.backgroundPanX);
+      const backgroundPanY = clampSectionPan(active.backgroundPanY);
 
       // Unified transition from previous keyframe state (all animations at section boundary)
       if (prev) {
@@ -2304,7 +2505,17 @@ import {
         }
       }
 
-      return { pipX, pipY, pipVisible: opacity > 0, opacity, cameraFullscreen, camTransition };
+      return {
+        pipX,
+        pipY,
+        pipVisible: opacity > 0,
+        opacity,
+        cameraFullscreen,
+        camTransition,
+        backgroundZoom,
+        backgroundPanX,
+        backgroundPanY
+      };
     }
 
     function formatTime(seconds) {
@@ -2547,11 +2758,23 @@ import {
       const activeVideos = activeTakeId ? getOrCreateTakeVideos(activeTakeId) : null;
       const hasScreen = activeVideos && activeVideos.screen.videoWidth > 0;
       const hasCamera = editorState.hasCamera && activeVideos?.camera && activeVideos.camera.videoWidth > 0;
-
-      const drawScreenFn = editorState.screenFitMode === 'fill' ? drawFill : drawFit;
+      const activeSection = findSectionForTime(editorState.currentTime);
+      const backgroundZoom = activeSection
+        ? getSectionBackgroundZoom(activeSection.id)
+        : DEFAULT_SECTION_ZOOM;
+      const backgroundPan = activeSection
+        ? getSectionBackgroundPan(activeSection.id)
+        : { x: 0, y: 0 };
 
       if (hasScreen) {
-        drawScreenFn(editorCtx, activeVideos.screen, 0, 0, CANVAS_W, CANVAS_H);
+        drawEditorScreenWithZoom(
+          editorCtx,
+          activeVideos.screen,
+          editorState.screenFitMode,
+          backgroundZoom,
+          backgroundPan.x,
+          backgroundPan.y
+        );
       }
 
       if (hasCamera) {
@@ -2614,6 +2837,50 @@ import {
       scheduleProjectSave();
     }
 
+    function setSelectedSectionBackgroundZoom(nextZoom, opts = {}) {
+      if (!editorState || editorState.rendering) return false;
+      const pushHistory = opts.pushHistory === true;
+      const selectedSection = getSelectedSection();
+      if (!selectedSection) return false;
+      const anchor = getSectionAnchorKeyframe(selectedSection.id, true);
+      if (!anchor) return false;
+      const normalizedZoom = clampSectionZoom(nextZoom);
+      const currentZoom = clampSectionZoom(anchor.backgroundZoom);
+      if (Math.abs(normalizedZoom - currentZoom) < 0.0001) {
+        updateSectionZoomControls();
+        return false;
+      }
+      if (pushHistory) pushUndo();
+      anchor.backgroundZoom = normalizedZoom;
+      updateSectionZoomControls();
+      return true;
+    }
+
+    function setSectionBackgroundPan(sectionId, nextPanX, nextPanY) {
+      if (!editorState || editorState.rendering || !sectionId) return false;
+      const anchor = getSectionAnchorKeyframe(sectionId, true);
+      if (!anchor) return false;
+      const normalizedPanX = clampSectionPan(nextPanX);
+      const normalizedPanY = clampSectionPan(nextPanY);
+      const currentPanX = clampSectionPan(anchor.backgroundPanX);
+      const currentPanY = clampSectionPan(anchor.backgroundPanY);
+      if (
+        Math.abs(normalizedPanX - currentPanX) < 0.0001
+        && Math.abs(normalizedPanY - currentPanY) < 0.0001
+      ) {
+        return false;
+      }
+      anchor.backgroundPanX = normalizedPanX;
+      anchor.backgroundPanY = normalizedPanY;
+      return true;
+    }
+
+    function commitSectionZoomChange() {
+      if (!sectionZoomDragActive) return;
+      sectionZoomDragActive = false;
+      scheduleProjectSave();
+    }
+
     // ===== PiP drag-to-reposition =====
 
     function canvasToEditorCoords(clientX, clientY) {
@@ -2627,24 +2894,55 @@ import {
     }
 
     editorCanvas.addEventListener('mousedown', (e) => {
-      if (!editorState || editorState.rendering || !editorState.hasCamera) return;
+      if (!editorState || editorState.rendering) return;
       const activeSection = findSectionForTime(editorState.currentTime);
       if (activeSection) selectEditorSection(activeSection.id);
       const { x, y } = canvasToEditorCoords(e.clientX, e.clientY);
       const kf = getStateAtTime(editorState.currentTime);
-      if (!kf.pipVisible || kf.camTransition > 0) return;
-
-      const pipW = editorState.pipSize;
-      const pipH = editorState.pipSize;
-      if (x >= kf.pipX && x <= kf.pipX + pipW && y >= kf.pipY && y <= kf.pipY + pipH) {
-        pipDragMoved = false;
-        pushUndo();
-        draggingPip = true;
-        e.preventDefault();
+      if (editorState.hasCamera && kf.pipVisible && kf.camTransition <= 0) {
+        const pipW = editorState.pipSize;
+        const pipH = editorState.pipSize;
+        if (x >= kf.pipX && x <= kf.pipX + pipW && y >= kf.pipY && y <= kf.pipY + pipH) {
+          pipDragMoved = false;
+          pushUndo();
+          draggingPip = true;
+          e.preventDefault();
+          return;
+        }
       }
+
+      if (!activeSection || kf.backgroundZoom <= 1.0001 || (kf.cameraFullscreen && kf.opacity > 0)) return;
+      const initialPan = getSectionBackgroundPan(activeSection.id);
+      pushUndo();
+      backgroundDragMoved = false;
+      draggingBackground = true;
+      backgroundDragState = {
+        sectionId: activeSection.id,
+        startMouseX: x,
+        startMouseY: y,
+        startPanX: initialPan.x,
+        startPanY: initialPan.y,
+        zoom: kf.backgroundZoom
+      };
+      e.preventDefault();
     });
 
     window.addEventListener('mousemove', (e) => {
+      if (draggingBackground && editorState && backgroundDragState) {
+        const { x, y } = canvasToEditorCoords(e.clientX, e.clientY);
+        const deltaX = x - backgroundDragState.startMouseX;
+        const deltaY = y - backgroundDragState.startMouseY;
+        const { maxOffsetX, maxOffsetY } = getZoomCropBounds(backgroundDragState.zoom);
+        const nextPanX = maxOffsetX > 0
+          ? backgroundDragState.startPanX - (deltaX / maxOffsetX)
+          : 0;
+        const nextPanY = maxOffsetY > 0
+          ? backgroundDragState.startPanY - (deltaY / maxOffsetY)
+          : 0;
+        backgroundDragMoved = setSectionBackgroundPan(backgroundDragState.sectionId, nextPanX, nextPanY) || backgroundDragMoved;
+        return;
+      }
+
       if (!draggingPip || !editorState) return;
       pipDragMoved = true;
       const { x, y } = canvasToEditorCoords(e.clientX, e.clientY);
@@ -2662,6 +2960,19 @@ import {
     });
 
     window.addEventListener('mouseup', () => {
+      const wasDraggingBackground = draggingBackground;
+      draggingBackground = false;
+      backgroundDragState = null;
+      if (wasDraggingBackground) {
+        if (backgroundDragMoved) {
+          scheduleProjectSave();
+        } else {
+          undoStack.pop();
+          updateUndoRedoButtons();
+        }
+        backgroundDragMoved = false;
+      }
+
       const wasDragging = draggingPip;
       draggingPip = false;
       if (wasDragging) {
@@ -2671,6 +2982,7 @@ import {
           undoStack.pop();
           updateUndoRedoButtons();
         }
+        pipDragMoved = false;
       }
     });
 
@@ -2764,6 +3076,17 @@ import {
     editorToggleCamBtn.addEventListener('click', toggleCameraVisibility);
     editorCamFullBtn.addEventListener('click', toggleCameraFullscreen);
     editorApplyFutureBtn.addEventListener('click', applyStyleToFutureSections);
+    editorBgZoomInput.addEventListener('input', () => {
+      if (!editorState || editorState.rendering) return;
+      const changed = setSelectedSectionBackgroundZoom(editorBgZoomInput.value, {
+        pushHistory: !sectionZoomDragActive
+      });
+      if (changed) sectionZoomDragActive = true;
+    });
+    editorBgZoomInput.addEventListener('change', commitSectionZoomChange);
+    editorBgZoomInput.addEventListener('pointerup', commitSectionZoomChange);
+    editorBgZoomInput.addEventListener('blur', commitSectionZoomChange);
+    updateSectionZoomControls();
 
     // ===== Render pipeline =====
 
@@ -2787,6 +3110,7 @@ import {
     }
 
     async function renderVideo() {
+      commitSectionZoomChange();
       editorState.rendering = true;
       setRenderBtnState('Rendering...', 'busy');
       editorPause();
@@ -2799,9 +3123,11 @@ import {
       editorToggleCamBtn.disabled = true;
       editorCamFullBtn.disabled = true;
       editorRenderBtn.disabled = true;
+      updateSectionZoomControls();
 
       try {
         const renderKeyframes = getRenderKeyframes();
+        const renderSections = getRenderSections();
 
         // Collect takes referenced by sections
         const referencedTakeIds = new Set(editorState.sections.map(s => s.takeId).filter(Boolean));
@@ -2815,11 +3141,7 @@ import {
 
         const mp4Path = await window.electronAPI.renderComposite({
           takes,
-          sections: editorState.sections.map(s => ({
-            takeId: s.takeId,
-            sourceStart: s.sourceStart,
-            sourceEnd: s.sourceEnd
-          })),
+          sections: renderSections,
           keyframes: renderKeyframes,
           pipSize: editorState.pipSize,
           screenFitMode: editorState.screenFitMode,
@@ -2844,6 +3166,7 @@ import {
       editorCamFullBtn.disabled = false;
       editorRenderBtn.disabled = false;
       editorState.rendering = false;
+      updateSectionZoomControls();
 
       editorRenderTimeout = setTimeout(() => setRenderBtnState('Render', 'idle'), 3000);
       editorSeek(0);

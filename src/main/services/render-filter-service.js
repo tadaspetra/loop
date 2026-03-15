@@ -1,5 +1,12 @@
 const TRANSITION_DURATION = 0.3;
 
+function resolveOutputSize(sourceWidth, _sourceHeight) {
+  let outW = sourceWidth % 2 === 0 ? sourceWidth : sourceWidth - 1;
+  let outH = Math.round((outW * 9) / 16);
+  if (outH % 2 !== 0) outH -= 1;
+  return { outW, outH };
+}
+
 function buildPosExpr(keyframes, prop) {
   if (keyframes.length === 1) return String(Math.round(keyframes[0][prop]));
 
@@ -80,11 +87,10 @@ function buildFilterComplex(
   sourceWidth,
   sourceHeight,
   canvasW,
-  _canvasH
+  _canvasH,
+  screenPreprocessed = false
 ) {
-  let outW = sourceWidth % 2 === 0 ? sourceWidth : sourceWidth - 1;
-  let outH = Math.round((outW * 9) / 16);
-  if (outH % 2 !== 0) outH -= 1;
+  const { outW, outH } = resolveOutputSize(sourceWidth, sourceHeight);
 
   const scale = outW / canvasW;
   const actualPipSize = Math.round(pipSize * scale);
@@ -99,9 +105,11 @@ function buildFilterComplex(
   }));
 
   const screenFilter =
-    screenFitMode === 'fill'
-      ? `[0:v]scale=${outW}:${outH}:force_original_aspect_ratio=increase,crop=${outW}:${outH}[screen]`
-      : `[0:v]scale=${outW}:${outH}:force_original_aspect_ratio=decrease,pad=${outW}:${outH}:'(ow-iw)/2':'(oh-ih)/2':color=black[screen]`;
+    screenPreprocessed
+      ? '[0:v]setpts=PTS-STARTPTS[screen]'
+      : screenFitMode === 'fill'
+        ? `[0:v]scale=${outW}:${outH}:force_original_aspect_ratio=increase,crop=${outW}:${outH}[screen]`
+        : `[0:v]scale=${outW}:${outH}:force_original_aspect_ratio=decrease,pad=${outW}:${outH}:'(ow-iw)/2':'(oh-ih)/2':color=black[screen]`;
 
   const hasPip = keyframes.some((keyframe) => keyframe.pipVisible);
   const hasCamFull = keyframes.some((keyframe) => keyframe.cameraFullscreen);
@@ -137,6 +145,7 @@ function buildFilterComplex(
 
 module.exports = {
   TRANSITION_DURATION,
+  resolveOutputSize,
   buildPosExpr,
   buildAlphaExpr,
   buildCamFullAlphaExpr,

@@ -184,6 +184,12 @@
         <button id="editorSplitBtn" title="S" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Split</button>
         <button id="editorToggleCamBtn" title="C" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Camera</button>
         <button id="editorCamFullBtn" title="F" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Fullscreen</button>
+        <div class="flex items-center gap-2 px-2 py-1 border border-neutral-800 rounded-lg bg-neutral-900">
+          <label for="editorBgZoomInput" class="text-xs text-neutral-400">Zoom</label>
+          <input id="editorBgZoomInput" type="range" min="1" max="3" step="0.05" value="1"
+            class="w-28 accent-white disabled:opacity-50" />
+          <span id="editorBgZoomValue" class="text-xs font-mono tabular-nums text-neutral-300 min-w-[46px] text-right">1.00x</span>
+        </div>
         <div class="w-px h-5 bg-neutral-800 mx-1"></div>
         <button id="editorApplyFutureBtn" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Apply to Future</button>
       </div>

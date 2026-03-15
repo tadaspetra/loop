@@ -1,5 +1,10 @@
 const path = require('path');
 
+const MIN_BACKGROUND_ZOOM = 1;
+const MAX_BACKGROUND_ZOOM = 3;
+const MIN_BACKGROUND_PAN = -1;
+const MAX_BACKGROUND_PAN = 1;
+
 function createProjectId() {
   return `project-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -77,6 +82,18 @@ function normalizeSections(rawSections = []) {
     .sort((a, b) => a.start - b.start);
 }
 
+function normalizeBackgroundZoom(value) {
+  const zoom = Number(value);
+  if (!Number.isFinite(zoom)) return MIN_BACKGROUND_ZOOM;
+  return Math.max(MIN_BACKGROUND_ZOOM, Math.min(MAX_BACKGROUND_ZOOM, zoom));
+}
+
+function normalizeBackgroundPan(value) {
+  const pan = Number(value);
+  if (!Number.isFinite(pan)) return 0;
+  return Math.max(MIN_BACKGROUND_PAN, Math.min(MAX_BACKGROUND_PAN, pan));
+}
+
 function normalizeKeyframes(rawKeyframes = []) {
   if (!Array.isArray(rawKeyframes)) return [];
   return rawKeyframes
@@ -86,6 +103,9 @@ function normalizeKeyframes(rawKeyframes = []) {
       pipY: Number.isFinite(Number(keyframe.pipY)) ? Number(keyframe.pipY) : 0,
       pipVisible: keyframe.pipVisible !== false,
       cameraFullscreen: !!keyframe.cameraFullscreen,
+      backgroundZoom: normalizeBackgroundZoom(keyframe.backgroundZoom),
+      backgroundPanX: normalizeBackgroundPan(keyframe.backgroundPanX),
+      backgroundPanY: normalizeBackgroundPan(keyframe.backgroundPanY),
       sectionId: typeof keyframe.sectionId === 'string' ? keyframe.sectionId : null,
       autoSection: !!keyframe.autoSection
     }))
@@ -171,6 +191,8 @@ module.exports = {
   toProjectAbsolutePath,
   toProjectRelativePath,
   normalizeSections,
+  normalizeBackgroundZoom,
+  normalizeBackgroundPan,
   normalizeKeyframes,
   createDefaultProject,
   normalizeProjectData

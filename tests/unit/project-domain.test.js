@@ -40,13 +40,32 @@ describe('shared/domain/project', () => {
 
   test('normalizeKeyframes returns ordered numeric values', () => {
     const keyframes = normalizeKeyframes([
-      { time: 2, pipX: '50', pipY: '60', pipVisible: false, cameraFullscreen: true },
-      { time: 1, pipX: 10, pipY: 20 }
+      {
+        time: 2,
+        pipX: '50',
+        pipY: '60',
+        pipVisible: false,
+        cameraFullscreen: true,
+        backgroundZoom: '2.5',
+        backgroundPanX: '0.4',
+        backgroundPanY: '-0.2'
+      },
+      { time: 1, pipX: 10, pipY: 20, backgroundZoom: 0.25, backgroundPanX: -4, backgroundPanY: 4 },
+      { time: 3, pipX: 20, pipY: 30, backgroundZoom: 9 }
     ]);
     expect(keyframes[0].time).toBe(1);
     expect(keyframes[1].pipX).toBe(50);
     expect(keyframes[1].pipVisible).toBe(false);
     expect(keyframes[1].cameraFullscreen).toBe(true);
+    expect(keyframes[0].backgroundZoom).toBe(1);
+    expect(keyframes[1].backgroundZoom).toBe(2.5);
+    expect(keyframes[2].backgroundZoom).toBe(3);
+    expect(keyframes[0].backgroundPanX).toBe(-1);
+    expect(keyframes[0].backgroundPanY).toBe(1);
+    expect(keyframes[1].backgroundPanX).toBe(0.4);
+    expect(keyframes[1].backgroundPanY).toBe(-0.2);
+    expect(keyframes[2].backgroundPanX).toBe(0);
+    expect(keyframes[2].backgroundPanY).toBe(0);
   });
 
   test('normalizeProjectData hydrates defaults and timeline metadata', () => {
@@ -56,7 +75,8 @@ describe('shared/domain/project', () => {
         id: base.id,
         name: '  demo<>name ',
         timeline: {
-          sections: [{ start: 0, end: 2 }]
+          sections: [{ start: 0, end: 2 }],
+          keyframes: [{ time: 0, pipX: 10, pipY: 20, backgroundZoom: 1.8, backgroundPanX: 0.25, backgroundPanY: -0.5 }]
         }
       },
       '/tmp/my-project'
@@ -64,6 +84,9 @@ describe('shared/domain/project', () => {
 
     expect(project.name).toBe('demoname');
     expect(project.timeline.sections).toHaveLength(1);
+    expect(project.timeline.keyframes[0].backgroundZoom).toBe(1.8);
+    expect(project.timeline.keyframes[0].backgroundPanX).toBe(0.25);
+    expect(project.timeline.keyframes[0].backgroundPanY).toBe(-0.5);
     expect(project.settings.screenFitMode).toBe('fill');
     expect(project.settings.hideFromRecording).toBe(true);
   });
