@@ -33,5 +33,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getSources: () => ipcRenderer.invoke('get-sources'),
   computeSections: (opts) => ipcRenderer.invoke('compute-sections', opts),
   renderComposite: (opts) => ipcRenderer.invoke('render-composite', opts),
+  onRenderProgress: (listener) => {
+    if (typeof listener !== 'function') return () => {};
+    const handler = (_event, payload) => listener(payload);
+    ipcRenderer.on('render-composite-progress', handler);
+    return () => ipcRenderer.removeListener('render-composite-progress', handler);
+  },
   getScribeToken: () => ipcRenderer.invoke('get-scribe-token')
 })

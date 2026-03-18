@@ -115,8 +115,12 @@ function registerIpcHandlers({
     return projectService.saveVideo(buffer, folder, suffix);
   });
 
-  ipcMain.handle('render-composite', async (_event, opts) => {
-    return renderComposite(opts);
+  ipcMain.handle('render-composite', async (event, opts) => {
+    return renderComposite(opts, {
+      onProgress: (progress) => {
+        event.sender.send('render-composite-progress', progress);
+      }
+    });
   });
 
   ipcMain.handle('get-scribe-token', async () => {

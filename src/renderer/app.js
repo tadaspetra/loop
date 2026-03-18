@@ -118,6 +118,32 @@ import {
     let audioChunkBuffer = [];
     let audioSendInterval = null;
     let micSourceNode = null;
+
+    function handleRenderProgress(update) {
+      if (!editorState || !editorState.rendering) return;
+
+      const percent = Number.isFinite(Number(update?.percent))
+        ? Math.max(0, Math.min(1, Number(update.percent)))
+        : null;
+      editorState.renderProgress = percent ?? 0;
+
+      processingTitle.textContent = 'Rendering export...';
+      processingStatus.textContent = typeof update?.status === 'string' && update.status ? update.status : 'Rendering...';
+      setProcessingProgress(percent);
+
+      if (percent === null) {
+        setRenderBtnState(processingStatus.textContent, 'busy');
+        return;
+      }
+
+      setRenderBtnState(`Rendering ${Math.round(percent * 100)}%`, 'busy');
+    }
+
+    if (typeof window.electronAPI.onRenderProgress === 'function') {
+      window.electronAPI.onRenderProgress((update) => {
+        handleRenderProgress(update);
+      });
+    }
     let scribeAudioOffset = 0; // seconds between recording start and first audio sent to Scribe
     let workletRegistered = null; // tracks which AudioContext has the worklet registered
 
@@ -3155,7 +3181,11 @@ import {
     async function renderVideo() {
       commitSectionZoomChange();
       editorState.rendering = true;
+      editorState.renderProgress = 0;
       setRenderBtnState('Rendering...', 'busy');
+      processingTitle.textContent = 'Rendering export...';
+      processingStatus.textContent = 'Preparing render...';
+      setProcessingProgress(0);
       editorPause();
 
       // Disable controls
@@ -3195,10 +3225,16 @@ import {
           outputFolder: saveFolder
         });
 
+        editorState.rendering = false;
+        editorState.renderProgress = 1;
+        setProcessingProgress(1);
         setRenderBtnState('Done!', 'done');
         console.log('Rendered:', mp4Path);
         await persistProjectNow();
       } catch (err) {
+        editorState.rendering = false;
+        editorState.renderProgress = 0;
+        setProcessingProgress(null);
         console.error('Render error:', err);
         setRenderBtnState('Failed', 'error');
       }
@@ -3210,7 +3246,6 @@ import {
       editorToggleCamBtn.disabled = false;
       editorCamFullBtn.disabled = false;
       editorRenderBtn.disabled = false;
-      editorState.rendering = false;
       updateSectionZoomControls();
 
       editorRenderTimeout = setTimeout(() => setRenderBtnState('Render', 'idle'), 3000);

@@ -1,5 +1,4 @@
 const path = require('path');
-const { execFile } = require('child_process');
 
 const { fs, ensureDirectory } = require('../infra/file-system');
 const {
@@ -10,6 +9,7 @@ const {
   EXPORT_AUDIO_PRESET_COMPRESSED
 } = require('../../shared/domain/project');
 const { chooseRenderFps, probeVideoFpsWithFfmpeg } = require('./fps-service');
+const { runFfmpeg } = require('./ffmpeg-runner');
 const { buildFilterComplex, buildScreenFilter } = require('./render-filter-service');
 
 function normalizeSectionInput(rawSections) {
@@ -69,6 +69,103 @@ function buildCameraTrimFilter(cameraIdx, section, targetFps, index, cameraSyncO
   return `[${cameraIdx}:v]trim=start=${sampleStart.toFixed(3)}:end=${sampleEnd.toFixed(3)},setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=${startPad.toFixed(3)}:stop_mode=clone:stop_duration=${stopPad.toFixed(3)},trim=duration=${duration.toFixed(3)},setpts=PTS-STARTPTS,fps=fps=${targetFps}${label}`;
 }
 
+function buildInputPlan(sections, takeMap, hasCamera) {
+  const fpsProbePaths = new Set();
+  const sectionInputs = [];
+  const args = ['-progress', 'pipe:1', '-nostats'];
+  const takeInputs = new Map();
+  let inputIndex = 0;
+
+  for (const section of sections) {
+    const take = takeMap.get(section.takeId);
+    if (!take) throw new Error(`Take ${section.takeId} not found`);
+
+    let inputPlan = takeInputs.get(section.takeId);
+    if (!inputPlan) {
+      assertFilePath(take.screenPath, 'Screen');
+      args.push('-i', take.screenPath);
+      fpsProbePaths.add(take.screenPath);
+
+      const screenIdx = inputIndex++;
+      let cameraIdx = -1;
+      if (hasCamera && take.cameraPath) {
+        assertFilePath(take.cameraPath, 'Camera');
+        args.push('-i', take.cameraPath);
+        fpsProbePaths.add(take.cameraPath);
+        cameraIdx = inputIndex++;
+      }
+
+      inputPlan = { screenIdx, cameraIdx };
+      takeInputs.set(section.takeId, inputPlan);
+    }
+
+    sectionInputs.push(inputPlan);
+  }
+
+  return {
+    args,
+    fpsProbePaths,
+    sectionInputs
+  };
+}
+
+function buildOutputArgs(targetFps, outputPath) {
+  return [
+    '-r',
+    String(targetFps),
+    '-fps_mode',
+    'cfr',
+    '-c:v',
+    'libx264',
+    '-crf',
+    '12',
+    '-preset',
+    'slow',
+    '-c:a',
+    'aac',
+    '-b:a',
+    '192k',
+    '-y',
+    outputPath
+  ];
+}
+
+function getTotalDurationSec(sections) {
+  return sections.reduce((total, section) => total + Math.max(0, section.sourceEnd - section.sourceStart), 0);
+}
+
+function buildRenderProgressUpdate(progress, totalDurationSec) {
+  if (!progress || typeof progress !== 'object') return null;
+
+  const outTimeSec = Number(progress.outTimeSec);
+  const hasOutTime = Number.isFinite(outTimeSec) && outTimeSec >= 0;
+  const clampedPercent = hasOutTime && totalDurationSec > 0
+    ? Math.max(0, Math.min(1, outTimeSec / totalDurationSec))
+    : null;
+
+  if (progress.status === 'end') {
+    return {
+      phase: 'finalizing',
+      percent: 1,
+      status: 'Finalizing export...',
+      outTimeSec: hasOutTime ? outTimeSec : totalDurationSec,
+      durationSec: totalDurationSec,
+      frame: progress.frame ?? null,
+      speed: progress.speed ?? null
+    };
+  }
+
+  return {
+    phase: 'rendering',
+    percent: clampedPercent,
+    status: clampedPercent === null ? 'Rendering...' : `Rendering ${Math.round(clampedPercent * 100)}%`,
+    outTimeSec: hasOutTime ? outTimeSec : null,
+    durationSec: totalDurationSec,
+    frame: progress.frame ?? null,
+    speed: progress.speed ?? null
+  };
+}
+
 async function renderComposite(opts = {}, deps = {}) {
   const takes = Array.isArray(opts.takes) ? opts.takes : [];
   const sections = normalizeSectionInput(opts.sections);
@@ -81,10 +178,11 @@ async function renderComposite(opts = {}, deps = {}) {
   const sourceHeight = Number.isFinite(Number(opts.sourceHeight)) ? Number(opts.sourceHeight) : 1080;
   const outputFolder = typeof opts.outputFolder === 'string' ? opts.outputFolder : '';
 
-  const exec = deps.execFile || execFile;
   const probeFps = deps.probeVideoFpsWithFfmpeg || probeVideoFpsWithFfmpeg;
+  const runFfmpegProcess = deps.runFfmpeg || runFfmpeg;
   const ffmpegPath = deps.ffmpegPath || require('ffmpeg-static');
   const now = typeof deps.now === 'function' ? deps.now : Date.now;
+  const onProgress = typeof deps.onProgress === 'function' ? deps.onProgress : null;
 
   if (!outputFolder) throw new Error('Missing output folder');
   if (sections.length === 0) throw new Error('No sections to render');
@@ -104,30 +202,8 @@ async function renderComposite(opts = {}, deps = {}) {
   }
 
   const hasCamera = keyframes.some((keyframe) => keyframe.pipVisible || keyframe.cameraFullscreen);
-  const fpsProbePaths = new Set();
-  const sectionInputs = [];
-  const args = [];
-  let inputIndex = 0;
-
-  for (const section of sections) {
-    const take = takeMap.get(section.takeId);
-    if (!take) throw new Error(`Take ${section.takeId} not found`);
-
-    assertFilePath(take.screenPath, 'Screen');
-    args.push('-i', take.screenPath);
-    fpsProbePaths.add(take.screenPath);
-
-    const screenIdx = inputIndex++;
-    let cameraIdx = -1;
-    if (hasCamera && take.cameraPath) {
-      assertFilePath(take.cameraPath, 'Camera');
-      args.push('-i', take.cameraPath);
-      fpsProbePaths.add(take.cameraPath);
-      cameraIdx = inputIndex++;
-    }
-
-    sectionInputs.push({ screenIdx, cameraIdx });
-  }
+  const { args, fpsProbePaths, sectionInputs } = buildInputPlan(sections, takeMap, hasCamera);
+  const totalDurationSec = getTotalDurationSec(sections);
 
   const fpsProbeResults = await Promise.all(
     Array.from(fpsProbePaths).map(async (filePath) => ({
@@ -218,37 +294,34 @@ async function renderComposite(opts = {}, deps = {}) {
 
   filterParts.push(`[out]fps=fps=${targetFps}:round=near[out_cfr]`);
   args.push('-filter_complex', filterParts.join(';'), '-map', '[out_cfr]', '-map', `[${exportAudioLabel}]`);
-  args.push(
-    '-r',
-    String(targetFps),
-    '-fps_mode',
-    'cfr',
-    '-c:v',
-    'libx264',
-    '-crf',
-    '12',
-    '-preset',
-    'slow',
-    '-c:a',
-    'aac',
-    '-b:a',
-    '192k',
-    '-y',
-    outputPath
-  );
+  args.push(...buildOutputArgs(targetFps, outputPath));
 
   console.log('ffmpeg args:', args.join(' '));
 
-  return new Promise((resolve, reject) => {
-    exec(ffmpegPath, args, { maxBuffer: 10 * 1024 * 1024 }, (error, _stdout, stderr) => {
-      if (error) {
-        console.error('ffmpeg stderr:', stderr);
-        reject(new Error(stderr || error.message));
-        return;
-      }
-      resolve(outputPath);
+  if (onProgress) {
+    onProgress({
+      phase: 'starting',
+      percent: 0,
+      status: 'Preparing render...',
+      durationSec: totalDurationSec
     });
-  });
+  }
+
+  try {
+    await runFfmpegProcess({
+      ffmpegPath,
+      args,
+      onProgress: (progress) => {
+        if (!onProgress) return;
+        const update = buildRenderProgressUpdate(progress, totalDurationSec);
+        if (update) onProgress(update);
+      }
+    });
+    return outputPath;
+  } catch (error) {
+    console.error('ffmpeg stderr:', error?.message || error);
+    throw error;
+  }
 }
 
 module.exports = {
