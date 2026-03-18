@@ -21,6 +21,10 @@ import {
   normalizeCameraSyncOffsetMs,
   resolveCameraPlaybackTargetTime
 } from './features/timeline/camera-sync.js';
+import {
+  getRecorderOptions,
+  createCameraRecordingStream
+} from './features/recording/recorder-utils.js';
 
     const projectHomeView = document.getElementById('projectHomeView');
     const workspaceHeader = document.getElementById('workspaceHeader');
@@ -1611,42 +1615,20 @@ import {
       else stopRecording();
     }
 
-    let supportedRecorderMimeType;
-
-    function getSupportedRecorderMimeType() {
-      if (supportedRecorderMimeType !== undefined) return supportedRecorderMimeType;
-
-      const candidates = [
-        'video/webm; codecs=vp8',
-        'video/webm; codecs=vp9',
-        'video/webm'
-      ];
-
-      supportedRecorderMimeType = candidates.find((mimeType) => {
-        return typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(mimeType);
-      }) || '';
-
-      return supportedRecorderMimeType;
-    }
-
-    function getRecorderOptions(suffix) {
-      const mimeType = getSupportedRecorderMimeType();
-      const options = mimeType ? { mimeType } : {};
-
-      if (suffix === 'camera') {
-        options.videoBitsPerSecond = 10000000;
-        options.audioBitsPerSecond = 192000;
-      } else if (suffix === 'screen') {
-        options.videoBitsPerSecond = 30000000;
-        options.audioBitsPerSecond = 192000;
-      }
-
-      return options;
-    }
-
     function createRecorder(stream, suffix) {
       const chunks = [];
-      const recorder = new MediaRecorder(stream, getRecorderOptions(suffix));
+      const recorderOptions = getRecorderOptions({
+        suffix,
+        hasAudio: typeof stream?.getAudioTracks === 'function' && stream.getAudioTracks().length > 0
+      });
+      const recorder = new MediaRecorder(stream, recorderOptions);
+      console.log(`[Recorder] ${suffix} configured`, {
+        mimeType: recorder.mimeType || recorderOptions.mimeType || 'default',
+        videoTracks: typeof stream?.getVideoTracks === 'function' ? stream.getVideoTracks().length : 0,
+        audioTracks: typeof stream?.getAudioTracks === 'function' ? stream.getAudioTracks().length : 0,
+        videoBitsPerSecond: recorderOptions.videoBitsPerSecond || null,
+        audioBitsPerSecond: recorderOptions.audioBitsPerSecond || null
+      });
 
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunks.push(e.data);
@@ -1712,10 +1694,14 @@ import {
         recorders.push(createRecorder(screenOnly, 'screen'));
       }
 
-      // Individual camera (with audio)
+      // Individual camera (video only; export uses screen audio)
       if (cameraStream) {
-        const cameraOnly = addAudioToStream(new MediaStream(cameraStream.getVideoTracks()));
-        recorders.push(createRecorder(cameraOnly, 'camera'));
+        const cameraOnly = createCameraRecordingStream(cameraStream);
+        if (cameraOnly) {
+          const [cameraTrack] = cameraOnly.getVideoTracks();
+          console.log('[Recorder] camera recording track settings:', cameraTrack?.getSettings?.() || {});
+          recorders.push(createRecorder(cameraOnly, 'camera'));
+        }
       }
 
       recorders.forEach(r => r.start());
