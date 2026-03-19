@@ -5,6 +5,7 @@ const {
   toProjectAbsolutePath,
   toProjectRelativePath,
   normalizeSections,
+  normalizeSavedSections,
   normalizeKeyframes,
   normalizeBackgroundZoom,
   normalizeCameraSyncOffsetMs,
@@ -260,5 +261,57 @@ describe('shared/domain/project', () => {
     );
     expect(invalidProject.settings.outputMode).toBe('landscape');
     expect(invalidProject.settings.pipScale).toBe(0.22);
+  });
+
+  test('normalizeSections preserves saved field', () => {
+    const sections = normalizeSections([
+      { start: 0, end: 2, saved: true },
+      { start: 2, end: 4, saved: false },
+      { start: 4, end: 6 }
+    ]);
+    expect(sections[0].saved).toBe(true);
+    expect(sections[1].saved).toBe(false);
+    expect(sections[2].saved).toBe(false);
+  });
+
+  test('normalizeSavedSections normalizes and forces saved: true', () => {
+    const saved = normalizeSavedSections([
+      { start: 0, end: 2, transcript: 'hello', saved: false },
+      { start: 2, end: 4, transcript: 'world' }
+    ]);
+    expect(saved).toHaveLength(2);
+    expect(saved[0].saved).toBe(true);
+    expect(saved[1].saved).toBe(true);
+    expect(saved[0].transcript).toBe('hello');
+  });
+
+  test('normalizeSavedSections handles invalid input', () => {
+    expect(normalizeSavedSections(null)).toEqual([]);
+    expect(normalizeSavedSections(undefined)).toEqual([]);
+    expect(normalizeSavedSections('not-array')).toEqual([]);
+    expect(normalizeSavedSections([])).toEqual([]);
+  });
+
+  test('normalizeProjectData includes savedSections in timeline', () => {
+    const project = normalizeProjectData(
+      {
+        timeline: {
+          sections: [{ start: 0, end: 2, takeId: 'take-1' }],
+          savedSections: [{ start: 2, end: 4, takeId: 'take-2', saved: true }]
+        }
+      },
+      '/tmp/my-project'
+    );
+    expect(project.timeline.savedSections).toHaveLength(1);
+    expect(project.timeline.savedSections[0].saved).toBe(true);
+    expect(project.timeline.savedSections[0].takeId).toBe('take-2');
+  });
+
+  test('normalizeProjectData defaults savedSections to empty array', () => {
+    const project = normalizeProjectData(
+      { timeline: { sections: [{ start: 0, end: 2 }] } },
+      '/tmp/my-project'
+    );
+    expect(project.timeline.savedSections).toEqual([]);
   });
 });

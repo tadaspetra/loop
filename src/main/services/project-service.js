@@ -307,6 +307,71 @@ function createProjectService({ app }) {
     return true;
   }
 
+  function stageTakeFiles(projectPath, filePaths) {
+    const resolvedProject = path.resolve(projectPath);
+    const deletedDir = path.join(resolvedProject, '.deleted');
+    ensureDirectory(deletedDir);
+    for (const filePath of filePaths) {
+      if (!filePath) continue;
+      const resolved = path.isAbsolute(filePath) ? filePath : path.join(resolvedProject, filePath);
+      if (!fs.existsSync(resolved)) continue;
+      const dest = path.join(deletedDir, path.basename(resolved));
+      fs.renameSync(resolved, dest);
+    }
+  }
+
+  function unstageTakeFiles(projectPath, fileNames) {
+    const resolvedProject = path.resolve(projectPath);
+    const deletedDir = path.join(resolvedProject, '.deleted');
+    if (!fs.existsSync(deletedDir)) return;
+    for (const fileName of fileNames) {
+      if (!fileName) continue;
+      const src = path.join(deletedDir, fileName);
+      if (!fs.existsSync(src)) continue;
+      const dest = path.join(resolvedProject, fileName);
+      fs.renameSync(src, dest);
+    }
+  }
+
+  function cleanupDeletedFolder(projectPath) {
+    const resolvedProject = path.resolve(projectPath);
+    const deletedDir = path.join(resolvedProject, '.deleted');
+    if (!fs.existsSync(deletedDir)) return;
+    fs.rmSync(deletedDir, { recursive: true, force: true });
+  }
+
+  function cleanupUnusedTakes(projectPath) {
+    const resolvedProject = path.resolve(projectPath);
+    const project = loadProjectFromDisk(resolvedProject);
+    const rawTimeline = project.timeline || {};
+    const sections = Array.isArray(rawTimeline.sections) ? rawTimeline.sections : [];
+    const savedSections = Array.isArray(rawTimeline.savedSections) ? rawTimeline.savedSections : [];
+
+    const referencedTakeIds = new Set();
+    for (const s of sections) { if (s.takeId) referencedTakeIds.add(s.takeId); }
+    for (const s of savedSections) { if (s.takeId) referencedTakeIds.add(s.takeId); }
+
+    const keptTakes = [];
+    let removedCount = 0;
+    for (const take of project.takes) {
+      if (referencedTakeIds.has(take.id)) {
+        keptTakes.push(take);
+      } else {
+        if (take.screenPath) safeUnlink(take.screenPath);
+        if (take.cameraPath) safeUnlink(take.cameraPath);
+        removedCount += 1;
+      }
+    }
+
+    if (removedCount > 0) {
+      project.takes = keptTakes;
+      saveProjectToDisk(resolvedProject, project);
+    }
+
+    cleanupDeletedFolder(resolvedProject);
+    return { removedCount };
+  }
+
   function saveVideo(buffer, folder, suffix) {
     const filename = `recording-${Date.now()}${suffix ? `-${suffix}` : ''}.webm`;
     ensureDirectory(folder);
@@ -340,7 +405,11 @@ function createProjectService({ app }) {
     completeRecoveryByProject,
     loadLastProject,
     setLastProject,
-    saveVideo
+    saveVideo,
+    stageTakeFiles,
+    unstageTakeFiles,
+    cleanupDeletedFolder,
+    cleanupUnusedTakes
   };
 }
 

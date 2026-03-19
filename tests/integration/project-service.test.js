@@ -164,4 +164,191 @@ describe('main/services/project-service integration', () => {
     const loaded = service.loadLastProject();
     expect(loaded.projectPath).toBe(two.projectPath);
   });
+
+  test('stageTakeFiles moves files to .deleted/ folder', () => {
+    const created = service.createProject({ name: 'StageTest', parentFolder: sandbox.root });
+    const screenFile = path.join(created.projectPath, 'screen.webm');
+    const cameraFile = path.join(created.projectPath, 'camera.webm');
+    fs.writeFileSync(screenFile, 'screen-data', 'utf8');
+    fs.writeFileSync(cameraFile, 'camera-data', 'utf8');
+
+    service.stageTakeFiles(created.projectPath, [screenFile, cameraFile]);
+
+    expect(fs.existsSync(screenFile)).toBe(false);
+    expect(fs.existsSync(cameraFile)).toBe(false);
+    expect(fs.existsSync(path.join(created.projectPath, '.deleted', 'screen.webm'))).toBe(true);
+    expect(fs.existsSync(path.join(created.projectPath, '.deleted', 'camera.webm'))).toBe(true);
+  });
+
+  test('unstageTakeFiles moves files back from .deleted/ folder', () => {
+    const created = service.createProject({ name: 'UnstageTest', parentFolder: sandbox.root });
+    const screenFile = path.join(created.projectPath, 'screen.webm');
+    fs.writeFileSync(screenFile, 'screen-data', 'utf8');
+
+    service.stageTakeFiles(created.projectPath, [screenFile]);
+    expect(fs.existsSync(screenFile)).toBe(false);
+
+    service.unstageTakeFiles(created.projectPath, ['screen.webm']);
+    expect(fs.existsSync(screenFile)).toBe(true);
+    expect(fs.readFileSync(screenFile, 'utf8')).toBe('screen-data');
+  });
+
+  test('cleanupDeletedFolder removes .deleted/ folder permanently', () => {
+    const created = service.createProject({ name: 'CleanupTest', parentFolder: sandbox.root });
+    const screenFile = path.join(created.projectPath, 'screen.webm');
+    fs.writeFileSync(screenFile, 'screen-data', 'utf8');
+
+    service.stageTakeFiles(created.projectPath, [screenFile]);
+    const deletedDir = path.join(created.projectPath, '.deleted');
+    expect(fs.existsSync(deletedDir)).toBe(true);
+
+    service.cleanupDeletedFolder(created.projectPath);
+    expect(fs.existsSync(deletedDir)).toBe(false);
+  });
+
+  test('cleanupDeletedFolder is a no-op when .deleted/ does not exist', () => {
+    const created = service.createProject({ name: 'NoDeletedTest', parentFolder: sandbox.root });
+    // Should not throw
+    service.cleanupDeletedFolder(created.projectPath);
+    expect(fs.existsSync(path.join(created.projectPath, '.deleted'))).toBe(false);
+  });
+
+  test('stageTakeFiles skips non-existent files gracefully', () => {
+    const created = service.createProject({ name: 'SkipTest', parentFolder: sandbox.root });
+    // Should not throw when files don't exist
+    service.stageTakeFiles(created.projectPath, [
+      path.join(created.projectPath, 'nonexistent.webm'),
+      null
+    ]);
+    // .deleted/ is created but empty
+    expect(fs.existsSync(path.join(created.projectPath, '.deleted'))).toBe(true);
+  });
+
+  test('savedSections round-trip through save and open', () => {
+    const created = service.createProject({ name: 'SavedSections', parentFolder: sandbox.root });
+    service.saveProject({
+      projectPath: created.projectPath,
+      project: {
+        ...created.project,
+        timeline: {
+          duration: 4,
+          sections: [{ start: 0, end: 2, takeId: 'take-1' }],
+          savedSections: [{ start: 2, end: 4, takeId: 'take-2', saved: true }],
+          keyframes: [],
+          selectedSectionId: null,
+          hasCamera: false,
+          sourceWidth: null,
+          sourceHeight: null
+        }
+      }
+    });
+
+    const opened = service.openProject(created.projectPath);
+    expect(opened.project.timeline.savedSections).toHaveLength(1);
+    expect(opened.project.timeline.savedSections[0].saved).toBe(true);
+    expect(opened.project.timeline.savedSections[0].takeId).toBe('take-2');
+  });
+
+  test('cleanupUnusedTakes removes unreferenced takes and their files', () => {
+    const created = service.createProject({ name: 'CleanupTakes', parentFolder: sandbox.root });
+    const usedScreen = path.join(created.projectPath, 'used-screen.webm');
+    const unusedScreen = path.join(created.projectPath, 'unused-screen.webm');
+    const unusedCamera = path.join(created.projectPath, 'unused-camera.webm');
+    fs.writeFileSync(usedScreen, 'used', 'utf8');
+    fs.writeFileSync(unusedScreen, 'unused-s', 'utf8');
+    fs.writeFileSync(unusedCamera, 'unused-c', 'utf8');
+
+    service.saveProject({
+      projectPath: created.projectPath,
+      project: {
+        ...created.project,
+        takes: [
+          { id: 'take-used', screenPath: usedScreen, cameraPath: null, duration: 2 },
+          { id: 'take-unused', screenPath: unusedScreen, cameraPath: unusedCamera, duration: 3 }
+        ],
+        timeline: {
+          duration: 2,
+          sections: [{ start: 0, end: 2, takeId: 'take-used' }],
+          savedSections: [],
+          keyframes: [],
+          selectedSectionId: null,
+          hasCamera: false,
+          sourceWidth: null,
+          sourceHeight: null
+        }
+      }
+    });
+
+    const result = service.cleanupUnusedTakes(created.projectPath);
+    expect(result.removedCount).toBe(1);
+
+    // Unused take files should be deleted
+    expect(fs.existsSync(unusedScreen)).toBe(false);
+    expect(fs.existsSync(unusedCamera)).toBe(false);
+    // Used take file should remain
+    expect(fs.existsSync(usedScreen)).toBe(true);
+
+    // Project on disk should only have the used take
+    const reopened = service.openProject(created.projectPath);
+    expect(reopened.project.takes).toHaveLength(1);
+    expect(reopened.project.takes[0].id).toBe('take-used');
+  });
+
+  test('cleanupUnusedTakes preserves takes referenced by savedSections', () => {
+    const created = service.createProject({ name: 'SavedRef', parentFolder: sandbox.root });
+    const savedScreen = path.join(created.projectPath, 'saved-screen.webm');
+    fs.writeFileSync(savedScreen, 'saved', 'utf8');
+
+    service.saveProject({
+      projectPath: created.projectPath,
+      project: {
+        ...created.project,
+        takes: [
+          { id: 'take-saved', screenPath: savedScreen, cameraPath: null, duration: 2 }
+        ],
+        timeline: {
+          duration: 0,
+          sections: [],
+          savedSections: [{ start: 0, end: 2, takeId: 'take-saved', saved: true }],
+          keyframes: [],
+          selectedSectionId: null,
+          hasCamera: false,
+          sourceWidth: null,
+          sourceHeight: null
+        }
+      }
+    });
+
+    const result = service.cleanupUnusedTakes(created.projectPath);
+    expect(result.removedCount).toBe(0);
+    expect(fs.existsSync(savedScreen)).toBe(true);
+
+    const reopened = service.openProject(created.projectPath);
+    expect(reopened.project.takes).toHaveLength(1);
+  });
+
+  test('cleanupUnusedTakes also removes .deleted/ folder', () => {
+    const created = service.createProject({ name: 'CleanBoth', parentFolder: sandbox.root });
+    const screenFile = path.join(created.projectPath, 'screen.webm');
+    fs.writeFileSync(screenFile, 'data', 'utf8');
+
+    // Stage a file first
+    service.stageTakeFiles(created.projectPath, [screenFile]);
+    expect(fs.existsSync(path.join(created.projectPath, '.deleted'))).toBe(true);
+
+    service.saveProject({
+      projectPath: created.projectPath,
+      project: {
+        ...created.project,
+        takes: [],
+        timeline: {
+          duration: 0, sections: [], savedSections: [], keyframes: [],
+          selectedSectionId: null, hasCamera: false, sourceWidth: null, sourceHeight: null
+        }
+      }
+    });
+
+    service.cleanupUnusedTakes(created.projectPath);
+    expect(fs.existsSync(path.join(created.projectPath, '.deleted'))).toBe(false);
+  });
 });

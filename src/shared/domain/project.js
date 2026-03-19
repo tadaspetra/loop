@@ -87,11 +87,20 @@ function normalizeSections(rawSections = []) {
         sourceStart: Number.isFinite(sourceStart) ? sourceStart : 0,
         sourceEnd: Number.isFinite(sourceEnd) ? sourceEnd : 0,
         takeId: typeof section.takeId === 'string' && section.takeId ? section.takeId : null,
-        transcript
+        transcript,
+        saved: !!section.saved
       };
     })
     .filter((section) => section.end - section.start > 0.0001)
     .sort((a, b) => a.start - b.start);
+}
+
+function normalizeSavedSections(rawSavedSections = []) {
+  if (!Array.isArray(rawSavedSections)) return [];
+  return normalizeSections(rawSavedSections).map(section => ({
+    ...section,
+    saved: true
+  }));
 }
 
 function normalizeBackgroundZoom(value, outputMode) {
@@ -229,6 +238,7 @@ function normalizeProjectData(rawProject, projectFolder) {
     timeline: {
       duration: Number.isFinite(Number(rawTimeline.duration)) ? Number(rawTimeline.duration) : 0,
       sections: normalizeSections(rawTimeline.sections),
+      savedSections: normalizeSavedSections(rawTimeline.savedSections),
       keyframes: normalizeKeyframes(rawTimeline.keyframes),
       selectedSectionId:
         typeof rawTimeline.selectedSectionId === 'string' ? rawTimeline.selectedSectionId : null,
@@ -249,6 +259,7 @@ module.exports = {
   toProjectAbsolutePath,
   toProjectRelativePath,
   normalizeSections,
+  normalizeSavedSections,
   normalizeBackgroundZoom,
   normalizeBackgroundPan,
   normalizeKeyframes,

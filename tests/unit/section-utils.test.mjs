@@ -71,6 +71,17 @@ describe('section-utils', () => {
       expect(result[0].index).toBe(0);
       expect(result[0].duration).toBe(5);
     });
+    test('preserves saved field on sections', () => {
+      const raw = [
+        { start: 0, end: 3, saved: true },
+        { start: 3, end: 6, saved: false },
+        { start: 6, end: 9 }
+      ];
+      const result = normalizeSections(raw, 9);
+      expect(result[0].saved).toBe(true);
+      expect(result[1].saved).toBe(false);
+      expect(result[2].saved).toBe(false);
+    });
   });
 
   describe('buildDefaultSectionsForDuration', () => {

@@ -135,6 +135,22 @@ function registerIpcHandlers({
   ipcMain.handle('compute-sections', async (_event, opts) => {
     return computeSections(opts);
   });
+
+  ipcMain.handle('project:stageTakeFiles', async (_event, projectPath, filePaths) => {
+    return projectService.stageTakeFiles(projectPath, filePaths);
+  });
+
+  ipcMain.handle('project:unstageTakeFiles', async (_event, projectPath, fileNames) => {
+    return projectService.unstageTakeFiles(projectPath, fileNames);
+  });
+
+  ipcMain.handle('project:cleanupDeleted', async (_event, projectPath) => {
+    return projectService.cleanupDeletedFolder(projectPath);
+  });
+
+  ipcMain.handle('project:cleanupUnusedTakes', async (_event, projectPath) => {
+    return projectService.cleanupUnusedTakes(projectPath);
+  });
 }
 
 module.exports = {

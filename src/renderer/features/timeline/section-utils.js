@@ -124,7 +124,8 @@ export function normalizeSections(rawSections, duration) {
         start: roundMs(start),
         end: roundMs(end),
         takeId: typeof section.takeId === 'string' && section.takeId ? section.takeId : null,
-        transcript
+        transcript,
+        saved: !!section.saved
       };
     })
     .filter(section => section.end - section.start > 0.0001)

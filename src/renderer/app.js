@@ -33,6 +33,7 @@ import {
     const lastProjectPath = document.getElementById('lastProjectPath');
     const resumeLastBtn = document.getElementById('resumeLastBtn');
     const recentProjectsList = document.getElementById('recentProjectsList');
+    const saveAndCleanBtn = document.getElementById('saveAndCleanBtn');
     const activeProjectNameEl = document.getElementById('activeProjectName');
     const activeProjectPathEl = document.getElementById('activeProjectPath');
     const goRecordingBtn = document.getElementById('goRecordingBtn');
@@ -640,6 +641,7 @@ import {
         return activeProject?.timeline || {
           duration: 0,
           sections: [],
+          savedSections: [],
           keyframes: [],
           selectedSectionId: null,
           hasCamera: false,
@@ -651,6 +653,7 @@ import {
       return {
         duration: Number(editorState.duration) || 0,
         sections: Array.isArray(editorState.sections) ? editorState.sections.map(section => ({ ...section })) : [],
+        savedSections: Array.isArray(editorState.savedSections) ? editorState.savedSections.map(section => ({ ...section })) : [],
         keyframes: Array.isArray(editorState.keyframes)
           ? editorState.keyframes.map(kf => ({
             ...kf,
@@ -775,9 +778,99 @@ import {
       updateUndoRedoButtons();
     }
 
+    function isTakeReferenced(takeId) {
+      if (!editorState || !takeId) return false;
+      return editorState.sections.some(s => s.takeId === takeId) ||
+        editorState.savedSections.some(s => s.takeId === takeId);
+    }
+
+    async function stageTakeIfUnreferenced(takeId) {
+      if (!takeId || !activeProjectPath || !activeProject) return;
+      if (isTakeReferenced(takeId)) return;
+      const take = activeProject.takes?.find(t => t.id === takeId);
+      if (!take) return;
+      const filePaths = [take.screenPath, take.cameraPath].filter(Boolean);
+      if (filePaths.length > 0) {
+        await window.electronAPI.stageTakeFiles(activeProjectPath, filePaths);
+      }
+    }
+
+    async function unstageTakeById(takeId) {
+      if (!takeId || !activeProjectPath || !activeProject) return;
+      const take = activeProject.takes?.find(t => t.id === takeId);
+      if (!take) return;
+      const fileNames = [take.screenPath, take.cameraPath]
+        .filter(Boolean)
+        .map(p => {
+          const parts = p.split(/[/\\]/);
+          return parts[parts.length - 1];
+        });
+      if (fileNames.length > 0) {
+        await window.electronAPI.unstageTakeFiles(activeProjectPath, fileNames);
+      }
+    }
+
+    async function toggleSectionSaved(sectionId) {
+      if (!editorState) return;
+
+      // Check if it's an active section
+      const activeSection = editorState.sections.find(s => s.id === sectionId);
+      if (activeSection) {
+        pushUndo();
+        activeSection.saved = !activeSection.saved;
+        renderSectionTranscriptList();
+        scheduleProjectSave();
+        return;
+      }
+
+      // Check if it's a saved+removed section — unsaving removes it entirely
+      const savedIndex = editorState.savedSections.findIndex(s => s.id === sectionId);
+      if (savedIndex >= 0) {
+        pushUndo();
+        const removed = editorState.savedSections.splice(savedIndex, 1)[0];
+        await stageTakeIfUnreferenced(removed.takeId);
+        renderSectionTranscriptList();
+        scheduleProjectSave();
+      }
+    }
+
+    async function readdSavedSection(sectionId) {
+      if (!editorState) return;
+      const savedIndex = editorState.savedSections.findIndex(s => s.id === sectionId);
+      if (savedIndex < 0) return;
+
+      pushUndo();
+
+      const section = editorState.savedSections.splice(savedIndex, 1)[0];
+
+      // Insert at the correct time position in active sections.
+      // Use >= so the re-added section goes before any section that was
+      // shifted into the same start time after recalculation.
+      let insertIndex = editorState.sections.length;
+      for (let i = 0; i < editorState.sections.length; i++) {
+        if (editorState.sections[i].start >= section.start) {
+          insertIndex = i;
+          break;
+        }
+      }
+      editorState.sections.splice(insertIndex, 0, section);
+
+      reindexSections(editorState.sections);
+      recalculateTimelinePositions();
+      syncSectionAnchorKeyframes();
+
+      const readdedSection = editorState.sections.find(s => s.id === sectionId);
+      renderSectionTranscriptList();
+      renderSectionMarkers();
+      refreshWaveform();
+      editorSeek(readdedSection?.start ?? 0);
+      scheduleProjectSave();
+    }
+
     function snapshotTimeline() {
       return {
         sections: editorState.sections.map(s => ({ ...s })),
+        savedSections: editorState.savedSections.map(s => ({ ...s })),
         keyframes: editorState.keyframes.map(kf => ({ ...kf })),
         selectedSectionId: editorState.selectedSectionId,
         duration: editorState.duration,
@@ -785,8 +878,14 @@ import {
       };
     }
 
-    function restoreSnapshot(snapshot) {
+    async function restoreSnapshot(snapshot) {
+      // Capture current take references before restore
+      const beforeTakeIds = new Set();
+      for (const s of editorState.sections) if (s.takeId) beforeTakeIds.add(s.takeId);
+      for (const s of editorState.savedSections) if (s.takeId) beforeTakeIds.add(s.takeId);
+
       editorState.sections = snapshot.sections;
+      editorState.savedSections = snapshot.savedSections || [];
       editorState.keyframes = snapshot.keyframes;
       editorState.selectedSectionId = snapshot.selectedSectionId;
       editorState.duration = snapshot.duration;
@@ -799,9 +898,29 @@ import {
         editorState.defaultPipY = h - editorState.pipSize - PIP_MARGIN;
         updateOutputModeUI();
       }
+
+      // Compute take references after restore
+      const afterTakeIds = new Set();
+      for (const s of editorState.sections) if (s.takeId) afterTakeIds.add(s.takeId);
+      for (const s of editorState.savedSections) if (s.takeId) afterTakeIds.add(s.takeId);
+
+      // Stage takes that lost all references (files move to .deleted/)
+      for (const takeId of beforeTakeIds) {
+        if (!afterTakeIds.has(takeId)) {
+          await stageTakeIfUnreferenced(takeId);
+        }
+      }
+      // Unstage takes that regained references (files move back from .deleted/)
+      for (const takeId of afterTakeIds) {
+        if (!beforeTakeIds.has(takeId)) {
+          await unstageTakeById(takeId);
+        }
+      }
+
       recalculateTimelinePositions();
       syncSectionAnchorKeyframes();
       renderSectionMarkers();
+      renderSectionTranscriptList();
       updateSectionZoomControls();
       refreshWaveform();
       editorSeek(Math.min(editorState.currentTime, editorState.duration));
@@ -817,16 +936,16 @@ import {
       updateUndoRedoButtons();
     }
 
-    function editorUndo() {
+    async function editorUndo() {
       if (!editorState || editorState.rendering || undoStack.length === 0) return;
       redoStack.push(snapshotTimeline());
-      restoreSnapshot(undoStack.pop());
+      await restoreSnapshot(undoStack.pop());
     }
 
-    function editorRedo() {
+    async function editorRedo() {
       if (!editorState || editorState.rendering || redoStack.length === 0) return;
       undoStack.push(snapshotTimeline());
-      restoreSnapshot(redoStack.pop());
+      await restoreSnapshot(redoStack.pop());
     }
 
     function updateUndoRedoButtons() {
@@ -908,6 +1027,8 @@ import {
       if (!projectPath || !project) return;
 
       await flushScheduledProjectSave();
+      // Clean up any stale .deleted/ folder from a previous session
+      try { await window.electronAPI.cleanupDeleted(projectPath); } catch (_e) { /* best effort */ }
       clearEditorState();
       activeProjectSession += 1;
 
@@ -928,6 +1049,7 @@ import {
           {
             duration: project.timeline.duration || 0,
             keyframes: project.timeline.keyframes || [],
+            savedSections: project.timeline.savedSections || [],
             selectedSectionId: project.timeline.selectedSectionId || null,
             hasCamera: !!project.timeline.hasCamera,
             sourceWidth: project.timeline.sourceWidth || null,
@@ -1169,34 +1291,91 @@ import {
     }
 
     function renderSectionTranscriptList() {
-      if (!editorState || !editorState.sections || editorState.sections.length === 0) {
+      const activeSections = editorState?.sections || [];
+      const savedSections = editorState?.savedSections || [];
+
+      if (activeSections.length === 0 && savedSections.length === 0) {
         editorSectionTranscriptList.innerHTML = '<div class="text-xs text-neutral-500 px-1">No sections available.</div>';
         return;
       }
 
+      // Merge active and saved sections sorted by start time
+      const activeItems = activeSections.map(s => ({ section: s, isRemoved: false }));
+      const savedItems = savedSections.map(s => ({ section: s, isRemoved: true }));
+      const allItems = [...activeItems, ...savedItems].sort((a, b) => {
+        const timeDiff = a.section.start - b.section.start;
+        if (timeDiff !== 0) return timeDiff;
+        // Equal start times: saved+removed sections appear before active
+        // (they represent the original position before recalculation shifted others)
+        if (a.isRemoved !== b.isRemoved) return a.isRemoved ? -1 : 1;
+        return 0;
+      });
+
       editorSectionTranscriptList.innerHTML = '';
-      for (const section of editorState.sections) {
-        const selected = section.id === editorState.selectedSectionId;
+      for (const { section, isRemoved } of allItems) {
+        const selected = !isRemoved && section.id === editorState.selectedSectionId;
         const transcript = normalizeTranscriptText(section.transcript);
 
-        const row = document.createElement('button');
-        row.type = 'button';
+        const row = document.createElement('div');
         row.dataset.sectionId = section.id;
-        row.className = `w-full text-left rounded-lg px-3 py-2 transition-all ${selected ? 'bg-neutral-800' : 'hover:bg-neutral-900'}`;
+        row.className = `w-full text-left rounded-lg px-3 py-2 transition-all ${selected ? 'bg-neutral-800' : isRemoved ? '' : 'hover:bg-neutral-900 cursor-pointer'}`;
 
         const meta = document.createElement('div');
-        meta.className = 'text-xs text-neutral-500 font-mono tabular-nums';
-        meta.textContent = `${section.label} (${formatTime(section.start)} - ${formatTime(section.end)})`;
+        meta.className = 'text-xs text-neutral-500 font-mono tabular-nums flex items-center justify-between';
+
+        const metaLabel = document.createElement('span');
+        if (isRemoved) metaLabel.style.opacity = '0.5';
+        metaLabel.textContent = `${section.label} (${formatTime(section.start)} - ${formatTime(section.end)})`;
+        meta.appendChild(metaLabel);
+
+        const metaActions = document.createElement('span');
+        metaActions.className = 'flex items-center gap-1 ml-2';
+
+        // Heart icon (inline SVG for cross-platform consistency)
+        const heartBtn = document.createElement('button');
+        heartBtn.type = 'button';
+        heartBtn.className = 'hover:text-red-400 transition-colors leading-none flex items-center';
+        heartBtn.innerHTML = section.saved
+          ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>'
+          : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>';
+        heartBtn.title = section.saved ? 'Unsave section' : 'Save section';
+        heartBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          toggleSectionSaved(section.id);
+        });
+        metaActions.appendChild(heartBtn);
+
+        // [+] re-add button for saved+removed sections (inline SVG)
+        if (isRemoved) {
+          const readdBtn = document.createElement('button');
+          readdBtn.type = 'button';
+          readdBtn.className = 'hover:text-green-400 transition-colors leading-none flex items-center';
+          readdBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>';
+          readdBtn.title = 'Re-add to timeline';
+          readdBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            readdSavedSection(section.id);
+          });
+          metaActions.appendChild(readdBtn);
+        }
+
+        meta.appendChild(metaActions);
 
         const text = document.createElement('div');
         text.className = `mt-1 text-sm leading-snug ${transcript ? 'text-neutral-300' : 'text-neutral-600 italic'}`;
+        if (isRemoved) text.style.opacity = '0.5';
         text.textContent = transcript || 'No transcript captured for this section.';
 
         row.appendChild(meta);
         row.appendChild(text);
-        row.addEventListener('click', () => {
-          selectEditorSection(section.id);
-        });
+
+        // Only active sections are clickable to select
+        if (!isRemoved) {
+          row.style.cursor = 'pointer';
+          row.addEventListener('click', () => {
+            selectEditorSection(section.id);
+          });
+        }
 
         editorSectionTranscriptList.appendChild(row);
       }
@@ -2234,7 +2413,7 @@ import {
         .sort((a, b) => a.time - b.time);
     }
 
-    function deleteSelectedSection() {
+    async function deleteSelectedSection() {
       if (!editorState || editorState.rendering) return;
       const selectedSection = getSelectedSection();
       if (!selectedSection) return;
@@ -2244,10 +2423,17 @@ import {
 
       pushUndo();
 
-      // Remove the section
+      // Remove the section from active timeline
       editorState.sections = editorState.sections.filter(section => section.id !== selectedSection.id);
 
-      if (editorState.sections.length === 0) {
+      // If saved, move to savedSections; otherwise stage take files if unreferenced
+      if (selectedSection.saved) {
+        editorState.savedSections.push({ ...selectedSection });
+      } else {
+        await stageTakeIfUnreferenced(selectedSection.takeId);
+      }
+
+      if (editorState.sections.length === 0 && editorState.savedSections.length === 0) {
         const savedSourceWidth = editorState.sourceWidth || null;
         const savedSourceHeight = editorState.sourceHeight || null;
         clearEditorState();
@@ -2257,6 +2443,7 @@ import {
             timeline: {
               duration: 0,
               sections: [],
+              savedSections: [],
               keyframes: [],
               selectedSectionId: null,
               hasCamera: false,
@@ -2283,12 +2470,21 @@ import {
       recalculateTimelinePositions();
       syncSectionAnchorKeyframes();
 
-      const nextSelected = editorState.sections[Math.min(selectedIndex, editorState.sections.length - 1)] || editorState.sections[0];
-      editorState.selectedSectionId = nextSelected?.id || null;
+      if (editorState.sections.length > 0) {
+        const nextSelected = editorState.sections[Math.min(selectedIndex, editorState.sections.length - 1)] || editorState.sections[0];
+        editorState.selectedSectionId = nextSelected?.id || null;
+        renderSectionMarkers();
+        refreshWaveform();
+        editorSeek(nextSelected?.start || 0);
+      } else {
+        // All active sections deleted but savedSections remain — stay in editor with empty timeline
+        editorState.selectedSectionId = null;
+        editorState.duration = 0;
+        renderSectionMarkers();
+        refreshWaveform();
+      }
 
-      renderSectionMarkers();
-      refreshWaveform();
-      editorSeek(nextSelected?.start || 0);
+      renderSectionTranscriptList();
       scheduleProjectSave();
     }
 
@@ -2318,7 +2514,8 @@ import {
         sourceStart: sourceTime,
         sourceEnd: section.sourceEnd,
         takeId: section.takeId,
-        transcript: ''
+        transcript: '',
+        saved: !!section.saved
       };
 
       section.sourceEnd = sourceTime;
@@ -2658,6 +2855,7 @@ import {
         defaultPipY: effDefaultPipY,
         keyframes,
         sections,
+        savedSections: opts.savedSections || [],
         selectedSectionId: opts.selectedSectionId || sections[0]?.id || null,
         screenFitMode: opts.screenFitMode || screenFitSelect.value,
         rendering: false,
@@ -3874,6 +4072,9 @@ import {
     switchProjectBtn.addEventListener('click', async () => {
       if (recording) return;
       await flushScheduledProjectSave();
+      if (activeProjectPath) {
+        try { await window.electronAPI.cleanupDeleted(activeProjectPath); } catch (_e) { /* best effort */ }
+      }
       setWorkspaceView('home');
       await refreshRecentProjects();
     });
@@ -3946,6 +4147,25 @@ import {
       await openProjectByPath(button.dataset.projectPath, 'timeline');
     });
 
+    saveAndCleanBtn.addEventListener('click', async () => {
+      const lastProjectPath = resumeLastBtn.dataset.projectPath;
+      if (!lastProjectPath) {
+        showProjectHomeMessage('No recent project to clean up.', 'info');
+        return;
+      }
+      try {
+        const result = await window.electronAPI.cleanupUnusedTakes(lastProjectPath);
+        const count = result?.removedCount || 0;
+        const msg = count > 0
+          ? `Cleanup complete. Removed ${count} unused take${count > 1 ? 's' : ''}.`
+          : 'Cleanup complete. No unused takes found.';
+        showProjectHomeMessage(msg, 'info');
+      } catch (error) {
+        console.error('Save & Clean failed:', error);
+        showProjectHomeMessage(error?.message || 'Cleanup failed.', 'error');
+      }
+    });
+
     newProjectNameInput.addEventListener('keydown', async (event) => {
       if (event.key !== 'Enter') return;
       event.preventDefault();
@@ -3962,4 +4182,7 @@ import {
       flushScheduledProjectSave().catch((error) => {
         console.warn('Failed to flush project save on exit:', error);
       });
+      if (activeProjectPath) {
+        window.electronAPI.cleanupDeleted(activeProjectPath).catch(() => {});
+      }
     });

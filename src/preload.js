@@ -39,5 +39,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('render-composite-progress', handler);
     return () => ipcRenderer.removeListener('render-composite-progress', handler);
   },
-  getScribeToken: () => ipcRenderer.invoke('get-scribe-token')
+  getScribeToken: () => ipcRenderer.invoke('get-scribe-token'),
+  stageTakeFiles: (projectPath, filePaths) => ipcRenderer.invoke('project:stageTakeFiles', projectPath, filePaths),
+  unstageTakeFiles: (projectPath, fileNames) => ipcRenderer.invoke('project:unstageTakeFiles', projectPath, fileNames),
+  cleanupDeleted: (projectPath) => ipcRenderer.invoke('project:cleanupDeleted', projectPath),
+  cleanupUnusedTakes: (projectPath) => ipcRenderer.invoke('project:cleanupUnusedTakes', projectPath)
 })
