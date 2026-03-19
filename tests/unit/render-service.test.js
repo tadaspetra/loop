@@ -233,7 +233,7 @@ describe('main/services/render-service', () => {
     );
 
     const argString = execCalls[0].args.join(' ');
-    expect(argString).toContain("[screen_raw]setpts=PTS-STARTPTS[screen_base];[screen_base]zoompan=z='2.000'");
+    expect(argString).toContain("[screen_raw]setpts=PTS-STARTPTS,scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080[screen_base];[screen_base]zoompan=z='2.000'");
     expect(argString).toContain('[1:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,fps=fps=30[cv0]');
     expect(argString).not.toContain('scale=3840:2160,crop=1920:1080:960:540[cv0]');
   });

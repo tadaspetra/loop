@@ -161,11 +161,18 @@ function buildScreenFilter(
   }));
 
   const baseFilter =
-    screenPreprocessed
-      ? '[0:v]setpts=PTS-STARTPTS[screen_base]'
+    isReel
+      ? (screenPreprocessed
+        ? '[0:v]setpts=PTS-STARTPTS[screen_base]'
+        : `[0:v]scale=${landscapeW}:${landscapeH}:force_original_aspect_ratio=${screenFitMode === 'fill' ? 'increase' : 'decrease'}${screenFitMode === 'fill' ? `,crop=${landscapeW}:${landscapeH}` : `,pad=${landscapeW}:${landscapeH}:'(ow-iw)/2':'(oh-ih)/2':color=black`}[screen_base]`)
       : screenFitMode === 'fill'
-        ? `[0:v]scale=${landscapeW}:${landscapeH}:force_original_aspect_ratio=increase,crop=${landscapeW}:${landscapeH}[screen_base]`
-        : `[0:v]scale=${landscapeW}:${landscapeH}:force_original_aspect_ratio=decrease,pad=${landscapeW}:${landscapeH}:'(ow-iw)/2':'(oh-ih)/2':color=black[screen_base]`;
+        ? `[0:v]${screenPreprocessed ? 'setpts=PTS-STARTPTS,' : ''}scale=${landscapeW}:${landscapeH}:force_original_aspect_ratio=increase,crop=${landscapeW}:${landscapeH}[screen_base]`
+        : `[0:v]${screenPreprocessed ? 'setpts=PTS-STARTPTS,' : ''}scale=${landscapeW}:${landscapeH}:force_original_aspect_ratio=decrease,pad=${landscapeW}:${landscapeH}:'(ow-iw)/2':'(oh-ih)/2':color=black[screen_base]`;
+
+  // Effective dimensions of screen_base after baseFilter
+  // In reel+preprocessed, screen_base is raw source; otherwise it's landscape-scaled
+  const baseW = (isReel && screenPreprocessed) ? sourceWidth : landscapeW;
+  const baseH = (isReel && screenPreprocessed) ? sourceHeight : landscapeH;
 
   const hasBackgroundAnimation = normalizedKeyframes.some((keyframe) => {
     return Math.abs(keyframe.backgroundZoom - 1) > 0.0001
@@ -174,7 +181,8 @@ function buildScreenFilter(
   });
 
   // Compute content width for fit mode crop constraining
-  const contentW = screenPreprocessed ? landscapeW : getContentWidth(sourceWidth, sourceHeight, screenFitMode, landscapeW, landscapeH);
+  // In reel mode with preprocessed source, content fills the full source width (no fit padding applied)
+  const contentW = (isReel && screenPreprocessed) ? landscapeW : getContentWidth(sourceWidth, sourceHeight, screenFitMode, landscapeW, landscapeH);
   const contentLeft = Math.round((landscapeW - contentW) / 2);
 
   // Build reel crop suffix if in reel mode
@@ -219,17 +227,17 @@ function buildScreenFilter(
     if (!hasZoomAnimation) {
       // Static zoom-out: all keyframes same zoom < 1, no pan — uniform scale
       const zoom = normalizedKeyframes[0].backgroundZoom;
-      let scaledW = Math.round(landscapeW * zoom);
+      let scaledW = Math.round(baseW * zoom);
       if (scaledW % 2 !== 0) scaledW -= 1;
       scaledW = Math.max(2, scaledW);
-      let scaledH = Math.round(landscapeH * zoom);
+      let scaledH = Math.round(baseH * zoom);
       if (scaledH % 2 !== 0) scaledH -= 1;
       scaledH = Math.max(2, scaledH);
-      const offsetX = Math.round((landscapeW - scaledW) / 2);
-      const offsetY = Math.round((landscapeH - scaledH) / 2);
+      const offsetX = Math.round((baseW - scaledW) / 2);
+      const offsetY = Math.round((baseH - scaledH) / 2);
 
       // Crop constrained to scaled content bounds (accounts for fit-mode padding)
-      const zoScaledLeft = Math.round((landscapeW - contentW * zoom) / 2);
+      const zoScaledLeft = Math.round((baseW - contentW * zoom) / 2);
       const maxCropRange = Math.max(0, Math.round(contentW * zoom - finalW));
       let zoCropSuffix;
       if (hasAnimatedCrop) {
@@ -249,16 +257,16 @@ function buildScreenFilter(
     const focusXExprIT = buildNumericExpr(normalizedKeyframes, 'backgroundFocusX', 6, 0.5, 'it');
     const focusYExprIT = buildNumericExpr(normalizedKeyframes, 'backgroundFocusY', 6, 0.5, 'it');
 
-    const zoompanPart = `zoompan=z='max(1.000,${zoomExprIT})':x='max(0,min(iw-iw/zoom,iw*(${focusXExprIT})-iw/zoom/2))':y='max(0,min(ih-ih/zoom,ih*(${focusYExprIT})-ih/zoom/2))':d=1:s=${landscapeW}x${landscapeH}:fps=${targetFps},setsar=1`;
-    const scalePart = `scale=w='max(2,2*floor(${landscapeW}*min(1.0,${zoomExprT})/2))':h='max(2,2*floor(${landscapeH}*min(1.0,${zoomExprT})/2))':eval=frame`;
+    const zoompanPart = `zoompan=z='max(1.000,${zoomExprIT})':x='max(0,min(iw-iw/zoom,iw*(${focusXExprIT})-iw/zoom/2))':y='max(0,min(ih-ih/zoom,ih*(${focusYExprIT})-ih/zoom/2))':d=1:s=${baseW}x${baseH}:fps=${targetFps},setsar=1`;
+    const scalePart = `scale=w='max(2,2*floor(${baseW}*min(1.0,${zoomExprT})/2))':h='max(2,2*floor(${baseH}*min(1.0,${zoomExprT})/2))':eval=frame`;
     const overlayPart = `overlay=x='(main_w-overlay_w)/2':y='(main_h-overlay_h)/2':eval=frame`;
 
     // Crop constrained to scaled content bounds: cropX = contentScaledLeft + ((reelCropX+1)/2) * maxRange
     const cropXExpr = buildNumericExpr(normalizedKeyframes, 'reelCropX', 3, 0, 't');
     const zMinExpr = `min(1,${zoomExprT})`;
     const cw = Math.round(contentW);
-    const fullCropExpr = `(${landscapeW}-${cw}*${zMinExpr})/2+((${cropXExpr})+1)/2*max(0,${cw}*${zMinExpr}-${finalW})`;
-    const zoCropSuffix = `,crop=${finalW}:${finalH}:'max(0,min(${landscapeW - finalW},${fullCropExpr}))':0,setsar=1`;
+    const fullCropExpr = `(${baseW}-${cw}*${zMinExpr})/2+((${cropXExpr})+1)/2*max(0,${cw}*${zMinExpr}-${finalW})`;
+    const zoCropSuffix = `,crop=${finalW}:${finalH}:'max(0,min(${baseW - finalW},${fullCropExpr}))':0,setsar=1`;
 
     return `${baseFilter};[screen_base]split[for_zoom][for_bg];[for_bg]${darkenFilter}[dark_bg];[for_zoom]${zoompanPart}[zoomed];[zoomed]${scalePart}[scaled];[dark_bg][scaled]${overlayPart}${zoCropSuffix}${outputLabel}`;
   }
@@ -275,7 +283,7 @@ function buildScreenFilter(
   const zoomExpr = buildNumericExpr(normalizedKeyframes, 'backgroundZoom', 3, 1, 'it');
   const focusXExpr = buildNumericExpr(normalizedKeyframes, 'backgroundFocusX', 6, 0.5, 'it');
   const focusYExpr = buildNumericExpr(normalizedKeyframes, 'backgroundFocusY', 6, 0.5, 'it');
-  const animatedFilter = `[screen_base]zoompan=z='${zoomExpr}':x='max(0,min(iw-iw/zoom,iw*(${focusXExpr})-iw/zoom/2))':y='max(0,min(ih-ih/zoom,ih*(${focusYExpr})-ih/zoom/2))':d=1:s=${landscapeW}x${landscapeH}:fps=${targetFps},setsar=1${reelCropSuffix}${outputLabel}`;
+  const animatedFilter = `[screen_base]zoompan=z='${zoomExpr}':x='max(0,min(iw-iw/zoom,iw*(${focusXExpr})-iw/zoom/2))':y='max(0,min(ih-ih/zoom,ih*(${focusYExpr})-ih/zoom/2))':d=1:s=${baseW}x${baseH}:fps=${targetFps},setsar=1${reelCropSuffix}${outputLabel}`;
   return `${baseFilter};${animatedFilter}`;
 }
 

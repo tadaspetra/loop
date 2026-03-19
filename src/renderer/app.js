@@ -1198,7 +1198,9 @@ import {
           reelCropX: existing ? clampReelCropX(existing.reelCropX) : 0,
           pipScale: existing ? normalizePipScale(existing.pipScale) : (editorState.pipScale || DEFAULT_PIP_SCALE),
           sectionId: section.id,
-          autoSection: true
+          autoSection: true,
+          savedLandscape: existing?.savedLandscape ? { ...existing.savedLandscape } : null,
+          savedReel: existing?.savedReel ? { ...existing.savedReel } : null
         };
       });
 
@@ -2822,10 +2824,13 @@ import {
         autoSection: true
       }));
 
+      const outputMode = opts.outputMode === 'reel' ? 'reel' : 'landscape';
+      const minZoomForLoad = outputMode === 'reel' ? MIN_REEL_SECTION_ZOOM : MIN_SECTION_ZOOM;
+
       const providedKeyframes = Array.isArray(opts.keyframes) && opts.keyframes.length > 0
         ? opts.keyframes.map(kf => ({
           ...kf,
-          backgroundZoom: clampSectionZoom(kf.backgroundZoom),
+          backgroundZoom: Math.max(minZoomForLoad, Math.min(MAX_SECTION_ZOOM, Number.isFinite(Number(kf.backgroundZoom)) ? Number(kf.backgroundZoom) : DEFAULT_SECTION_ZOOM)),
           backgroundPanX: clampSectionPan(kf.backgroundPanX),
           backgroundPanY: clampSectionPan(kf.backgroundPanY),
           reelCropX: clampReelCropX(kf.reelCropX),
@@ -2833,8 +2838,6 @@ import {
         }))
         : null;
       const keyframes = (providedKeyframes || sectionKeyframes).sort((a, b) => a.time - b.time);
-
-      const outputMode = opts.outputMode === 'reel' ? 'reel' : 'landscape';
       const pipScale = (() => {
         const v = Number(opts.pipScale);
         if (opts.pipScale == null || !Number.isFinite(v)) return DEFAULT_PIP_SCALE;

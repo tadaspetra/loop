@@ -125,7 +125,7 @@ function normalizeKeyframes(rawKeyframes = []) {
       pipY: Number.isFinite(Number(keyframe.pipY)) ? Number(keyframe.pipY) : 0,
       pipVisible: keyframe.pipVisible !== false,
       cameraFullscreen: !!keyframe.cameraFullscreen,
-      backgroundZoom: normalizeBackgroundZoom(keyframe.backgroundZoom),
+      backgroundZoom: normalizeBackgroundZoom(keyframe.backgroundZoom, OUTPUT_MODE_REEL),
       backgroundPanX: normalizeBackgroundPan(keyframe.backgroundPanX),
       backgroundPanY: normalizeBackgroundPan(keyframe.backgroundPanY),
       reelCropX: normalizeReelCropX(keyframe.reelCropX),

@@ -63,7 +63,7 @@ describe('shared/domain/project', () => {
     expect(keyframes[1].pipX).toBe(50);
     expect(keyframes[1].pipVisible).toBe(false);
     expect(keyframes[1].cameraFullscreen).toBe(true);
-    expect(keyframes[0].backgroundZoom).toBe(1);
+    expect(keyframes[0].backgroundZoom).toBe(0.5); // 0.25 clamped to reel minimum (0.5)
     expect(keyframes[1].backgroundZoom).toBe(2.5);
     expect(keyframes[2].backgroundZoom).toBe(3);
     expect(keyframes[0].backgroundPanX).toBe(-1);
@@ -232,6 +232,17 @@ describe('shared/domain/project', () => {
     expect(keyframes[1].pipScale).toBe(0.15);
     expect(keyframes[2].pipScale).toBe(0.50);
     expect(keyframes[3].pipScale).toBe(0.22);
+  });
+
+  test('normalizeKeyframes preserves reel zoom-out values (0.5-1.0)', () => {
+    const keyframes = normalizeKeyframes([
+      { time: 0, pipX: 10, pipY: 20, backgroundZoom: 0.7 },
+      { time: 1, pipX: 30, pipY: 40, backgroundZoom: 0.5 },
+      { time: 2, pipX: 50, pipY: 60, backgroundZoom: 0.3 }
+    ]);
+    expect(keyframes[0].backgroundZoom).toBe(0.7); // preserved (within reel range)
+    expect(keyframes[1].backgroundZoom).toBe(0.5); // preserved (reel minimum)
+    expect(keyframes[2].backgroundZoom).toBe(0.5); // clamped to reel minimum
   });
 
   test('createDefaultProject includes outputMode and pipScale in settings', () => {

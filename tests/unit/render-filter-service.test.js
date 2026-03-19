@@ -109,7 +109,29 @@ describe('main/services/render-filter-service', () => {
     expect(filter).toContain(":x='max(0,min(iw-iw/zoom,iw*(if(gte(it,2.000),0.750000");
   });
 
-  test('buildFilterComplex can skip screen scaling when preprocessed', () => {
+  test('buildFilterComplex applies fit-mode scale+pad when preprocessed in landscape', () => {
+    // Non-16:9 source (1440x1080, 4:3) in fit mode
+    // resolveOutputSize(1440,1080,'landscape') → 1440x810
+    const filter = buildFilterComplex(
+      [
+        { time: 0, pipX: 100, pipY: 100, pipVisible: true, cameraFullscreen: false },
+        { time: 2, pipX: 120, pipY: 120, pipVisible: true, cameraFullscreen: false }
+      ],
+      320,
+      'fit',
+      1440,
+      1080,
+      1920,
+      1080,
+      true
+    );
+    expect(filter).toContain('scale=1440:810');
+    expect(filter).toContain('force_original_aspect_ratio=decrease');
+    expect(filter).toContain('pad=1440:810:');
+  });
+
+  test('buildFilterComplex applies fill-mode scale+crop when preprocessed in landscape', () => {
+    // resolveOutputSize(1440,1080,'landscape') → 1440x810
     const filter = buildFilterComplex(
       [
         { time: 0, pipX: 100, pipY: 100, pipVisible: true, cameraFullscreen: false },
@@ -117,13 +139,15 @@ describe('main/services/render-filter-service', () => {
       ],
       320,
       'fill',
-      1920,
+      1440,
       1080,
       1920,
       1080,
       true
     );
-    expect(filter).toContain('[0:v]setpts=PTS-STARTPTS[screen]');
+    expect(filter).toContain('scale=1440:810');
+    expect(filter).toContain('force_original_aspect_ratio=increase');
+    expect(filter).toContain('crop=1440:810');
   });
 
   test('resolveOutputSize returns 9:16 dimensions for reel mode', () => {
@@ -336,6 +360,165 @@ describe('main/services/render-filter-service', () => {
     // Overlay uses eval=frame for variable-size PIP
     expect(filter).toContain('overlay=x=');
     expect(filter).toContain(':eval=frame[out]');
+  });
+
+  test('buildScreenFilter applies fit-mode padding when preprocessed in landscape', () => {
+    // 1440x1080 source (4:3) in fit mode, preprocessed, landscape
+    // resolveOutputSize(1440,1080,'landscape') → 1440x810
+    const filter = buildScreenFilter(
+      [{ time: 0, backgroundZoom: 1, backgroundPanX: 0, backgroundPanY: 0 }],
+      'fit',
+      1440,
+      1080,
+      1920,
+      1080,
+      '[screen]',
+      true,
+      30,
+      'landscape'
+    );
+    expect(filter).toContain('scale=1440:810');
+    expect(filter).toContain('force_original_aspect_ratio=decrease');
+    expect(filter).toContain('pad=1440:810:');
+    expect(filter).toContain('[screen]');
+  });
+
+  test('buildScreenFilter applies fill-mode crop when preprocessed in landscape', () => {
+    // resolveOutputSize(1440,1080,'landscape') → 1440x810
+    const filter = buildScreenFilter(
+      [{ time: 0, backgroundZoom: 1, backgroundPanX: 0, backgroundPanY: 0 }],
+      'fill',
+      1440,
+      1080,
+      1920,
+      1080,
+      '[screen]',
+      true,
+      30,
+      'landscape'
+    );
+    expect(filter).toContain('scale=1440:810');
+    expect(filter).toContain('force_original_aspect_ratio=increase');
+    expect(filter).toContain('crop=1440:810');
+    expect(filter).toContain('[screen]');
+  });
+
+  test('buildScreenFilter applies fit-mode padding when preprocessed with background animation', () => {
+    // Preprocessed + zoom > 1 + fit mode in landscape — zoompan input should be padded
+    // resolveOutputSize(1440,1080,'landscape') → 1440x810
+    const filter = buildScreenFilter(
+      [
+        { time: 0, backgroundZoom: 1.5, backgroundPanX: 0, backgroundPanY: 0 },
+      ],
+      'fit',
+      1440,
+      1080,
+      1920,
+      1080,
+      '[screen]',
+      true,
+      30,
+      'landscape'
+    );
+    expect(filter).toContain('force_original_aspect_ratio=decrease');
+    expect(filter).toContain('pad=1440:810:');
+    expect(filter).toContain('zoompan');
+  });
+
+  test('buildScreenFilter in reel mode + preprocessed does NOT apply landscape fit scaling', () => {
+    // Source 3024x1964 (taller than 16:9): reel output is 1104x1964, landscape is 3024x1700
+    // In reel mode, baseFilter should NOT scale to landscape dimensions because
+    // reel crop (1104x1964) would exceed the landscape height (1700)
+    const filter = buildScreenFilter(
+      [{ time: 0, backgroundZoom: 1, backgroundPanX: 0, backgroundPanY: 0, reelCropX: 0 }],
+      'fit',
+      3024,
+      1964,
+      1920,
+      1080,
+      '[screen]',
+      true,
+      30,
+      'reel'
+    );
+    // Should NOT contain landscape scale/pad
+    expect(filter).not.toContain('scale=3024:1700');
+    expect(filter).not.toContain('pad=3024:1700');
+    // Should contain reel crop at source height
+    expect(filter).toContain('crop=1104:1964:');
+    expect(filter).toContain('[screen]');
+  });
+
+  test('buildFilterComplex in reel mode + preprocessed does NOT apply landscape fit scaling', () => {
+    // Same source (3024x1964) through buildFilterComplex
+    const filter = buildFilterComplex(
+      [
+        { time: 0, pipX: 100, pipY: 100, pipVisible: true, cameraFullscreen: false, backgroundZoom: 1, backgroundPanX: 0, backgroundPanY: 0, reelCropX: 0, pipScale: 0.33 }
+      ],
+      200,
+      'fit',
+      3024,
+      1964,
+      Math.round(1964 * 9 / 16),
+      1964,
+      true,
+      30,
+      'reel'
+    );
+    // Should NOT contain landscape scale/pad
+    expect(filter).not.toContain('scale=3024:1700');
+    expect(filter).not.toContain('pad=3024:1700');
+    // Should contain reel crop at source height
+    expect(filter).toContain('crop=1104:1964:');
+  });
+
+  test('buildScreenFilter in reel mode + preprocessed uses setpts without scale', () => {
+    // For preprocessed reel, baseFilter should only apply setpts (no scale/pad)
+    const filter = buildScreenFilter(
+      [{ time: 0, backgroundZoom: 1, backgroundPanX: 0, backgroundPanY: 0, reelCropX: 0 }],
+      'fit',
+      1920,
+      1080,
+      1920,
+      1080,
+      '[screen]',
+      true,
+      30,
+      'reel'
+    );
+    expect(filter).toContain('setpts=PTS-STARTPTS');
+    // Should NOT apply landscape fit scaling in reel mode
+    expect(filter).not.toContain('force_original_aspect_ratio');
+    expect(filter).toContain('crop=608:1080:');
+  });
+
+  test('buildScreenFilter reel + preprocessed + zoom-out uses source dimensions not landscape', () => {
+    // Source 3024x1964 (not 16:9), reel mode, preprocessed, with zoom-out
+    // The zoom-out pipeline should use source dimensions (3024x1964) not landscape (3024x1700)
+    const filter = buildScreenFilter(
+      [
+        { time: 0, backgroundZoom: 1, backgroundPanX: 0, backgroundPanY: 0, reelCropX: 0 },
+        { time: 2, backgroundZoom: 0.7, backgroundPanX: 0, backgroundPanY: 0, reelCropX: 0 }
+      ],
+      'fit',
+      3024,
+      1964,
+      1920,
+      1080,
+      '[screen]',
+      true,
+      30,
+      'reel'
+    );
+    // Zoom-out pipeline should use source height (1964), not landscape height (1700)
+    expect(filter).toContain('s=3024x1964');
+    expect(filter).not.toContain('s=3024x1700');
+    // Scale part should also use source dimensions
+    expect(filter).toContain(`floor(3024*`);
+    expect(filter).toContain(`floor(1964*`);
+    expect(filter).not.toContain(`floor(1700*`);
+    // Reel crop should use source height
+    expect(filter).toContain('crop=1104:1964:');
   });
 
   test('buildFilterComplex defaults pipScale to 0.22 when not in keyframes', () => {
