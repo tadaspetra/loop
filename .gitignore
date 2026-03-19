@@ -6,6 +6,8 @@ dist-smoke
 .env
 .cursor/hooks/state/
 
+.DS_Store
+.agents/
 .claude/worktrees/*
 pnpm-lock.yaml
 package-lock.json
