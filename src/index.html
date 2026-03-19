@@ -202,6 +202,21 @@
             class="w-28 accent-white disabled:opacity-50" />
           <span id="editorBgZoomValue" class="text-xs font-mono tabular-nums text-neutral-300 min-w-[46px] text-right">1.00x</span>
         </div>
+        <div id="editorPipSizeControl" class="hidden items-center gap-2 px-2 py-1 border border-neutral-800 rounded-lg bg-neutral-900">
+          <label for="editorPipSizeInput" class="text-xs text-neutral-400">PIP</label>
+          <input id="editorPipSizeInput" type="range" min="0.15" max="0.50" step="0.01" value="0.22"
+            class="w-24 accent-white disabled:opacity-50" />
+          <span id="editorPipSizeValue" class="text-xs font-mono tabular-nums text-neutral-300 min-w-[38px] text-right">0.22</span>
+        </div>
+        <div class="flex items-center border border-neutral-800 rounded-lg bg-neutral-900 overflow-hidden">
+          <button id="editorModeLandscape" class="px-2.5 py-1 text-xs bg-white text-black transition-colors">16:9</button>
+          <button id="editorModeReel" class="px-2.5 py-1 text-xs text-neutral-400 hover:text-neutral-200 transition-colors">9:16</button>
+        </div>
+        <div id="editorCropPresets" class="hidden items-center border border-neutral-800 rounded-lg bg-neutral-900 overflow-hidden">
+          <button id="editorCropLeft" class="px-2.5 py-1 text-xs text-neutral-400 hover:text-neutral-200 transition-colors" title="Crop left">&#9664;</button>
+          <button id="editorCropCenter" class="px-2.5 py-1 text-xs text-neutral-400 hover:text-neutral-200 transition-colors" title="Crop center">&#9679;</button>
+          <button id="editorCropRight" class="px-2.5 py-1 text-xs text-neutral-400 hover:text-neutral-200 transition-colors" title="Crop right">&#9654;</button>
+        </div>
         <div class="w-px h-5 bg-neutral-800 mx-1"></div>
         <button id="editorApplyFutureBtn" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Apply to Future</button>
       </div>

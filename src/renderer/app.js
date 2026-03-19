@@ -82,6 +82,15 @@ import {
     const editorBgZoomInput = document.getElementById('editorBgZoomInput');
     const editorBgZoomValue = document.getElementById('editorBgZoomValue');
     const editorApplyFutureBtn = document.getElementById('editorApplyFutureBtn');
+    const editorModeLandscapeBtn = document.getElementById('editorModeLandscape');
+    const editorModeReelBtn = document.getElementById('editorModeReel');
+    const editorPipSizeControl = document.getElementById('editorPipSizeControl');
+    const editorPipSizeInput = document.getElementById('editorPipSizeInput');
+    const editorPipSizeValue = document.getElementById('editorPipSizeValue');
+    const editorCropPresets = document.getElementById('editorCropPresets');
+    const editorCropLeftBtn = document.getElementById('editorCropLeft');
+    const editorCropCenterBtn = document.getElementById('editorCropCenter');
+    const editorCropRightBtn = document.getElementById('editorCropRight');
     const editorTimeEl = document.getElementById('editorTime');
     const editorTimelineWrapper = document.getElementById('editorTimelineWrapper');
     const editorTimeline = document.getElementById('editorTimeline');
@@ -153,26 +162,45 @@ import {
     const PIP_MARGIN = 20;
     const PIP_SIZE = Math.round(CANVAS_W * PIP_FRACTION);
     const MIN_SECTION_ZOOM = 1;
+    const MIN_REEL_SECTION_ZOOM = 0.5;
     const MAX_SECTION_ZOOM = 3;
     const DEFAULT_SECTION_ZOOM = 1;
     const MIN_SECTION_PAN = -1;
     const MAX_SECTION_PAN = 1;
     const EXPORT_AUDIO_PRESET_OFF = 'off';
     const EXPORT_AUDIO_PRESET_COMPRESSED = 'compressed';
+    const REEL_CANVAS_W = Math.round(CANVAS_H * 9 / 16);
+    const REEL_CANVAS_H = CANVAS_H;
+    const MIN_REEL_CROP_X = -1;
+    const MAX_REEL_CROP_X = 1;
+    const DEFAULT_PIP_SCALE = 0.22;
+    const MIN_PIP_SCALE = 0.15;
+    const MAX_PIP_SCALE = 0.50;
 
-    function snapToNearestCorner(cursorX, cursorY) {
-      const midX = CANVAS_W / 2;
-      const midY = CANVAS_H / 2;
+    function normalizePipScale(value) {
+      if (value === null || value === undefined) return DEFAULT_PIP_SCALE;
+      const v = Number(value);
+      if (!Number.isFinite(v)) return DEFAULT_PIP_SCALE;
+      return Math.max(MIN_PIP_SCALE, Math.min(MAX_PIP_SCALE, v));
+    }
+
+    function snapToNearestCorner(cursorX, cursorY, effectiveW, effectiveH, pipSize) {
+      const w = effectiveW || CANVAS_W;
+      const h = effectiveH || CANVAS_H;
+      const ps = pipSize || PIP_SIZE;
+      const midX = w / 2;
+      const midY = h / 2;
       return {
-        x: cursorX < midX ? PIP_MARGIN : CANVAS_W - PIP_SIZE - PIP_MARGIN,
-        y: cursorY < midY ? PIP_MARGIN : CANVAS_H - PIP_SIZE - PIP_MARGIN
+        x: cursorX < midX ? PIP_MARGIN : w - ps - PIP_MARGIN,
+        y: cursorY < midY ? PIP_MARGIN : h - ps - PIP_MARGIN
       };
     }
 
     function clampSectionZoom(value) {
+      const minZoom = editorState && editorState.outputMode === 'reel' ? MIN_REEL_SECTION_ZOOM : MIN_SECTION_ZOOM;
       const zoom = Number(value);
       if (!Number.isFinite(zoom)) return DEFAULT_SECTION_ZOOM;
-      return Math.max(MIN_SECTION_ZOOM, Math.min(MAX_SECTION_ZOOM, zoom));
+      return Math.max(minZoom, Math.min(MAX_SECTION_ZOOM, zoom));
     }
 
     function formatSectionZoom(value) {
@@ -183,6 +211,95 @@ import {
       const pan = Number(value);
       if (!Number.isFinite(pan)) return 0;
       return Math.max(MIN_SECTION_PAN, Math.min(MAX_SECTION_PAN, pan));
+    }
+
+    function clampReelCropX(value) {
+      const v = Number(value);
+      if (!Number.isFinite(v)) return 0;
+      return Math.max(MIN_REEL_CROP_X, Math.min(MAX_REEL_CROP_X, v));
+    }
+
+    function getEffectiveCanvasDimensions() {
+      if (!editorState || editorState.outputMode !== 'reel') return { w: CANVAS_W, h: CANVAS_H };
+      return { w: REEL_CANVAS_W, h: REEL_CANVAS_H };
+    }
+
+    function computePipSize(pipScale, effectiveW) {
+      return Math.round(effectiveW * pipScale);
+    }
+
+    function reelCropXToPixelOffset(reelCropX, zoom) {
+      const z = Math.min(1, Math.max(0, zoom != null ? zoom : 1));
+      const scaledW = CANVAS_W * z;
+      const scaledLeft = (CANVAS_W - scaledW) / 2;
+      const maxCropRange = Math.max(0, scaledW - REEL_CANVAS_W);
+      return scaledLeft + ((clampReelCropX(reelCropX) + 1) / 2) * maxCropRange;
+    }
+
+    function setOutputMode(mode) {
+      if (!editorState) return;
+      const newMode = mode === 'reel' ? 'reel' : 'landscape';
+      if (editorState.outputMode === newMode) return;
+      pushUndo();
+      editorState.outputMode = newMode;
+
+      const { w, h } = getEffectiveCanvasDimensions();
+      const defaultPs = editorState.pipScale || DEFAULT_PIP_SCALE;
+      editorState.pipSize = computePipSize(defaultPs, w);
+
+      // Re-map PIP positions and clamp zoom values for the new mode
+      if (editorState.keyframes) {
+        for (const kf of editorState.keyframes) {
+          // When switching to landscape, clamp any zoom < 1 up to 1
+          if (newMode === 'landscape' && kf.backgroundZoom < 1) {
+            kf.backgroundZoom = 1;
+          }
+          if (kf.sectionId) {
+            const kfPipSize = computePipSize(kf.pipScale || defaultPs, w);
+            const snapped = snapToNearestCorner(kf.pipX, kf.pipY, w, h, kfPipSize);
+            kf.pipX = snapped.x;
+            kf.pipY = snapped.y;
+          }
+        }
+      }
+      editorState.defaultPipX = w - editorState.pipSize - PIP_MARGIN;
+      editorState.defaultPipY = h - editorState.pipSize - PIP_MARGIN;
+
+      updateOutputModeUI();
+      scheduleProjectSave();
+    }
+
+    function updateOutputModeUI() {
+      if (!editorModeLandscapeBtn || !editorModeReelBtn) return;
+      const isReel = editorState && editorState.outputMode === 'reel';
+      editorModeLandscapeBtn.className = isReel
+        ? 'px-2.5 py-1 text-xs text-neutral-400 hover:text-neutral-200 transition-colors'
+        : 'px-2.5 py-1 text-xs bg-white text-black transition-colors';
+      editorModeReelBtn.className = isReel
+        ? 'px-2.5 py-1 text-xs bg-white text-black transition-colors'
+        : 'px-2.5 py-1 text-xs text-neutral-400 hover:text-neutral-200 transition-colors';
+      // Show/hide PIP size control when camera is present
+      if (editorPipSizeControl) {
+        const showPipControl = editorState && editorState.hasCamera;
+        editorPipSizeControl.classList.toggle('hidden', !showPipControl);
+        editorPipSizeControl.classList.toggle('flex', !!showPipControl);
+      }
+      if (editorPipSizeInput && editorState) {
+        const selectedSection = getSelectedSection();
+        const sectionAnchor = selectedSection ? getSectionAnchorKeyframe(selectedSection.id, false) : null;
+        const currentPipScale = sectionAnchor ? normalizePipScale(sectionAnchor.pipScale) : (editorState.pipScale || DEFAULT_PIP_SCALE);
+        editorPipSizeInput.value = String(currentPipScale);
+        if (editorPipSizeValue) editorPipSizeValue.textContent = currentPipScale.toFixed(2);
+      }
+      if (editorCropPresets) {
+        editorCropPresets.classList.toggle('hidden', !isReel);
+        editorCropPresets.classList.toggle('flex', !!isReel);
+      }
+      // Update zoom slider range based on mode
+      if (editorBgZoomInput) {
+        editorBgZoomInput.min = isReel ? '0.5' : '1';
+      }
+      updateSectionZoomControls();
     }
 
     function normalizeExportAudioPreset(value) {
@@ -267,6 +384,9 @@ import {
     let activePlaybackSection = null;
     let cameraResyncCooldownUntil = 0;
     let lastCameraDriftLogAt = 0;
+    let draggingCrop = false;
+    let cropDragMoved = false;
+    let cropDragState = null;
     const editorZoomBuffer = document.createElement('canvas');
     editorZoomBuffer.width = CANVAS_W;
     editorZoomBuffer.height = CANVAS_H;
@@ -488,7 +608,9 @@ import {
             ...kf,
             backgroundZoom: clampSectionZoom(kf.backgroundZoom),
             backgroundPanX: clampSectionPan(kf.backgroundPanX),
-            backgroundPanY: clampSectionPan(kf.backgroundPanY)
+            backgroundPanY: clampSectionPan(kf.backgroundPanY),
+            reelCropX: clampReelCropX(kf.reelCropX),
+            pipScale: normalizePipScale(kf.pipScale)
           }))
           : [],
         selectedSectionId: editorState.selectedSectionId || null,
@@ -506,7 +628,9 @@ import {
           screenFitMode: screenFitSelect.value || 'fill',
           hideFromRecording: hideFromRecording === 'true',
           exportAudioPreset: normalizeExportAudioPreset(exportAudioPresetSelect.value),
-          cameraSyncOffsetMs: normalizeCameraSyncOffsetMs(cameraSyncOffsetInput.value)
+          cameraSyncOffsetMs: normalizeCameraSyncOffsetMs(cameraSyncOffsetInput.value),
+          outputMode: editorState?.outputMode || 'landscape',
+          pipScale: editorState?.pipScale || DEFAULT_PIP_SCALE
         },
         timeline: getProjectTimelineSnapshot()
       };
@@ -751,6 +875,8 @@ import {
             sourceWidth: project.timeline.sourceWidth || null,
             sourceHeight: project.timeline.sourceHeight || null,
             cameraSyncOffsetMs: project.settings?.cameraSyncOffsetMs,
+            outputMode: project.settings?.outputMode,
+            pipScale: project.settings?.pipScale,
             initialView: preferredView === 'recording' ? 'recording' : 'timeline'
           }
         );
@@ -826,6 +952,14 @@ import {
       editorBgZoomInput.disabled = disabled;
       editorBgZoomInput.value = String(zoom);
       editorBgZoomValue.textContent = formatSectionZoom(zoom);
+
+      // Update PIP size slider to reflect current section's pipScale
+      if (editorPipSizeInput && editorState) {
+        const sectionAnchor = selectedSection ? getSectionAnchorKeyframe(selectedSection.id, false) : null;
+        const sectionPipScale = sectionAnchor ? normalizePipScale(sectionAnchor.pipScale) : (editorState.pipScale || DEFAULT_PIP_SCALE);
+        editorPipSizeInput.value = String(sectionPipScale);
+        if (editorPipSizeValue) editorPipSizeValue.textContent = sectionPipScale.toFixed(2);
+      }
     }
 
     function getSectionAnchorKeyframe(sectionId, createIfMissing) {
@@ -847,6 +981,8 @@ import {
         backgroundZoom: clampSectionZoom(fallback.backgroundZoom),
         backgroundPanX: clampSectionPan(fallback.backgroundPanX),
         backgroundPanY: clampSectionPan(fallback.backgroundPanY),
+        reelCropX: clampReelCropX(fallback.reelCropX),
+        pipScale: normalizePipScale(fallback.pipScale),
         sectionId: section.id,
         autoSection: true
       };
@@ -877,6 +1013,8 @@ import {
           backgroundZoom: existing ? clampSectionZoom(existing.backgroundZoom) : DEFAULT_SECTION_ZOOM,
           backgroundPanX: existing ? clampSectionPan(existing.backgroundPanX) : 0,
           backgroundPanY: existing ? clampSectionPan(existing.backgroundPanY) : 0,
+          reelCropX: existing ? clampReelCropX(existing.reelCropX) : 0,
+          pipScale: existing ? normalizePipScale(existing.pipScale) : (editorState.pipScale || DEFAULT_PIP_SCALE),
           sectionId: section.id,
           autoSection: true
         };
@@ -925,6 +1063,8 @@ import {
         anchor.backgroundZoom = clampSectionZoom(currentAnchor.backgroundZoom);
         anchor.backgroundPanX = clampSectionPan(currentAnchor.backgroundPanX);
         anchor.backgroundPanY = clampSectionPan(currentAnchor.backgroundPanY);
+        anchor.reelCropX = clampReelCropX(currentAnchor.reelCropX);
+        anchor.pipScale = normalizePipScale(currentAnchor.pipScale);
       }
 
       renderSectionMarkers();
@@ -1249,7 +1389,9 @@ import {
         cameraFullscreen: !!kf.cameraFullscreen,
         backgroundZoom: clampSectionZoom(kf.backgroundZoom),
         backgroundPanX: clampSectionPan(kf.backgroundPanX),
-        backgroundPanY: clampSectionPan(kf.backgroundPanY)
+        backgroundPanY: clampSectionPan(kf.backgroundPanY),
+        reelCropX: clampReelCropX(kf.reelCropX),
+        pipScale: normalizePipScale(kf.pipScale)
       }));
 
       if (minimal.length === 0 || minimal[0].time > 0.0001) {
@@ -1261,7 +1403,9 @@ import {
           cameraFullscreen: false,
           backgroundZoom: DEFAULT_SECTION_ZOOM,
           backgroundPanX: 0,
-          backgroundPanY: 0
+          backgroundPanY: 0,
+          reelCropX: 0,
+          pipScale: editorState.pipScale || DEFAULT_PIP_SCALE
         });
       }
 
@@ -1281,7 +1425,9 @@ import {
           sourceEnd: section.sourceEnd,
           backgroundZoom: clampSectionZoom(anchor?.backgroundZoom),
           backgroundPanX: clampSectionPan(anchor?.backgroundPanX),
-          backgroundPanY: clampSectionPan(anchor?.backgroundPanY)
+          backgroundPanY: clampSectionPan(anchor?.backgroundPanY),
+          reelCropX: clampReelCropX(anchor?.reelCropX),
+          pipScale: normalizePipScale(anchor?.pipScale)
         };
       });
     }
@@ -1545,8 +1691,35 @@ import {
       const zoom = clampSectionZoom(backgroundZoom);
       const drawBase = fitMode === 'fill' ? drawFill : drawFit;
 
-      if (zoom <= 1.0001) {
+      if (zoom <= 1.0001 && zoom >= 0.9999) {
         drawBase(targetCtx, video, 0, 0, CANVAS_W, CANVAS_H);
+        return;
+      }
+
+      if (zoom < 0.9999) {
+        // Zoom-out: draw the full frame at reduced scale, centered vertically.
+        // The reel crop overlay will carve out the 608px strip later.
+        // First draw base content to the buffer at 1:1
+        editorZoomBufferCtx.fillStyle = '#000';
+        editorZoomBufferCtx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+        drawBase(editorZoomBufferCtx, video, 0, 0, CANVAS_W, CANVAS_H);
+
+        // Fill target with black
+        targetCtx.fillStyle = '#000';
+        targetCtx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+        // Draw darkened scaled-to-fill background (the content scaled up to fill, darkened)
+        targetCtx.save();
+        targetCtx.globalAlpha = 0.2;
+        targetCtx.drawImage(editorZoomBuffer, 0, 0, CANVAS_W, CANVAS_H);
+        targetCtx.restore();
+
+        // Draw the sharp content at reduced scale, centered (uniform scale preserves aspect ratio)
+        const scaledW = Math.round(CANVAS_W * zoom);
+        const scaledH = Math.round(CANVAS_H * zoom);
+        const offsetX = Math.round((CANVAS_W - scaledW) / 2);
+        const offsetY = Math.round((CANVAS_H - scaledH) / 2);
+        targetCtx.drawImage(editorZoomBuffer, 0, 0, CANVAS_W, CANVAS_H, offsetX, offsetY, scaledW, scaledH);
         return;
       }
 
@@ -2385,6 +2558,7 @@ import {
         backgroundZoom: DEFAULT_SECTION_ZOOM,
         backgroundPanX: 0,
         backgroundPanY: 0,
+        reelCropX: 0,
         sectionId: section.id,
         autoSection: true
       }));
@@ -2394,18 +2568,32 @@ import {
           ...kf,
           backgroundZoom: clampSectionZoom(kf.backgroundZoom),
           backgroundPanX: clampSectionPan(kf.backgroundPanX),
-          backgroundPanY: clampSectionPan(kf.backgroundPanY)
+          backgroundPanY: clampSectionPan(kf.backgroundPanY),
+          reelCropX: clampReelCropX(kf.reelCropX),
+          pipScale: normalizePipScale(kf.pipScale)
         }))
         : null;
       const keyframes = (providedKeyframes || sectionKeyframes).sort((a, b) => a.time - b.time);
+
+      const outputMode = opts.outputMode === 'reel' ? 'reel' : 'landscape';
+      const pipScale = (() => {
+        const v = Number(opts.pipScale);
+        if (opts.pipScale == null || !Number.isFinite(v)) return DEFAULT_PIP_SCALE;
+        return Math.max(MIN_PIP_SCALE, Math.min(MAX_PIP_SCALE, v));
+      })();
+      const effectiveW = outputMode === 'reel' ? REEL_CANVAS_W : CANVAS_W;
+      const effectiveH = outputMode === 'reel' ? REEL_CANVAS_H : CANVAS_H;
+      const effectivePipSize = computePipSize(pipScale, effectiveW);
+      const effDefaultPipX = effectiveW - effectivePipSize - PIP_MARGIN;
+      const effDefaultPipY = effectiveH - effectivePipSize - PIP_MARGIN;
 
       editorState = {
         duration,
         currentTime: 0,
         playing: false,
-        pipSize: PIP_SIZE,
-        defaultPipX,
-        defaultPipY,
+        pipSize: effectivePipSize,
+        defaultPipX: effDefaultPipX,
+        defaultPipY: effDefaultPipY,
         keyframes,
         sections,
         selectedSectionId: opts.selectedSectionId || sections[0]?.id || null,
@@ -2416,11 +2604,14 @@ import {
         cameraSyncOffsetMs: normalizeCameraSyncOffsetMs(opts.cameraSyncOffsetMs),
         hasCamera: typeof opts.hasCamera === 'boolean' ? opts.hasCamera : false,
         sourceWidth: opts.sourceWidth || null,
-        sourceHeight: opts.sourceHeight || null
+        sourceHeight: opts.sourceHeight || null,
+        outputMode,
+        pipScale
       };
       screenFitSelect.value = editorState.screenFitMode === 'fit' ? 'fit' : 'fill';
       cameraSyncOffsetInput.value = String(editorState.cameraSyncOffsetMs);
       updateSectionZoomControls();
+      updateOutputModeUI();
 
       // Pre-create video elements for all referenced takes
       const referencedTakeIds = new Set(sections.map(s => s.takeId).filter(Boolean));
@@ -2488,7 +2679,9 @@ import {
         cameraFullscreen: false,
         backgroundZoom: DEFAULT_SECTION_ZOOM,
         backgroundPanX: 0,
-        backgroundPanY: 0
+        backgroundPanY: 0,
+        reelCropX: 0,
+        pipScale: editorState.pipScale || DEFAULT_PIP_SCALE
       };
       const userKfs = editorState.keyframes;
       const kfs = userKfs.length > 0 && userKfs[0].time === 0 ? userKfs : [defaultKf, ...userKfs];
@@ -2513,6 +2706,8 @@ import {
       let backgroundPanY = clampSectionPan(active.backgroundPanY);
       let backgroundFocusX = panToFocusCoord(backgroundZoom, backgroundPanX, 0.5);
       let backgroundFocusY = panToFocusCoord(backgroundZoom, backgroundPanY, 0.5);
+      let reelCropX = clampReelCropX(active.reelCropX);
+      let pipScale = normalizePipScale(active.pipScale);
 
       // Transition toward next keyframe at end of current section
       if (next) {
@@ -2563,6 +2758,16 @@ import {
           backgroundFocusY = backgroundFocusY + (nextFocusY - backgroundFocusY) * t;
           backgroundPanX = focusToPanCoord(backgroundZoom, backgroundFocusX, backgroundPanX);
           backgroundPanY = focusToPanCoord(backgroundZoom, backgroundFocusY, backgroundPanY);
+
+          const nextReelCropX = clampReelCropX(next.reelCropX);
+          if (Math.abs(reelCropX - nextReelCropX) > 0.0001) {
+            reelCropX = reelCropX + (nextReelCropX - reelCropX) * t;
+          }
+
+          const nextPipScale = normalizePipScale(next.pipScale);
+          if (Math.abs(pipScale - nextPipScale) > 0.0001) {
+            pipScale = pipScale + (nextPipScale - pipScale) * t;
+          }
         }
       }
 
@@ -2577,7 +2782,9 @@ import {
         backgroundPanX,
         backgroundPanY,
         backgroundFocusX,
-        backgroundFocusY
+        backgroundFocusY,
+        reelCropX,
+        pipScale
       };
     }
 
@@ -2729,6 +2936,17 @@ import {
         }
       }
       editorPlayBtn.textContent = 'Play';
+      // If a video-frame callback was pending it will never fire now that the
+      // video is paused, so cancel it and restart the draw loop on the paused
+      // timer path so the canvas keeps updating (e.g. during drag operations).
+      if (editorVideoFrameCallbackId !== null && editorVideoFrameHost) {
+        editorVideoFrameHost.cancelVideoFrameCallback(editorVideoFrameCallbackId);
+        editorVideoFrameCallbackId = null;
+        editorVideoFrameHost = null;
+      }
+      if (!hasPendingEditorDraw()) {
+        scheduleEditorDrawLoop();
+      }
     }
 
     function editorTogglePlay() {
@@ -2847,24 +3065,55 @@ import {
         );
       }
 
+      const isReel = editorState.outputMode === 'reel';
+      const cropPixelX = isReel ? reelCropXToPixelOffset(state.reelCropX, state.backgroundZoom) : 0;
+      const effectiveW = isReel ? REEL_CANVAS_W : CANVAS_W;
+      const currentPipSize = computePipSize(state.pipScale, effectiveW);
+
       if (hasCamera) {
         if (state.camTransition > 0 && state.opacity > 0) {
           editorCtx.save();
           if (state.opacity < 1) editorCtx.globalAlpha = state.opacity;
           const t = easeInOut(state.camTransition);
-          const camX = state.pipX * (1 - t);
-          const camY = state.pipY * (1 - t);
-          const camW = editorState.pipSize + (CANVAS_W - editorState.pipSize) * t;
-          const camH = editorState.pipSize + (CANVAS_H - editorState.pipSize) * t;
+          const fullW = isReel ? REEL_CANVAS_W : CANVAS_W;
+          const fullH = isReel ? REEL_CANVAS_H : CANVAS_H;
+          const drawPipX = isReel ? state.pipX + cropPixelX : state.pipX;
+          const drawPipY = state.pipY;
+          const camX = drawPipX * (1 - t) + (isReel ? cropPixelX : 0) * t;
+          const camY = drawPipY * (1 - t);
+          const camW = currentPipSize + (fullW - currentPipSize) * t;
+          const camH = currentPipSize + (fullH - currentPipSize) * t;
           const camR = 12 * (1 - t);
           drawCameraRect(editorCtx, activeVideos.camera, camX, camY, camW, camH, camR);
           editorCtx.restore();
         } else if (state.opacity > 0) {
           editorCtx.save();
           editorCtx.globalAlpha = state.opacity;
-          drawPip(editorCtx, activeVideos.camera, state.pipX, state.pipY, editorState.pipSize, editorState.pipSize);
+          const drawPipX = isReel ? state.pipX + cropPixelX : state.pipX;
+          drawPip(editorCtx, activeVideos.camera, drawPipX, state.pipY, currentPipSize, currentPipSize);
           editorCtx.restore();
         }
+      }
+
+      // Draw reel crop overlay
+      if (isReel) {
+        editorCtx.save();
+        editorCtx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+        // Left overlay
+        if (cropPixelX > 0) {
+          editorCtx.fillRect(0, 0, cropPixelX, CANVAS_H);
+        }
+        // Right overlay
+        const rightEdge = cropPixelX + REEL_CANVAS_W;
+        if (rightEdge < CANVAS_W) {
+          editorCtx.fillRect(rightEdge, 0, CANVAS_W - rightEdge, CANVAS_H);
+        }
+        // Dashed crop boundary
+        editorCtx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+        editorCtx.lineWidth = 2;
+        editorCtx.setLineDash([8, 6]);
+        editorCtx.strokeRect(cropPixelX, 0, REEL_CANVAS_W, CANVAS_H);
+        editorCtx.restore();
       }
 
       scheduleEditorDrawLoop();
@@ -2968,13 +3217,39 @@ import {
       if (activeSection) selectEditorSection(activeSection.id);
       const { x, y } = canvasToEditorCoords(e.clientX, e.clientY);
       const kf = getStateAtTime(editorState.currentTime);
+      const isReel = editorState.outputMode === 'reel';
+      const cropOffsetX = isReel ? reelCropXToPixelOffset(kf.reelCropX, kf.backgroundZoom) : 0;
+
+      // PIP hit-test: in reel mode, PIP coords are relative to crop region
       if (editorState.hasCamera && kf.pipVisible && kf.camTransition <= 0) {
-        const pipW = editorState.pipSize;
-        const pipH = editorState.pipSize;
-        if (x >= kf.pipX && x <= kf.pipX + pipW && y >= kf.pipY && y <= kf.pipY + pipH) {
+        const hitEffW = isReel ? REEL_CANVAS_W : CANVAS_W;
+        const pipW = computePipSize(kf.pipScale, hitEffW);
+        const pipH = pipW;
+        const drawPipX = isReel ? kf.pipX + cropOffsetX : kf.pipX;
+        if (x >= drawPipX && x <= drawPipX + pipW && y >= kf.pipY && y <= kf.pipY + pipH) {
           pipDragMoved = false;
           pushUndo();
           draggingPip = true;
+          e.preventDefault();
+          return;
+        }
+      }
+
+      // Crop region drag: in reel mode, detect mousedown within crop region
+      if (isReel && activeSection) {
+        const cropLeft = cropOffsetX;
+        const cropRight = cropOffsetX + REEL_CANVAS_W;
+        if (x >= cropLeft && x <= cropRight && y >= 0 && y <= CANVAS_H) {
+          cropDragMoved = false;
+          pushUndo();
+          draggingCrop = true;
+          const anchor = getSectionAnchorKeyframe(activeSection.id, true);
+          cropDragState = {
+            sectionId: activeSection.id,
+            startMouseX: x,
+            startCropX: anchor ? clampReelCropX(anchor.reelCropX) : 0,
+            zoom: kf.backgroundZoom || 1
+          };
           e.preventDefault();
           return;
         }
@@ -2997,6 +3272,23 @@ import {
     });
 
     window.addEventListener('mousemove', (e) => {
+      // Crop region drag
+      if (draggingCrop && editorState && cropDragState) {
+        const { x } = canvasToEditorCoords(e.clientX, e.clientY);
+        const deltaX = x - cropDragState.startMouseX;
+        const zoom = cropDragState.zoom || 1;
+        const scaledW = CANVAS_W * Math.min(1, zoom);
+        const maxCropRange = Math.max(0, scaledW - REEL_CANVAS_W);
+        const deltaCropX = maxCropRange > 0 ? (deltaX / maxCropRange) * 2 : 0;
+        const newCropX = clampReelCropX(cropDragState.startCropX + deltaCropX);
+        const anchor = getSectionAnchorKeyframe(cropDragState.sectionId, true);
+        if (anchor && Math.abs(clampReelCropX(anchor.reelCropX) - newCropX) > 0.001) {
+          anchor.reelCropX = newCropX;
+          cropDragMoved = true;
+        }
+        return;
+      }
+
       if (draggingBackground && editorState && backgroundDragState) {
         const { x, y } = canvasToEditorCoords(e.clientX, e.clientY);
         const deltaX = x - backgroundDragState.startMouseX;
@@ -3015,7 +3307,13 @@ import {
       if (!draggingPip || !editorState) return;
       pipDragMoved = true;
       const { x, y } = canvasToEditorCoords(e.clientX, e.clientY);
-      const snapped = snapToNearestCorner(x, y);
+      const isReel = editorState.outputMode === 'reel';
+      const { w, h } = getEffectiveCanvasDimensions();
+      // In reel mode, translate mouse coords to crop-relative for snapping
+      const currentState = getStateAtTime(editorState.currentTime);
+      const snapX = isReel ? x - reelCropXToPixelOffset(currentState.reelCropX, currentState.backgroundZoom) : x;
+      const dragPipSize = computePipSize(currentState.pipScale, w);
+      const snapped = snapToNearestCorner(snapX, y, w, h, dragPipSize);
 
       const selectedSection = getSelectedSection();
       const section = selectedSection || findSectionForTime(editorState.currentTime);
@@ -3029,6 +3327,19 @@ import {
     });
 
     window.addEventListener('mouseup', () => {
+      const wasDraggingCrop = draggingCrop;
+      draggingCrop = false;
+      cropDragState = null;
+      if (wasDraggingCrop) {
+        if (cropDragMoved) {
+          scheduleProjectSave();
+        } else {
+          undoStack.pop();
+          updateUndoRedoButtons();
+        }
+        cropDragMoved = false;
+      }
+
       const wasDraggingBackground = draggingBackground;
       draggingBackground = false;
       backgroundDragState = null;
@@ -3155,6 +3466,63 @@ import {
     editorBgZoomInput.addEventListener('change', commitSectionZoomChange);
     editorBgZoomInput.addEventListener('pointerup', commitSectionZoomChange);
     editorBgZoomInput.addEventListener('blur', commitSectionZoomChange);
+
+    // Output mode toggle buttons
+    if (editorModeLandscapeBtn) {
+      editorModeLandscapeBtn.addEventListener('click', () => setOutputMode('landscape'));
+    }
+    if (editorModeReelBtn) {
+      editorModeReelBtn.addEventListener('click', () => setOutputMode('reel'));
+    }
+
+    // Crop preset buttons
+    function setCropPreset(cropX) {
+      if (!editorState || editorState.rendering || editorState.outputMode !== 'reel') return;
+      const section = getSelectedSection() || findSectionForTime(editorState.currentTime);
+      if (!section) return;
+      const anchor = getSectionAnchorKeyframe(section.id, true);
+      if (!anchor) return;
+      if (Math.abs(clampReelCropX(anchor.reelCropX) - cropX) < 0.001) return;
+      pushUndo();
+      anchor.reelCropX = cropX;
+      scheduleProjectSave();
+    }
+    if (editorCropLeftBtn) editorCropLeftBtn.addEventListener('click', () => setCropPreset(-1));
+    if (editorCropCenterBtn) editorCropCenterBtn.addEventListener('click', () => setCropPreset(0));
+    if (editorCropRightBtn) editorCropRightBtn.addEventListener('click', () => setCropPreset(1));
+
+    // PIP size slider — controls current section's anchor pipScale
+    let pipSizeDragActive = false;
+    if (editorPipSizeInput) {
+      editorPipSizeInput.addEventListener('input', () => {
+        if (!editorState || editorState.rendering) return;
+        const newScale = Math.max(MIN_PIP_SCALE, Math.min(MAX_PIP_SCALE, Number(editorPipSizeInput.value)));
+        if (!pipSizeDragActive) pushUndo();
+        pipSizeDragActive = true;
+
+        const section = getSelectedSection() || findSectionForTime(editorState.currentTime);
+        if (section) {
+          const anchor = getSectionAnchorKeyframe(section.id, true);
+          if (anchor) {
+            anchor.pipScale = newScale;
+            // Re-snap this section's PIP to nearest corner with new size
+            const { w, h } = getEffectiveCanvasDimensions();
+            const newPipSize = computePipSize(newScale, w);
+            const snapped = snapToNearestCorner(anchor.pipX, anchor.pipY, w, h, newPipSize);
+            anchor.pipX = snapped.x;
+            anchor.pipY = snapped.y;
+          }
+        }
+
+        if (editorPipSizeValue) editorPipSizeValue.textContent = newScale.toFixed(2);
+        scheduleProjectSave();
+      });
+      const commitPipSizeChange = () => { pipSizeDragActive = false; };
+      editorPipSizeInput.addEventListener('change', commitPipSizeChange);
+      editorPipSizeInput.addEventListener('pointerup', commitPipSizeChange);
+      editorPipSizeInput.addEventListener('blur', commitPipSizeChange);
+    }
+
     updateSectionZoomControls();
 
     // ===== Render pipeline =====
@@ -3222,6 +3590,7 @@ import {
           cameraSyncOffsetMs: editorState.cameraSyncOffsetMs,
           sourceWidth: editorState.sourceWidth || CANVAS_W,
           sourceHeight: editorState.sourceHeight || CANVAS_H,
+          outputMode: editorState.outputMode || 'landscape',
           outputFolder: saveFolder
         });
 

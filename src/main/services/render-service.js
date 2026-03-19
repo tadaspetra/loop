@@ -6,6 +6,9 @@ const {
   normalizeBackgroundPan,
   normalizeExportAudioPreset,
   normalizeCameraSyncOffsetMs,
+  normalizeReelCropX,
+  normalizeOutputMode,
+  normalizePipScale,
   EXPORT_AUDIO_PRESET_COMPRESSED
 } = require('../../shared/domain/project');
 const { chooseRenderFps, probeVideoFpsWithFfmpeg } = require('./fps-service');
@@ -25,7 +28,9 @@ function normalizeSectionInput(rawSections) {
         sourceEnd,
         backgroundZoom: normalizeBackgroundZoom(section.backgroundZoom),
         backgroundPanX: normalizeBackgroundPan(section.backgroundPanX),
-        backgroundPanY: normalizeBackgroundPan(section.backgroundPanY)
+        backgroundPanY: normalizeBackgroundPan(section.backgroundPanY),
+        reelCropX: normalizeReelCropX(section.reelCropX),
+        pipScale: normalizePipScale(section.pipScale)
       };
     })
     .filter(Boolean);
@@ -176,6 +181,7 @@ async function renderComposite(opts = {}, deps = {}) {
   const cameraSyncOffsetMs = normalizeCameraSyncOffsetMs(opts.cameraSyncOffsetMs);
   const sourceWidth = Number.isFinite(Number(opts.sourceWidth)) ? Number(opts.sourceWidth) : 1920;
   const sourceHeight = Number.isFinite(Number(opts.sourceHeight)) ? Number(opts.sourceHeight) : 1080;
+  const outputMode = normalizeOutputMode(opts.outputMode);
   const outputFolder = typeof opts.outputFolder === 'string' ? opts.outputFolder : '';
 
   const probeFps = deps.probeVideoFpsWithFfmpeg || probeVideoFpsWithFfmpeg;
@@ -192,8 +198,8 @@ async function renderComposite(opts = {}, deps = {}) {
   if (!ffmpegPath) throw new Error('ffmpeg-static is unavailable on this platform');
 
   const outputPath = path.join(outputFolder, `recording-${now()}-edited.mp4`);
-  const canvasW = 1920;
   const canvasH = 1080;
+  const canvasW = outputMode === 'reel' ? Math.round(canvasH * 9 / 16) : 1920;
 
   const takeMap = new Map();
   for (const take of takes) {
@@ -256,7 +262,9 @@ async function renderComposite(opts = {}, deps = {}) {
       if (cameraIdx >= 0) {
         filterParts.push(buildCameraTrimFilter(cameraIdx, section, targetFps, i, cameraSyncOffsetMs));
       } else {
-        filterParts.push(`color=black:s=1920x1080:d=${duration}[cv${i}]`);
+        const fallbackW = outputMode === 'reel' ? Math.round((sourceHeight * 9) / 16) : 1920;
+        const fallbackH = outputMode === 'reel' ? sourceHeight : 1080;
+        filterParts.push(`color=black:s=${fallbackW}x${fallbackH}:d=${duration}[cv${i}]`);
       }
     }
 
@@ -271,7 +279,8 @@ async function renderComposite(opts = {}, deps = {}) {
       canvasW,
       canvasH,
       true,
-      targetFps
+      targetFps,
+      outputMode
     );
     const adaptedOverlay = overlayFilter
       .replace(/\[0:v\]/g, '[screen_raw]')
@@ -287,7 +296,8 @@ async function renderComposite(opts = {}, deps = {}) {
       canvasH,
       '[out]',
       true,
-      targetFps
+      targetFps,
+      outputMode
     ).replace(/\[0:v\]/g, '[screen_raw]');
     filterParts.push(screenOnlyFilter);
   }

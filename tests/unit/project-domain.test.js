@@ -6,7 +6,11 @@ const {
   toProjectRelativePath,
   normalizeSections,
   normalizeKeyframes,
+  normalizeBackgroundZoom,
   normalizeCameraSyncOffsetMs,
+  normalizeReelCropX,
+  normalizeOutputMode,
+  normalizePipScale,
   createDefaultProject,
   normalizeProjectData
 } = require('../../src/shared/domain/project');
@@ -146,5 +150,115 @@ describe('shared/domain/project', () => {
     expect(project.settings.cameraSyncOffsetMs).toBe(135);
     expect(fallbackProject.settings.cameraSyncOffsetMs).toBe(0);
     expect(createDefaultProject('Demo').settings.cameraSyncOffsetMs).toBe(0);
+  });
+
+  test('normalizeReelCropX clamps to [-1, 1] and defaults invalid input to 0', () => {
+    expect(normalizeReelCropX(0.5)).toBe(0.5);
+    expect(normalizeReelCropX(-0.75)).toBe(-0.75);
+    expect(normalizeReelCropX(-2.5)).toBe(-1);
+    expect(normalizeReelCropX(3.0)).toBe(1);
+    expect(normalizeReelCropX(undefined)).toBe(0);
+    expect(normalizeReelCropX(null)).toBe(0);
+    expect(normalizeReelCropX(NaN)).toBe(0);
+    expect(normalizeReelCropX('nope')).toBe(0);
+  });
+
+  test('normalizeOutputMode returns reel for reel and landscape for anything else', () => {
+    expect(normalizeOutputMode('reel')).toBe('reel');
+    expect(normalizeOutputMode('landscape')).toBe('landscape');
+    expect(normalizeOutputMode(undefined)).toBe('landscape');
+    expect(normalizeOutputMode(null)).toBe('landscape');
+    expect(normalizeOutputMode('')).toBe('landscape');
+    expect(normalizeOutputMode('portrait')).toBe('landscape');
+  });
+
+  test('normalizeBackgroundZoom clamps to [1, 3] by default (backward compat)', () => {
+    expect(normalizeBackgroundZoom(2)).toBe(2);
+    expect(normalizeBackgroundZoom(1)).toBe(1);
+    expect(normalizeBackgroundZoom(3)).toBe(3);
+    expect(normalizeBackgroundZoom(0.5)).toBe(1);
+    expect(normalizeBackgroundZoom(5)).toBe(3);
+    expect(normalizeBackgroundZoom(null)).toBe(1);
+    expect(normalizeBackgroundZoom(undefined)).toBe(1);
+    expect(normalizeBackgroundZoom(NaN)).toBe(1);
+  });
+
+  test('normalizeBackgroundZoom with reel mode clamps to [0.5, 3]', () => {
+    expect(normalizeBackgroundZoom(0.5, 'reel')).toBe(0.5);
+    expect(normalizeBackgroundZoom(0.7, 'reel')).toBe(0.7);
+    expect(normalizeBackgroundZoom(0.3, 'reel')).toBe(0.5);
+    expect(normalizeBackgroundZoom(2, 'reel')).toBe(2);
+    expect(normalizeBackgroundZoom(5, 'reel')).toBe(3);
+    expect(normalizeBackgroundZoom(null, 'reel')).toBe(0.5);
+    expect(normalizeBackgroundZoom(NaN, 'reel')).toBe(0.5);
+  });
+
+  test('normalizeBackgroundZoom with landscape mode keeps [1, 3]', () => {
+    expect(normalizeBackgroundZoom(0.5, 'landscape')).toBe(1);
+    expect(normalizeBackgroundZoom(1, 'landscape')).toBe(1);
+  });
+
+  test('normalizePipScale clamps to [0.15, 0.50] and defaults invalid input to 0.22', () => {
+    expect(normalizePipScale(0.35)).toBe(0.35);
+    expect(normalizePipScale(0.15)).toBe(0.15);
+    expect(normalizePipScale(0.50)).toBe(0.50);
+    expect(normalizePipScale(0.05)).toBe(0.15);
+    expect(normalizePipScale(0.8)).toBe(0.50);
+    expect(normalizePipScale(undefined)).toBe(0.22);
+    expect(normalizePipScale(null)).toBe(0.22);
+    expect(normalizePipScale(NaN)).toBe(0.22);
+  });
+
+  test('normalizeKeyframes includes reelCropX property', () => {
+    const keyframes = normalizeKeyframes([
+      { time: 0, pipX: 10, pipY: 20, reelCropX: 0.5 },
+      { time: 1, pipX: 30, pipY: 40, reelCropX: -2 },
+      { time: 2, pipX: 50, pipY: 60 }
+    ]);
+    expect(keyframes[0].reelCropX).toBe(0.5);
+    expect(keyframes[1].reelCropX).toBe(-1);
+    expect(keyframes[2].reelCropX).toBe(0);
+  });
+
+  test('normalizeKeyframes includes pipScale property', () => {
+    const keyframes = normalizeKeyframes([
+      { time: 0, pipX: 10, pipY: 20, pipScale: 0.35 },
+      { time: 1, pipX: 30, pipY: 40, pipScale: 0.05 },
+      { time: 2, pipX: 50, pipY: 60, pipScale: 0.8 },
+      { time: 3, pipX: 70, pipY: 80 }
+    ]);
+    expect(keyframes[0].pipScale).toBe(0.35);
+    expect(keyframes[1].pipScale).toBe(0.15);
+    expect(keyframes[2].pipScale).toBe(0.50);
+    expect(keyframes[3].pipScale).toBe(0.22);
+  });
+
+  test('createDefaultProject includes outputMode and pipScale in settings', () => {
+    const project = createDefaultProject('Test');
+    expect(project.settings.outputMode).toBe('landscape');
+    expect(project.settings.pipScale).toBe(0.22);
+  });
+
+  test('normalizeProjectData hydrates outputMode and pipScale in settings', () => {
+    const reelProject = normalizeProjectData(
+      { settings: { outputMode: 'reel', pipScale: 0.35 } },
+      '/tmp/my-project'
+    );
+    expect(reelProject.settings.outputMode).toBe('reel');
+    expect(reelProject.settings.pipScale).toBe(0.35);
+
+    const defaultProject = normalizeProjectData(
+      { settings: {} },
+      '/tmp/my-project'
+    );
+    expect(defaultProject.settings.outputMode).toBe('landscape');
+    expect(defaultProject.settings.pipScale).toBe(0.22);
+
+    const invalidProject = normalizeProjectData(
+      { settings: { outputMode: 'weird', pipScale: 'bad' } },
+      '/tmp/my-project'
+    );
+    expect(invalidProject.settings.outputMode).toBe('landscape');
+    expect(invalidProject.settings.pipScale).toBe(0.22);
   });
 });

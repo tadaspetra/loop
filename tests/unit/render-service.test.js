@@ -27,6 +27,19 @@ describe('main/services/render-service', () => {
     expect(sections[1].backgroundPanY).toBe(1);
   });
 
+  test('normalizeSectionInput normalizes reelCropX on sections', () => {
+    const sections = normalizeSectionInput([
+      { takeId: 'a', sourceStart: 0, sourceEnd: 1, reelCropX: 0.5 },
+      { takeId: 'b', sourceStart: 1, sourceEnd: 2, reelCropX: -3 },
+      { takeId: 'c', sourceStart: 2, sourceEnd: 3 }
+    ]);
+
+    expect(sections).toHaveLength(3);
+    expect(sections[0].reelCropX).toBe(0.5);
+    expect(sections[1].reelCropX).toBe(-1);
+    expect(sections[2].reelCropX).toBe(0);
+  });
+
   test('assertFilePath throws for missing files and accepts existing file', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-test-'));
     const file = path.join(tmpDir, 'input.webm');
@@ -434,6 +447,39 @@ describe('main/services/render-service', () => {
     expect(argString).toContain('[1:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,fps=fps=30[cv0]');
     expect(argString).toContain('[3:v]trim=start=1.000:end=2.000,setpts=PTS-STARTPTS,fps=fps=30[cv1]');
     expect(argString).toContain('[1:v]trim=start=2.000:end=3.000,setpts=PTS-STARTPTS,fps=fps=30[cv2]');
+  });
+
+  test('renderComposite produces reel crop filter when outputMode is reel', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-reel-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+
+    const execCalls = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        takes: [{ id: 'take-1', screenPath, cameraPath: null }],
+        sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.25, reelCropX: 0 }],
+        keyframes: [{ time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false, reelCropX: 0 }],
+        pipSize: 200,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill',
+        outputMode: 'reel'
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 555,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        runFfmpeg: async ({ ffmpegPath, args }) => {
+          execCalls.push({ bin: ffmpegPath, args });
+        }
+      }
+    );
+
+    const argString = execCalls[0].args.join(' ');
+    expect(argString).toContain('crop=608:1080:');
   });
 
   test('renderComposite forwards mapped progress updates from ffmpeg output time', async () => {
