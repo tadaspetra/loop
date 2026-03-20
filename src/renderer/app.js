@@ -21,6 +21,9 @@ import {
   normalizeCameraSyncOffsetMs,
   resolveCameraPlaybackTargetTime
 } from './features/timeline/camera-sync.js';
+import {
+  getOverlayStateAtTime as _getOverlayStateAtTime
+} from './features/timeline/overlay-utils.js';
 
     const projectHomeView = document.getElementById('projectHomeView');
     const workspaceHeader = document.getElementById('workspaceHeader');
@@ -88,6 +91,13 @@ import {
     const editorPipSizeControl = document.getElementById('editorPipSizeControl');
     const editorPipSizeInput = document.getElementById('editorPipSizeInput');
     const editorPipSizeValue = document.getElementById('editorPipSizeValue');
+    const editorOverlaySizeControl = document.getElementById('editorOverlaySizeControl');
+    const editorOverlaySizeInput = document.getElementById('editorOverlaySizeInput');
+    const editorOverlaySizeValue = document.getElementById('editorOverlaySizeValue');
+    const editorOverlaySizeScrub = document.getElementById('editorOverlaySizeScrub');
+    const sidebarTabSegments = document.getElementById('sidebarTabSegments');
+    const sidebarTabOverlays = document.getElementById('sidebarTabOverlays');
+    const editorOverlayList = document.getElementById('editorOverlayList');
     const editorCropPresets = document.getElementById('editorCropPresets');
     const editorCropLeftBtn = document.getElementById('editorCropLeft');
     const editorCropCenterBtn = document.getElementById('editorCropCenter');
@@ -96,6 +106,7 @@ import {
     const editorTimelineWrapper = document.getElementById('editorTimelineWrapper');
     const editorTimeline = document.getElementById('editorTimeline');
     const editorSectionMarkers = document.getElementById('editorSectionMarkers');
+    const editorOverlayTrack = document.getElementById('editorOverlayTrack');
     const editorScrubber = document.getElementById('editorScrubber');
     const editorSectionTranscriptList = document.getElementById('editorSectionTranscriptList');
     let editorRenderTimeout = null;
@@ -162,6 +173,12 @@ import {
     const PIP_FRACTION = 0.22;
     const PIP_MARGIN = 20;
     const PIP_SIZE = Math.round(CANVAS_W * PIP_FRACTION);
+    let overlayIdCounter = 0;
+    function generateOverlayId() {
+      overlayIdCounter += 1;
+      return `overlay-${Date.now()}-${overlayIdCounter}`;
+    }
+
     const MIN_SECTION_ZOOM = 1;
     const MIN_REEL_SECTION_ZOOM = 0.5;
     const MAX_SECTION_ZOOM = 3;
@@ -456,6 +473,9 @@ import {
     let backgroundDragState = null;
     let takeAudioBufferCache = new Map(); // takeId -> AudioBuffer
     let takeVideoPool = new Map(); // takeId -> { screen: HTMLVideoElement, camera: HTMLVideoElement|null }
+    const overlayImageCache = new Map(); // mediaPath -> HTMLImageElement
+    let overlayVideoEl = null; // single reusable <video> for overlay playback
+    let overlayVideoCurrentPath = null;
     let activeTakeId = null;
     let activePlaybackSection = null;
     let cameraResyncCooldownUntil = 0;
@@ -544,6 +564,28 @@ import {
     function pathToFileUrl(filePath) {
       if (!filePath) return '';
       return window.electronAPI.pathToFileUrl(filePath);
+    }
+
+    function getOverlayImageElement(mediaPath) {
+      if (overlayImageCache.has(mediaPath)) return overlayImageCache.get(mediaPath);
+      if (!activeProjectPath) return null;
+      const img = new Image();
+      img.src = pathToFileUrl(`${activeProjectPath}/${mediaPath}`);
+      overlayImageCache.set(mediaPath, img);
+      return img;
+    }
+
+    function getOverlayVideoElement(mediaPath) {
+      if (!overlayVideoEl) {
+        overlayVideoEl = document.createElement('video');
+        overlayVideoEl.muted = true;
+        overlayVideoEl.preload = 'auto';
+      }
+      if (overlayVideoCurrentPath !== mediaPath && activeProjectPath) {
+        overlayVideoEl.src = pathToFileUrl(`${activeProjectPath}/${mediaPath}`);
+        overlayVideoCurrentPath = mediaPath;
+      }
+      return overlayVideoEl;
     }
 
     function formatProjectDate(value) {
@@ -694,7 +736,9 @@ import {
         selectedSectionId: editorState.selectedSectionId || null,
         hasCamera: !!editorState.hasCamera,
         sourceWidth: editorState.sourceWidth || null,
-        sourceHeight: editorState.sourceHeight || null
+        sourceHeight: editorState.sourceHeight || null,
+        overlays: Array.isArray(editorState.overlays) ? editorState.overlays.map(o => ({ ...o, landscape: { ...o.landscape }, reel: { ...o.reel } })) : [],
+        savedOverlays: Array.isArray(editorState.savedOverlays) ? editorState.savedOverlays.map(o => ({ ...o, landscape: { ...o.landscape }, reel: { ...o.reel } })) : []
       };
     }
 
@@ -794,6 +838,15 @@ import {
       cancelEditorDrawLoop();
 
       cleanupVideoPool();
+      // Clean up overlay media state
+      overlayImageCache.clear();
+      if (overlayVideoEl) {
+        overlayVideoEl.pause();
+        overlayVideoEl.removeAttribute('src');
+        overlayVideoEl.load();
+        overlayVideoEl = null;
+      }
+      overlayVideoCurrentPath = null;
       editorState = null;
       undoStack.length = 0;
       redoStack.length = 0;
@@ -899,6 +952,9 @@ import {
         sections: editorState.sections.map(s => ({ ...s })),
         savedSections: editorState.savedSections.map(s => ({ ...s })),
         keyframes: editorState.keyframes.map(kf => ({ ...kf })),
+        overlays: editorState.overlays.map(o => ({ ...o, landscape: { ...o.landscape }, reel: { ...o.reel } })),
+        savedOverlays: editorState.savedOverlays.map(o => ({ ...o, landscape: { ...o.landscape }, reel: { ...o.reel } })),
+        selectedOverlayId: editorState.selectedOverlayId,
         selectedSectionId: editorState.selectedSectionId,
         duration: editorState.duration,
         outputMode: editorState.outputMode
@@ -910,10 +966,16 @@ import {
       const beforeTakeIds = new Set();
       for (const s of editorState.sections) if (s.takeId) beforeTakeIds.add(s.takeId);
       for (const s of editorState.savedSections) if (s.takeId) beforeTakeIds.add(s.takeId);
+      // Capture current overlay media references before restore
+      const beforeOverlayPaths = new Set();
+      for (const o of editorState.overlays) if (o.mediaPath) beforeOverlayPaths.add(o.mediaPath);
 
       editorState.sections = snapshot.sections;
       editorState.savedSections = snapshot.savedSections || [];
       editorState.keyframes = snapshot.keyframes;
+      editorState.overlays = snapshot.overlays || [];
+      editorState.savedOverlays = snapshot.savedOverlays || [];
+      editorState.selectedOverlayId = snapshot.selectedOverlayId || null;
       editorState.selectedSectionId = snapshot.selectedSectionId;
       editorState.duration = snapshot.duration;
       if (snapshot.outputMode) {
@@ -941,6 +1003,22 @@ import {
       for (const takeId of afterTakeIds) {
         if (!beforeTakeIds.has(takeId)) {
           await unstageTakeById(takeId);
+        }
+      }
+
+      // Stage/unstage overlay media files that changed references
+      const afterOverlayPaths = new Set();
+      for (const o of editorState.overlays) if (o.mediaPath) afterOverlayPaths.add(o.mediaPath);
+      if (activeProjectPath) {
+        for (const mediaPath of beforeOverlayPaths) {
+          if (!afterOverlayPaths.has(mediaPath)) {
+            await window.electronAPI.stageOverlayFile(activeProjectPath, mediaPath).catch(() => {});
+          }
+        }
+        for (const mediaPath of afterOverlayPaths) {
+          if (!beforeOverlayPaths.has(mediaPath)) {
+            await window.electronAPI.unstageOverlayFile(activeProjectPath, mediaPath).catch(() => {});
+          }
         }
       }
 
@@ -1084,6 +1162,8 @@ import {
             cameraSyncOffsetMs: project.settings?.cameraSyncOffsetMs,
             outputMode: project.settings?.outputMode,
             pipScale: project.settings?.pipScale,
+            overlays: project.timeline.overlays || [],
+            savedOverlays: project.timeline.savedOverlays || [],
             initialView: preferredView === 'recording' ? 'recording' : 'timeline'
           }
         );
@@ -1251,6 +1331,29 @@ import {
       scheduleProjectSave();
     }
 
+    function selectOverlay(overlayId) {
+      if (!editorState || !Array.isArray(editorState.overlays)) return;
+      if (!editorState.overlays.some(o => o.id === overlayId)) return;
+      editorState.selectedOverlayId = overlayId;
+      renderOverlayMarkers();
+      renderSectionMarkers();
+    }
+
+    function updateOverlaySizeControl() {
+      if (!editorOverlaySizeControl) return;
+      const hasSelection = editorState && editorState.selectedOverlayId;
+      editorOverlaySizeControl.classList.toggle('hidden', !hasSelection);
+      editorOverlaySizeControl.classList.toggle('flex', !!hasSelection);
+      if (!hasSelection) return;
+      const overlay = editorState.overlays.find(o => o.id === editorState.selectedOverlayId);
+      if (!overlay) return;
+      const mode = editorState.outputMode === 'reel' ? 'reel' : 'landscape';
+      const baseW = mode === 'reel' ? REEL_CANVAS_W : CANVAS_W;
+      const currentScale = overlay[mode].width / (baseW * 0.4);
+      editorOverlaySizeInput.value = Math.max(0.05, Math.min(5, currentScale));
+      editorOverlaySizeValue.textContent = `${Math.round(currentScale * 100)}%`;
+    }
+
     function applyStyleToFutureSections() {
       if (!editorState || !editorState.sections || editorState.sections.length === 0) return;
 
@@ -1413,6 +1516,158 @@ import {
       }
     }
 
+    // Sidebar tab switching
+    let activeSidebarTab = 'segments';
+    function switchSidebarTab(tab) {
+      activeSidebarTab = tab;
+      const isSegments = tab === 'segments';
+      sidebarTabSegments.className = `flex-1 px-2 py-1 text-xs transition-colors ${isSegments ? 'bg-white text-black' : 'text-neutral-400 hover:text-neutral-200'}`;
+      sidebarTabOverlays.className = `flex-1 px-2 py-1 text-xs transition-colors ${!isSegments ? 'bg-indigo-600 text-white' : 'text-neutral-400 hover:text-neutral-200'}`;
+      editorSectionTranscriptList.classList.toggle('hidden', !isSegments);
+      editorOverlayList.classList.toggle('hidden', isSegments);
+      if (!isSegments) renderOverlayList();
+    }
+    if (sidebarTabSegments) sidebarTabSegments.addEventListener('click', () => switchSidebarTab('segments'));
+    if (sidebarTabOverlays) sidebarTabOverlays.addEventListener('click', () => switchSidebarTab('overlays'));
+
+    function renderOverlayList() {
+      if (!editorOverlayList) return;
+      const activeOverlays = editorState?.overlays || [];
+      const savedOverlays = editorState?.savedOverlays || [];
+
+      if (activeOverlays.length === 0 && savedOverlays.length === 0) {
+        editorOverlayList.innerHTML = '<div class="text-xs text-neutral-500 px-1">Drop media onto the canvas to add overlays.</div>';
+        return;
+      }
+
+      const activeItems = activeOverlays.map(o => ({ overlay: o, isRemoved: false }));
+      const savedItems = savedOverlays.map(o => ({ overlay: o, isRemoved: true }));
+      const allItems = [...activeItems, ...savedItems].sort((a, b) => a.overlay.startTime - b.overlay.startTime);
+
+      editorOverlayList.innerHTML = '';
+      for (const { overlay, isRemoved } of allItems) {
+        const selected = !isRemoved && overlay.id === editorState.selectedOverlayId;
+        const fileName = overlay.mediaPath.split('/').pop() || '';
+        const icon = overlay.mediaType === 'video' ? '\u25B6' : '\u25A3';
+
+        const row = document.createElement('div');
+        row.dataset.overlayId = overlay.id;
+        row.className = `w-full text-left rounded-lg px-3 py-2 transition-all ${selected ? 'bg-indigo-900/40' : isRemoved ? '' : 'hover:bg-neutral-900 cursor-pointer'}`;
+
+        const meta = document.createElement('div');
+        meta.className = 'text-xs text-neutral-500 font-mono tabular-nums flex items-center justify-between';
+
+        const metaLabel = document.createElement('span');
+        if (isRemoved) metaLabel.style.opacity = '0.5';
+        metaLabel.textContent = `${icon} ${formatTime(overlay.startTime)} - ${formatTime(overlay.endTime)}`;
+        meta.appendChild(metaLabel);
+
+        const metaActions = document.createElement('span');
+        metaActions.className = 'flex items-center gap-1 ml-2';
+
+        // Heart icon
+        const heartBtn = document.createElement('button');
+        heartBtn.type = 'button';
+        heartBtn.className = 'hover:text-red-400 transition-colors leading-none flex items-center';
+        heartBtn.innerHTML = overlay.saved
+          ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>'
+          : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>';
+        heartBtn.title = overlay.saved ? 'Unsave overlay' : 'Save overlay';
+        heartBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          toggleOverlaySaved(overlay.id);
+        });
+        metaActions.appendChild(heartBtn);
+
+        // Re-add button for saved+removed overlays
+        if (isRemoved) {
+          const readdBtn = document.createElement('button');
+          readdBtn.type = 'button';
+          readdBtn.className = 'hover:text-green-400 transition-colors leading-none flex items-center';
+          readdBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>';
+          readdBtn.title = 'Re-add to timeline';
+          readdBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            readdSavedOverlay(overlay.id);
+          });
+          metaActions.appendChild(readdBtn);
+        }
+
+        meta.appendChild(metaActions);
+
+        const text = document.createElement('div');
+        text.className = `mt-1 text-sm leading-snug truncate ${isRemoved ? 'text-neutral-600' : 'text-neutral-300'}`;
+        if (isRemoved) text.style.opacity = '0.5';
+        text.textContent = fileName;
+
+        row.appendChild(meta);
+        row.appendChild(text);
+
+        if (!isRemoved) {
+          row.addEventListener('click', () => {
+            selectOverlay(overlay.id);
+            editorSeek(overlay.startTime);
+          });
+        }
+
+        editorOverlayList.appendChild(row);
+      }
+    }
+
+    async function toggleOverlaySaved(overlayId) {
+      if (!editorState) return;
+
+      // Check active overlays
+      const activeOverlay = editorState.overlays.find(o => o.id === overlayId);
+      if (activeOverlay) {
+        pushUndo();
+        activeOverlay.saved = !activeOverlay.saved;
+        renderOverlayList();
+        scheduleProjectSave();
+        return;
+      }
+
+      // Check saved+removed overlays — unsaving removes entirely
+      const savedIdx = editorState.savedOverlays.findIndex(o => o.id === overlayId);
+      if (savedIdx >= 0) {
+        pushUndo();
+        const removed = editorState.savedOverlays.splice(savedIdx, 1)[0];
+        // Stage media if no other references
+        const stillReferenced = editorState.overlays.some(o => o.mediaPath === removed.mediaPath)
+          || editorState.savedOverlays.some(o => o.mediaPath === removed.mediaPath);
+        if (!stillReferenced && activeProjectPath) {
+          await window.electronAPI.stageOverlayFile(activeProjectPath, removed.mediaPath).catch(() => {});
+        }
+        renderOverlayList();
+        scheduleProjectSave();
+      }
+    }
+
+    function readdSavedOverlay(overlayId) {
+      if (!editorState) return;
+      const savedIdx = editorState.savedOverlays.findIndex(o => o.id === overlayId);
+      if (savedIdx < 0) return;
+
+      pushUndo();
+      const overlay = editorState.savedOverlays.splice(savedIdx, 1)[0];
+      overlay.saved = true;
+
+      // Place at its original time, push others if needed
+      const duration = overlay.endTime - overlay.startTime;
+      const placed = placeOverlayAtTime(null, overlay.startTime, duration, editorState.duration);
+      if (placed !== null) {
+        overlay.startTime = placed;
+        overlay.endTime = placed + duration;
+      }
+
+      editorState.overlays.push(overlay);
+      editorState.overlays.sort((a, b) => a.startTime - b.startTime);
+      editorState.selectedOverlayId = overlay.id;
+      renderOverlayMarkers();
+      renderOverlayList();
+      scheduleProjectSave();
+    }
+
     function computeWaveformPeaksFromCache(numBuckets = 800) {
       if (!editorState || !editorState.sections || editorState.sections.length === 0) return null;
       const totalDuration = editorState.duration;
@@ -1565,6 +1820,248 @@ import {
         }
       }
       renderSectionTranscriptList();
+      renderOverlayMarkers();
+    }
+
+    function renderOverlayMarkers() {
+      if (!editorOverlayTrack) return;
+      editorOverlayTrack.innerHTML = '';
+      if (!editorState || !editorState.duration || !Array.isArray(editorState.overlays) || editorState.overlays.length === 0) return;
+
+      for (const overlay of editorState.overlays) {
+        const pctLeft = (overlay.startTime / editorState.duration) * 100;
+        const pctWidth = Math.max(0.35, ((overlay.endTime - overlay.startTime) / editorState.duration) * 100);
+        const selected = overlay.id === editorState.selectedOverlayId;
+
+        const band = document.createElement('div');
+        band.className = 'absolute top-0 bottom-0';
+        band.dataset.overlayId = overlay.id;
+        band.style.left = pctLeft + '%';
+        band.style.width = pctWidth + '%';
+        band.style.backgroundColor = selected ? 'rgba(99,102,241,0.45)' : 'rgba(99,102,241,0.22)';
+        band.style.borderRadius = '3px';
+        band.style.cursor = 'pointer';
+        if (selected) {
+          band.style.boxShadow = 'inset 0 0 0 2px rgba(129,140,248,0.6)';
+        }
+
+        const fileName = overlay.mediaPath.split('/').pop() || '';
+        const icon = overlay.mediaType === 'video' ? '\u25B6' : '\u25A3';
+        band.title = `${icon} ${fileName}: ${formatTime(overlay.startTime)} - ${formatTime(overlay.endTime)}`;
+
+        const label = document.createElement('div');
+        label.className = 'absolute text-[9px] font-medium pointer-events-none truncate';
+        label.style.cssText = 'left:4px;right:4px;top:50%;transform:translateY(-50%);';
+        label.style.color = selected ? 'rgba(199,210,254,0.95)' : 'rgba(165,180,252,0.75)';
+        label.textContent = `${icon} ${fileName}`;
+        band.appendChild(label);
+
+        if (selected) {
+          const leftHandle = document.createElement('div');
+          leftHandle.dataset.overlayTrimEdge = 'left';
+          leftHandle.dataset.overlayId = overlay.id;
+          leftHandle.style.cssText = 'position:absolute;top:0;bottom:0;left:0;width:6px;cursor:col-resize;z-index:30;border-left:3px solid rgba(165,180,252,0.7);';
+          band.appendChild(leftHandle);
+          const rightHandle = document.createElement('div');
+          rightHandle.dataset.overlayTrimEdge = 'right';
+          rightHandle.dataset.overlayId = overlay.id;
+          rightHandle.style.cssText = 'position:absolute;top:0;bottom:0;right:0;width:6px;cursor:col-resize;z-index:30;border-right:3px solid rgba(165,180,252,0.7);';
+          band.appendChild(rightHandle);
+        }
+
+        editorOverlayTrack.appendChild(band);
+      }
+      updateOverlaySizeControl();
+      if (activeSidebarTab === 'overlays') renderOverlayList();
+    }
+
+    // === Overlay trim, split, delete ===
+
+    let overlayTrimDragState = null;
+
+    function startOverlayTrimDrag(e, overlayId, edge) {
+      const overlay = editorState.overlays.find(o => o.id === overlayId);
+      if (!overlay) return;
+      pushUndo();
+      overlayTrimDragState = {
+        overlayId,
+        edge,
+        startX: e.clientX,
+        originalStartTime: overlay.startTime,
+        originalEndTime: overlay.endTime,
+        originalSourceStart: overlay.sourceStart,
+        originalSourceEnd: overlay.sourceEnd
+      };
+      const onMove = (e2) => updateOverlayTrimDrag(e2);
+      const onUp = () => {
+        overlayTrimDragState = null;
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        renderOverlayMarkers();
+        scheduleProjectSave();
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    }
+
+    function updateOverlayTrimDrag(e) {
+      if (!overlayTrimDragState || !editorState) return;
+      const overlay = editorState.overlays.find(o => o.id === overlayTrimDragState.overlayId);
+      if (!overlay) return;
+      const rect = editorTimeline.getBoundingClientRect();
+      const pxPerSec = rect.width / editorState.duration;
+      const deltaSec = (e.clientX - overlayTrimDragState.startX) / pxPerSec;
+      const idx = editorState.overlays.indexOf(overlay);
+      const prevEnd = idx > 0 ? editorState.overlays[idx - 1].endTime : 0;
+      const nextStart = idx < editorState.overlays.length - 1 ? editorState.overlays[idx + 1].startTime : editorState.duration;
+
+      if (overlayTrimDragState.edge === 'left') {
+        const newStart = Math.max(prevEnd, Math.min(overlay.endTime - 0.1, overlayTrimDragState.originalStartTime + deltaSec));
+        const shift = newStart - overlayTrimDragState.originalStartTime;
+        overlay.startTime = newStart;
+        if (overlay.mediaType === 'video') {
+          overlay.sourceStart = Math.max(0, overlayTrimDragState.originalSourceStart + shift);
+        }
+      } else {
+        const newEnd = Math.min(nextStart, Math.max(overlay.startTime + 0.1, overlayTrimDragState.originalEndTime + deltaSec));
+        const shift = newEnd - overlayTrimDragState.originalEndTime;
+        overlay.endTime = newEnd;
+        if (overlay.mediaType === 'video') {
+          overlay.sourceEnd = Math.max(overlay.sourceStart + 0.1, overlayTrimDragState.originalSourceEnd + shift);
+        }
+      }
+      renderOverlayMarkers();
+    }
+
+    function splitOverlayAtPlayhead() {
+      if (!editorState || !editorState.selectedOverlayId) return;
+      const overlay = editorState.overlays.find(o => o.id === editorState.selectedOverlayId);
+      if (!overlay) return;
+      const time = editorState.currentTime;
+      if (time <= overlay.startTime + 0.1 || time >= overlay.endTime - 0.1) return;
+      pushUndo();
+
+      const splitSourceTime = overlay.sourceStart + (time - overlay.startTime);
+      const newOverlay = {
+        id: generateOverlayId(),
+        mediaPath: overlay.mediaPath,
+        mediaType: overlay.mediaType,
+        startTime: time,
+        endTime: overlay.endTime,
+        sourceStart: overlay.mediaType === 'video' ? splitSourceTime : 0,
+        sourceEnd: overlay.sourceEnd,
+        landscape: { ...overlay.landscape },
+        reel: { ...overlay.reel }
+      };
+      overlay.endTime = time;
+      if (overlay.mediaType === 'video') {
+        overlay.sourceEnd = splitSourceTime;
+      }
+      const idx = editorState.overlays.indexOf(overlay);
+      editorState.overlays.splice(idx + 1, 0, newOverlay);
+      editorState.selectedOverlayId = newOverlay.id;
+      renderOverlayMarkers();
+      scheduleProjectSave();
+    }
+
+    function deleteSelectedOverlay() {
+      if (!editorState || !editorState.selectedOverlayId) return;
+      const idx = editorState.overlays.findIndex(o => o.id === editorState.selectedOverlayId);
+      if (idx < 0) return;
+      pushUndo();
+      const removed = editorState.overlays.splice(idx, 1)[0];
+      if (removed.saved) {
+        // Move to saved overlays list (like saved sections)
+        editorState.savedOverlays.push(removed);
+      } else {
+        // Stage file if no other overlays reference it
+        const stillReferenced = editorState.overlays.some(o => o.mediaPath === removed.mediaPath)
+          || editorState.savedOverlays.some(o => o.mediaPath === removed.mediaPath);
+        if (!stillReferenced && activeProjectPath) {
+          window.electronAPI.stageOverlayFile(activeProjectPath, removed.mediaPath).catch(() => {});
+        }
+      }
+      editorState.selectedOverlayId = null;
+      renderOverlayMarkers();
+      renderOverlayList();
+      scheduleProjectSave();
+    }
+
+    /**
+     * Place an overlay at targetStart, pushing existing overlays out of the way.
+     * Returns the adjusted startTime, or null if no room.
+     * Modifies overlays array in-place to resolve collisions.
+     * @param {string|null} movingId - ID of the overlay being moved (null for new overlays)
+     * @param {number} targetStart - desired start time
+     * @param {number} duration - overlay duration
+     * @param {number} maxTime - timeline end (editorState.duration)
+     */
+    function placeOverlayAtTime(movingId, targetStart, duration, maxTime) {
+      const others = editorState.overlays.filter(o => o.id !== movingId);
+      const targetEnd = targetStart + duration;
+
+      // Find overlapping overlays
+      const collisions = others.filter(o => o.startTime < targetEnd && o.endTime > targetStart);
+      if (collisions.length === 0) {
+        // No collision — place directly (clamp to bounds)
+        const clamped = Math.max(0, Math.min(maxTime - duration, targetStart));
+        return clamped;
+      }
+
+      // Push colliding overlays away from the insertion point
+      for (const collision of collisions) {
+        const overlapCenter = (Math.max(targetStart, collision.startTime) + Math.min(targetEnd, collision.endTime)) / 2;
+        const collisionCenter = (collision.startTime + collision.endTime) / 2;
+        const collisionDuration = collision.endTime - collision.startTime;
+
+        if (overlapCenter <= collisionCenter) {
+          // Push right
+          const newStart = targetEnd;
+          if (newStart + collisionDuration <= maxTime) {
+            collision.startTime = newStart;
+            collision.endTime = newStart + collisionDuration;
+          } else {
+            // No room on right — push left instead
+            const newStartL = targetStart - collisionDuration;
+            if (newStartL >= 0) {
+              collision.startTime = newStartL;
+              collision.endTime = targetStart;
+            } else {
+              return null; // no room
+            }
+          }
+        } else {
+          // Push left
+          const newEnd = targetStart;
+          const newStartL = newEnd - collisionDuration;
+          if (newStartL >= 0) {
+            collision.startTime = newStartL;
+            collision.endTime = newEnd;
+          } else {
+            // No room on left — push right instead
+            const newStartR = targetEnd;
+            if (newStartR + collisionDuration <= maxTime) {
+              collision.startTime = newStartR;
+              collision.endTime = newStartR + collisionDuration;
+            } else {
+              return null; // no room
+            }
+          }
+        }
+      }
+
+      // Cascade: resolve any secondary collisions from the pushes
+      others.sort((a, b) => a.startTime - b.startTime);
+      for (let i = 1; i < others.length; i++) {
+        if (others[i].startTime < others[i - 1].endTime) {
+          const dur = others[i].endTime - others[i].startTime;
+          others[i].startTime = others[i - 1].endTime;
+          others[i].endTime = others[i].startTime + dur;
+          if (others[i].endTime > maxTime) return null; // cascade overflow
+        }
+      }
+
+      return Math.max(0, Math.min(maxTime - duration, targetStart));
     }
 
     function startTrimDrag(e, sectionId, edge) {
@@ -2900,7 +3397,10 @@ import {
         sourceWidth: opts.sourceWidth || null,
         sourceHeight: opts.sourceHeight || null,
         outputMode,
-        pipScale
+        pipScale,
+        overlays: Array.isArray(opts.overlays) ? opts.overlays : [],
+        savedOverlays: Array.isArray(opts.savedOverlays) ? opts.savedOverlays : [],
+        selectedOverlayId: null
       };
       screenFitSelect.value = editorState.screenFitMode === 'fit' ? 'fit' : 'fill';
       cameraSyncOffsetInput.value = String(editorState.cameraSyncOffsetMs);
@@ -3084,6 +3584,30 @@ import {
       };
     }
 
+    function getOverlayStateAtTime(time) {
+      if (!editorState || !Array.isArray(editorState.overlays) || editorState.overlays.length === 0) {
+        return { active: false };
+      }
+      return _getOverlayStateAtTime(time, editorState.overlays, editorState.outputMode);
+    }
+
+    function getTimelineBoundaries() {
+      const times = new Set();
+      if (editorState.sections) {
+        for (const s of editorState.sections) {
+          times.add(s.start);
+          times.add(s.end);
+        }
+      }
+      if (editorState.overlays) {
+        for (const o of editorState.overlays) {
+          times.add(o.startTime);
+          times.add(o.endTime);
+        }
+      }
+      return [...times].sort((a, b) => a - b);
+    }
+
     function formatTime(seconds) {
       const m = String(Math.floor(seconds / 60)).padStart(2, '0');
       const s = String(Math.floor(seconds % 60)).padStart(2, '0');
@@ -3231,6 +3755,7 @@ import {
           videos.camera.playbackRate = 1;
         }
       }
+      if (overlayVideoEl && !overlayVideoEl.paused) overlayVideoEl.pause();
       editorPlayBtn.textContent = 'Play';
       // If a video-frame callback was pending it will never fire now that the
       // video is paused, so cancel it and restart the draw loop on the paused
@@ -3247,8 +3772,15 @@ import {
 
     function editorTogglePlay() {
       if (!editorState) return;
-      if (editorState.playing) editorPause();
-      else editorPlay();
+      if (editorState.playing) {
+        editorPause();
+      } else {
+        // If at end of timeline, loop back to start
+        if (editorState.currentTime >= editorState.duration - 0.05) {
+          editorSeek(0);
+        }
+        editorPlay();
+      }
     }
 
     function cyclePlaybackSpeed() {
@@ -3285,8 +3817,24 @@ import {
           }
         );
       }
+      syncOverlayVideo(time);
       updateEditorTimeDisplay();
       updateScrubberPosition();
+    }
+
+    function syncOverlayVideo(time) {
+      const overlayState = getOverlayStateAtTime(time);
+      if (overlayState.active && overlayState.mediaType === 'video') {
+        const vid = getOverlayVideoElement(overlayState.mediaPath);
+        if (vid && Math.abs(vid.currentTime - overlayState.sourceTime) > 0.15) {
+          vid.currentTime = overlayState.sourceTime;
+        }
+        if (editorState?.playing && vid.paused) {
+          vid.play().catch(() => {});
+        }
+      } else if (overlayVideoEl && !overlayVideoEl.paused) {
+        overlayVideoEl.pause();
+      }
     }
 
     function updateScrubberPosition() {
@@ -3327,12 +3875,14 @@ import {
                 }
               );
             } else {
-              // End of timeline
-              editorPause();
+              // End of timeline — loop back to start
+              editorSeek(0);
+              editorPlay();
             }
           }
 
           syncCameraPlayback(videos);
+          syncOverlayVideo(editorState.currentTime);
         }
 
         updateEditorTimeDisplay();
@@ -3366,6 +3916,64 @@ import {
       const cropPixelX = isReel ? reelCropXToPixelOffset(state.reelCropX, state.backgroundZoom, editorContentW) : 0;
       const effectiveW = isReel ? REEL_CANVAS_W : CANVAS_W;
       const currentPipSize = computePipSize(state.pipScale, effectiveW);
+
+      // Draw overlay media (between screen and PIP)
+      const overlayState = getOverlayStateAtTime(editorState.currentTime);
+      if (overlayState.active) {
+        const oX = overlayState.x + (isReel ? cropPixelX : 0);
+        const oY = overlayState.y;
+        const oW = overlayState.width;
+        const oH = overlayState.height;
+        const mediaEl = overlayState.mediaType === 'image'
+          ? getOverlayImageElement(overlayState.mediaPath)
+          : getOverlayVideoElement(overlayState.mediaPath);
+        if (mediaEl && (mediaEl.tagName !== 'IMG' || mediaEl.complete)) {
+          editorCtx.save();
+          editorCtx.globalAlpha = overlayState.opacity;
+          // Draw in-bounds portion at full opacity
+          editorCtx.drawImage(mediaEl, oX, oY, oW, oH);
+          // Overflow: draw out-of-bounds portion at reduced opacity
+          const inLeft = Math.max(0, oX);
+          const inTop = Math.max(0, oY);
+          const inRight = Math.min(CANVAS_W, oX + oW);
+          const inBottom = Math.min(CANVAS_H, oY + oH);
+          if (oX < 0 || oY < 0 || oX + oW > CANVAS_W || oY + oH > CANVAS_H) {
+            // Clear the in-bounds part and redraw with reduced alpha for overflow
+            editorCtx.globalAlpha = overlayState.opacity * 0.3;
+            editorCtx.drawImage(mediaEl, oX, oY, oW, oH);
+            // Redraw the in-bounds part at full opacity
+            if (inRight > inLeft && inBottom > inTop) {
+              editorCtx.globalAlpha = overlayState.opacity;
+              editorCtx.save();
+              editorCtx.beginPath();
+              editorCtx.rect(inLeft, inTop, inRight - inLeft, inBottom - inTop);
+              editorCtx.clip();
+              editorCtx.drawImage(mediaEl, oX, oY, oW, oH);
+              editorCtx.restore();
+            }
+          }
+          editorCtx.restore();
+        }
+        // Draw resize handles for selected overlay
+        if (overlayState.overlayId === editorState.selectedOverlayId) {
+          const oX = overlayState.x + (isReel ? cropPixelX : 0);
+          const oY = overlayState.y;
+          const oW = overlayState.width;
+          const oH = overlayState.height;
+          editorCtx.save();
+          editorCtx.strokeStyle = 'rgba(129,140,248,0.8)';
+          editorCtx.lineWidth = 2;
+          editorCtx.setLineDash([6, 4]);
+          editorCtx.strokeRect(oX, oY, oW, oH);
+          editorCtx.setLineDash([]);
+          editorCtx.fillStyle = 'rgba(129,140,248,0.9)';
+          const hs = 14;
+          for (const [cx, cy] of [[oX, oY], [oX + oW, oY], [oX, oY + oH], [oX + oW, oY + oH]]) {
+            editorCtx.fillRect(cx - hs / 2, cy - hs / 2, hs, hs);
+          }
+          editorCtx.restore();
+        }
+      }
 
       if (hasCamera) {
         if (state.camTransition > 0 && state.opacity > 0) {
@@ -3508,15 +4116,79 @@ import {
       };
     }
 
+    let draggingOverlay = false;
+    let overlayDragMoved = false;
+    let overlayDragStartX = 0;
+    let overlayDragStartY = 0;
+    let overlayDragOrigX = 0;
+    let overlayDragOrigY = 0;
+    let resizingOverlay = false;
+    let overlayResizeCorner = null; // 'tl', 'tr', 'bl', 'br'
+    let overlayResizeStartX = 0;
+    let overlayResizeOrigRect = null;
+    let overlayResizeAspect = 1;
+
     editorCanvas.addEventListener('mousedown', (e) => {
       if (!editorState || editorState.rendering) return;
-      const activeSection = findSectionForTime(editorState.currentTime);
-      if (activeSection) selectEditorSection(activeSection.id);
       const { x, y } = canvasToEditorCoords(e.clientX, e.clientY);
       const kf = getStateAtTime(editorState.currentTime);
       const isReel = editorState.outputMode === 'reel';
       const mousedownContentW = isReel ? getContentWidth(editorState.sourceWidth, editorState.sourceHeight, editorState.screenFitMode) : CANVAS_W;
       const cropOffsetX = isReel ? reelCropXToPixelOffset(kf.reelCropX, kf.backgroundZoom, mousedownContentW) : 0;
+
+      // Overlay hit-test (priority over everything — runs before selectEditorSection)
+      if (editorState.selectedOverlayId) {
+        const overlayS = getOverlayStateAtTime(editorState.currentTime);
+        if (overlayS.active && overlayS.overlayId === editorState.selectedOverlayId) {
+          const oX = overlayS.x + (isReel ? cropOffsetX : 0);
+          const oY = overlayS.y;
+          const oW = overlayS.width;
+          const oH = overlayS.height;
+          const CORNER_HIT = 40;
+
+          // Corner resize hit-test (inward from each corner)
+          const corners = [
+            { name: 'tl', x0: oX, y0: oY, x1: oX + CORNER_HIT, y1: oY + CORNER_HIT },
+            { name: 'tr', x0: oX + oW - CORNER_HIT, y0: oY, x1: oX + oW, y1: oY + CORNER_HIT },
+            { name: 'bl', x0: oX, y0: oY + oH - CORNER_HIT, x1: oX + CORNER_HIT, y1: oY + oH },
+            { name: 'br', x0: oX + oW - CORNER_HIT, y0: oY + oH - CORNER_HIT, x1: oX + oW, y1: oY + oH }
+          ];
+          for (const c of corners) {
+            if (x >= c.x0 && x <= c.x1 && y >= c.y0 && y <= c.y1) {
+              resizingOverlay = true;
+              overlayResizeCorner = c.name;
+              overlayResizeStartX = x;
+              const mode = isReel ? 'reel' : 'landscape';
+              const overlay = editorState.overlays.find(o => o.id === editorState.selectedOverlayId);
+              if (overlay) {
+                overlayResizeOrigRect = { ...overlay[mode] };
+                overlayResizeAspect = overlayResizeOrigRect.width / Math.max(1, overlayResizeOrigRect.height);
+              }
+              overlayDragMoved = false;
+              pushUndo();
+              e.preventDefault();
+              return;
+            }
+          }
+
+          // Drag hit-test (anywhere within overlay bounds)
+          if (x >= oX && x <= oX + oW && y >= oY && y <= oY + oH) {
+            draggingOverlay = true;
+            overlayDragMoved = false;
+            overlayDragStartX = x;
+            overlayDragStartY = y;
+            const mode = isReel ? 'reel' : 'landscape';
+            const overlay = editorState.overlays.find(o => o.id === editorState.selectedOverlayId);
+            if (overlay) {
+              overlayDragOrigX = overlay[mode].x;
+              overlayDragOrigY = overlay[mode].y;
+            }
+            pushUndo();
+            e.preventDefault();
+            return;
+          }
+        }
+      }
 
       // PIP hit-test: in reel mode, PIP coords are relative to crop region
       if (editorState.hasCamera && kf.pipVisible && kf.camTransition <= 0) {
@@ -3532,6 +4204,10 @@ import {
           return;
         }
       }
+
+      // Select section (deferred until after overlay/PIP checks)
+      const activeSection = findSectionForTime(editorState.currentTime);
+      if (activeSection) selectEditorSection(activeSection.id);
 
       // Crop region drag: in reel mode, detect mousedown within crop region
       if (isReel && activeSection) {
@@ -3570,6 +4246,61 @@ import {
     });
 
     window.addEventListener('mousemove', (e) => {
+      // Overlay drag
+      if (draggingOverlay && editorState && editorState.selectedOverlayId) {
+        const { x, y } = canvasToEditorCoords(e.clientX, e.clientY);
+        const mode = editorState.outputMode === 'reel' ? 'reel' : 'landscape';
+        const overlay = editorState.overlays.find(o => o.id === editorState.selectedOverlayId);
+        if (overlay) {
+          overlay[mode].x = overlayDragOrigX + (x - overlayDragStartX);
+          overlay[mode].y = overlayDragOrigY + (y - overlayDragStartY);
+          overlayDragMoved = true;
+        }
+        return;
+      }
+
+      // Overlay resize
+      if (resizingOverlay && editorState && editorState.selectedOverlayId && overlayResizeOrigRect) {
+        const { x } = canvasToEditorCoords(e.clientX, e.clientY);
+        const mode = editorState.outputMode === 'reel' ? 'reel' : 'landscape';
+        const overlay = editorState.overlays.find(o => o.id === editorState.selectedOverlayId);
+        if (overlay) {
+          const orig = overlayResizeOrigRect;
+          const aspect = overlayResizeAspect;
+          let newW, newH, newX, newY;
+
+          if (overlayResizeCorner === 'br') {
+            newW = Math.max(50, orig.width + (x - overlayResizeStartX));
+            newH = newW / aspect;
+            newX = orig.x;
+            newY = orig.y;
+          } else if (overlayResizeCorner === 'bl') {
+            newW = Math.max(50, orig.width - (x - overlayResizeStartX));
+            newH = newW / aspect;
+            newX = orig.x + orig.width - newW;
+            newY = orig.y;
+          } else if (overlayResizeCorner === 'tr') {
+            newW = Math.max(50, orig.width + (x - overlayResizeStartX));
+            newH = newW / aspect;
+            newX = orig.x;
+            newY = orig.y + orig.height - newH;
+          } else { // tl
+            newW = Math.max(50, orig.width - (x - overlayResizeStartX));
+            newH = newW / aspect;
+            newX = orig.x + orig.width - newW;
+            newY = orig.y + orig.height - newH;
+          }
+
+          overlay[mode].x = Math.round(newX);
+          overlay[mode].y = Math.round(newY);
+          overlay[mode].width = Math.round(newW);
+          overlay[mode].height = Math.round(Math.max(50 / aspect, newH));
+          overlayDragMoved = true;
+          updateOverlaySizeControl();
+        }
+        return;
+      }
+
       // Crop region drag
       if (draggingCrop && editorState && cropDragState) {
         const { x } = canvasToEditorCoords(e.clientX, e.clientY);
@@ -3628,6 +4359,25 @@ import {
     });
 
     window.addEventListener('mouseup', () => {
+      // Overlay drag/resize cleanup
+      if (draggingOverlay || resizingOverlay) {
+        const wasDragging = draggingOverlay || resizingOverlay;
+        draggingOverlay = false;
+        resizingOverlay = false;
+        overlayResizeCorner = null;
+        overlayResizeOrigRect = null;
+        editorCanvas.style.cursor = '';
+        if (wasDragging) {
+          if (overlayDragMoved) {
+            scheduleProjectSave();
+          } else {
+            undoStack.pop();
+            updateUndoRedoButtons();
+          }
+          overlayDragMoved = false;
+        }
+      }
+
       const wasDraggingCrop = draggingCrop;
       draggingCrop = false;
       cropDragState = null;
@@ -3667,10 +4417,229 @@ import {
       }
     });
 
+    // ===== Overlay cursor style on hover =====
+    editorCanvas.addEventListener('mousemove', (e) => {
+      if (!editorState || editorState.rendering || draggingOverlay || resizingOverlay || draggingPip) return;
+      if (!editorState.selectedOverlayId) {
+        if (editorCanvas.style.cursor === 'nwse-resize' || editorCanvas.style.cursor === 'nesw-resize' || editorCanvas.style.cursor === 'move') {
+          editorCanvas.style.cursor = '';
+        }
+        return;
+      }
+      const overlayS = getOverlayStateAtTime(editorState.currentTime);
+      if (!overlayS.active || overlayS.overlayId !== editorState.selectedOverlayId) {
+        editorCanvas.style.cursor = '';
+        return;
+      }
+      const { x, y } = canvasToEditorCoords(e.clientX, e.clientY);
+      const isReel = editorState.outputMode === 'reel';
+      const kf = getStateAtTime(editorState.currentTime);
+      const hoverContentW = isReel ? getContentWidth(editorState.sourceWidth, editorState.sourceHeight, editorState.screenFitMode) : CANVAS_W;
+      const hoverCropX = isReel ? reelCropXToPixelOffset(kf.reelCropX, kf.backgroundZoom, hoverContentW) : 0;
+      const oX = overlayS.x + (isReel ? hoverCropX : 0);
+      const oY = overlayS.y;
+      const oW = overlayS.width;
+      const oH = overlayS.height;
+      const CH = 40;
+      const cornerZones = [
+        { cursor: 'nwse-resize', x0: oX, y0: oY, x1: oX + CH, y1: oY + CH },
+        { cursor: 'nesw-resize', x0: oX + oW - CH, y0: oY, x1: oX + oW, y1: oY + CH },
+        { cursor: 'nesw-resize', x0: oX, y0: oY + oH - CH, x1: oX + CH, y1: oY + oH },
+        { cursor: 'nwse-resize', x0: oX + oW - CH, y0: oY + oH - CH, x1: oX + oW, y1: oY + oH }
+      ];
+      for (const z of cornerZones) {
+        if (x >= z.x0 && x <= z.x1 && y >= z.y0 && y <= z.y1) {
+          editorCanvas.style.cursor = z.cursor;
+          return;
+        }
+      }
+      if (x >= oX && x <= oX + oW && y >= oY && y <= oY + oH) {
+        editorCanvas.style.cursor = 'move';
+        return;
+      }
+      editorCanvas.style.cursor = '';
+    });
+
+    // ===== Overlay drag-and-drop import =====
+
+    const OVERLAY_IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp'];
+    const OVERLAY_VIDEO_EXTS = ['.mp4', '.webm', '.mov'];
+
+    editorCanvas.addEventListener('dragover', (e) => {
+      if (!editorState || editorState.rendering) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    });
+
+    editorCanvas.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      if (!editorState || editorState.rendering || !activeProjectPath) return;
+      const file = e.dataTransfer?.files?.[0];
+      if (!file) return;
+      const filePath = window.electronAPI.getFilePathFromDrop(file);
+      if (!filePath) return;
+
+      const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+      const isImage = OVERLAY_IMAGE_EXTS.includes(ext);
+      const isVideo = OVERLAY_VIDEO_EXTS.includes(ext);
+      if (!isImage && !isVideo) return;
+
+      try {
+        const mediaPath = await window.electronAPI.importOverlayMedia(activeProjectPath, filePath);
+        const mediaType = isImage ? 'image' : 'video';
+
+        // Determine default size based on media dimensions
+        const effectiveW = editorState.outputMode === 'reel' ? REEL_CANVAS_W : CANVAS_W;
+        let defaultW = Math.round(effectiveW * (editorState.outputMode === 'reel' ? 0.7 : 0.4));
+        let defaultH = Math.round(defaultW * 3 / 4); // default 4:3 aspect
+
+        // Probe media dimensions for correct aspect ratio
+        try {
+          if (isImage) {
+            const dims = await new Promise((resolve) => {
+              const img = new Image();
+              img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+              img.onerror = () => resolve(null);
+              img.src = `file://${activeProjectPath}/${mediaPath}`;
+            });
+            if (dims) {
+              defaultH = Math.round(defaultW * dims.h / dims.w);
+            }
+          } else if (isVideo) {
+            const dims = await new Promise((resolve) => {
+              const vid = document.createElement('video');
+              vid.preload = 'metadata';
+              vid.onloadedmetadata = () => resolve({ w: vid.videoWidth, h: vid.videoHeight });
+              vid.onerror = () => resolve(null);
+              vid.src = `file://${activeProjectPath}/${mediaPath}`;
+            });
+            if (dims && dims.w > 0) {
+              defaultH = Math.round(defaultW * dims.h / dims.w);
+            }
+          }
+        } catch (_) { /* use default aspect */ }
+
+        const landscapeW = Math.round(CANVAS_W * 0.4);
+        const reelW = Math.round(REEL_CANVAS_W * 0.7);
+        const aspectH = (w) => Math.round(w * (defaultH / defaultW));
+
+        // Determine time placement — at playhead, push existing overlays if needed
+        const duration = isVideo ? 5 : 3;
+        const sourceStart = 0;
+
+        pushUndo();
+        const placedStart = placeOverlayAtTime(null, editorState.currentTime, duration, editorState.duration);
+        if (placedStart === null) {
+          undoStack.pop();
+          updateUndoRedoButtons();
+          return; // no room
+        }
+        const startTime = placedStart;
+        const endTime = startTime + duration;
+        const sourceEnd = endTime - startTime;
+
+        const overlay = {
+          id: generateOverlayId(),
+          mediaPath,
+          mediaType,
+          startTime,
+          endTime,
+          sourceStart,
+          sourceEnd,
+          landscape: { x: Math.round((CANVAS_W - landscapeW) / 2), y: Math.round((CANVAS_H - aspectH(landscapeW)) / 2), width: landscapeW, height: aspectH(landscapeW) },
+          reel: { x: Math.round((REEL_CANVAS_W - reelW) / 2), y: Math.round((REEL_CANVAS_H - aspectH(reelW)) / 2), width: reelW, height: aspectH(reelW) }
+        };
+        editorState.overlays.push(overlay);
+        editorState.overlays.sort((a, b) => a.startTime - b.startTime);
+        editorState.selectedOverlayId = overlay.id;
+        renderOverlayMarkers();
+        scheduleProjectSave();
+      } catch (err) {
+        console.error('Failed to import overlay media:', err);
+      }
+    });
+
     // ===== Timeline scrubber =====
 
     editorTimeline.addEventListener('mousedown', (e) => {
       if (!editorState || editorState.rendering) return;
+
+      // Overlay trim handles
+      const overlayTrimEdge = e.target?.dataset?.overlayTrimEdge;
+      if (overlayTrimEdge) {
+        const overlayId = e.target.dataset.overlayId;
+        if (overlayId) {
+          startOverlayTrimDrag(e, overlayId, overlayTrimEdge);
+          return;
+        }
+      }
+
+      // Overlay selection + drag-to-reposition
+      const overlayId = e.target?.dataset?.overlayId || e.target?.parentElement?.dataset?.overlayId;
+      if (overlayId) {
+        selectOverlay(overlayId);
+        const overlay = editorState.overlays.find(o => o.id === overlayId);
+        if (overlay) {
+          let overlayMoveDragStarted = false;
+          const overlayMoveDuration = overlay.endTime - overlay.startTime;
+          const overlayMoveOrigStart = overlay.startTime;
+          let dragGhostEl = null;
+          let lastDragTargetTime = overlay.startTime;
+          pushUndo();
+
+          const onMoveOverlay = (e2) => {
+            overlayMoveDragStarted = true;
+            const rect = editorTimeline.getBoundingClientRect();
+            const pct = Math.max(0, Math.min(1, (e2.clientX - rect.left) / rect.width));
+            lastDragTargetTime = Math.max(0, Math.min(editorState.duration - overlayMoveDuration, pct * editorState.duration - overlayMoveDuration / 2));
+
+            // Show a floating ghost band at cursor position (above other overlays)
+            if (!dragGhostEl) {
+              dragGhostEl = document.createElement('div');
+              dragGhostEl.style.cssText = 'position:absolute;top:0;bottom:0;z-index:40;border-radius:3px;pointer-events:none;';
+              dragGhostEl.style.backgroundColor = 'rgba(79,70,229,0.6)';
+              dragGhostEl.style.boxShadow = '0 0 8px rgba(99,102,241,0.5)';
+              editorOverlayTrack.appendChild(dragGhostEl);
+              // Dim the original band
+              const origBand = editorOverlayTrack.querySelector(`[data-overlay-id="${overlayId}"]`);
+              if (origBand) origBand.style.opacity = '0.25';
+            }
+            const ghostLeft = (lastDragTargetTime / editorState.duration) * 100;
+            const ghostWidth = (overlayMoveDuration / editorState.duration) * 100;
+            dragGhostEl.style.left = ghostLeft + '%';
+            dragGhostEl.style.width = ghostWidth + '%';
+          };
+          const onUpOverlay = () => {
+            window.removeEventListener('mousemove', onMoveOverlay);
+            window.removeEventListener('mouseup', onUpOverlay);
+            if (dragGhostEl) {
+              dragGhostEl.remove();
+              dragGhostEl = null;
+            }
+            if (overlayMoveDragStarted) {
+              // Restore original position, then resolve collisions at drop position
+              overlay.startTime = overlayMoveOrigStart;
+              overlay.endTime = overlayMoveOrigStart + overlayMoveDuration;
+              const placed = placeOverlayAtTime(overlayId, lastDragTargetTime, overlayMoveDuration, editorState.duration);
+              if (placed !== null) {
+                overlay.startTime = placed;
+                overlay.endTime = placed + overlayMoveDuration;
+              }
+              editorState.overlays.sort((a, b) => a.startTime - b.startTime);
+              renderOverlayMarkers();
+              scheduleProjectSave();
+            } else {
+              undoStack.pop();
+              updateUndoRedoButtons();
+            }
+          };
+          window.addEventListener('mousemove', onMoveOverlay);
+          window.addEventListener('mouseup', onUpOverlay);
+        }
+        return;
+      }
+
+      // Section trim handles
       const trimEdge = e.target?.dataset?.trimEdge;
       if (trimEdge) {
         const trimSectionId = e.target.dataset.sectionId;
@@ -3679,8 +4648,16 @@ import {
           return;
         }
       }
+
+      // Section selection — also deselects overlay
       const sectionId = e.target && e.target.dataset ? e.target.dataset.sectionId : null;
-      if (sectionId) selectEditorSection(sectionId);
+      if (sectionId) {
+        selectEditorSection(sectionId);
+        if (editorState.selectedOverlayId) {
+          editorState.selectedOverlayId = null;
+          renderOverlayMarkers();
+        }
+      }
       seekFromTimeline(e);
       const onMove = (e2) => seekFromTimeline(e2);
       const onUp = () => {
@@ -3753,7 +4730,13 @@ import {
     editorUndoBtn.addEventListener('click', editorUndo);
     editorRedoBtn.addEventListener('click', editorRedo);
     editorPlayBtn.addEventListener('click', editorTogglePlay);
-    editorSplitBtn.addEventListener('click', splitSectionAtPlayhead);
+    editorSplitBtn.addEventListener('click', () => {
+      if (editorState?.selectedOverlayId) {
+        splitOverlayAtPlayhead();
+      } else {
+        splitSectionAtPlayhead();
+      }
+    });
     editorToggleCamBtn.addEventListener('click', toggleCameraVisibility);
     editorCamFullBtn.addEventListener('click', toggleCameraFullscreen);
     editorApplyFutureBtn.addEventListener('click', applyStyleToFutureSections);
@@ -3767,6 +4750,78 @@ import {
     editorBgZoomInput.addEventListener('change', commitSectionZoomChange);
     editorBgZoomInput.addEventListener('pointerup', commitSectionZoomChange);
     editorBgZoomInput.addEventListener('blur', commitSectionZoomChange);
+
+    // Scrub drag for Zoom control
+    function initScrubDrag(scrubEl, valueEl, inputEl) {
+      const scrubTargets = [scrubEl, valueEl].filter(Boolean);
+      for (const target of scrubTargets) {
+        target.addEventListener('mousedown', (e) => {
+          if (!editorState || editorState.rendering) return;
+          e.preventDefault();
+          const startX = e.clientX;
+          const startVal = parseFloat(inputEl.value);
+          const min = parseFloat(inputEl.min);
+          const max = parseFloat(inputEl.max);
+          const step = parseFloat(inputEl.step) || 0.01;
+          const range = max - min;
+          const sensitivity = range / 200; // full range over 200px drag
+
+          const onMove = (e2) => {
+            const dx = e2.clientX - startX;
+            const newVal = Math.max(min, Math.min(max, startVal + dx * sensitivity));
+            const stepped = Math.round(newVal / step) * step;
+            inputEl.value = stepped;
+            inputEl.dispatchEvent(new Event('input'));
+          };
+          const onUp = () => {
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+            document.body.style.cursor = '';
+            inputEl.dispatchEvent(new Event('change'));
+          };
+          document.body.style.cursor = 'ew-resize';
+          window.addEventListener('mousemove', onMove);
+          window.addEventListener('mouseup', onUp);
+        });
+      }
+    }
+
+    const editorBgZoomScrub = document.getElementById('editorBgZoomScrub');
+    const editorPipSizeScrub = document.getElementById('editorPipSizeScrub');
+    initScrubDrag(editorBgZoomScrub, editorBgZoomValue, editorBgZoomInput);
+    initScrubDrag(editorPipSizeScrub, editorPipSizeValue, editorPipSizeInput);
+    initScrubDrag(editorOverlaySizeScrub, editorOverlaySizeValue, editorOverlaySizeInput);
+
+    // Overlay size input handler — resizes overlay maintaining aspect ratio
+    let overlaySizeDragActive = false;
+    editorOverlaySizeInput.addEventListener('input', () => {
+      if (!editorState || editorState.rendering || !editorState.selectedOverlayId) return;
+      const overlay = editorState.overlays.find(o => o.id === editorState.selectedOverlayId);
+      if (!overlay) return;
+      if (!overlaySizeDragActive) pushUndo();
+      overlaySizeDragActive = true;
+      const mode = editorState.outputMode === 'reel' ? 'reel' : 'landscape';
+      const pos = overlay[mode];
+      const aspect = pos.width / Math.max(1, pos.height);
+      const baseW = mode === 'reel' ? REEL_CANVAS_W : CANVAS_W;
+      const newW = Math.max(20, Math.round(baseW * 0.4 * parseFloat(editorOverlaySizeInput.value)));
+      const newH = Math.max(20, Math.round(newW / aspect));
+      // Keep center position stable
+      const cx = pos.x + pos.width / 2;
+      const cy = pos.y + pos.height / 2;
+      pos.x = Math.round(cx - newW / 2);
+      pos.y = Math.round(cy - newH / 2);
+      pos.width = newW;
+      pos.height = newH;
+      editorOverlaySizeValue.textContent = `${Math.round(parseFloat(editorOverlaySizeInput.value) * 100)}%`;
+    });
+    const commitOverlaySizeChange = () => {
+      if (overlaySizeDragActive) scheduleProjectSave();
+      overlaySizeDragActive = false;
+    };
+    editorOverlaySizeInput.addEventListener('change', commitOverlaySizeChange);
+    editorOverlaySizeInput.addEventListener('pointerup', commitOverlaySizeChange);
+    editorOverlaySizeInput.addEventListener('blur', commitOverlaySizeChange);
 
     // Output mode toggle buttons
     if (editorModeLandscapeBtn) {
@@ -3892,6 +4947,7 @@ import {
           sourceWidth: editorState.sourceWidth || CANVAS_W,
           sourceHeight: editorState.sourceHeight || CANVAS_H,
           outputMode: editorState.outputMode || 'landscape',
+          overlays: editorState.overlays || [],
           outputFolder: saveFolder
         });
 
@@ -4008,16 +5064,40 @@ import {
         editorTogglePlay();
       } else if (e.code === 'ArrowLeft') {
         e.preventDefault();
-        editorSeek(editorState.currentTime - 1 / 30);
+        const stepL = (e.metaKey || e.ctrlKey) ? 5 / 30 : 1 / 30;
+        editorSeek(editorState.currentTime - stepL);
       } else if (e.code === 'ArrowRight') {
         e.preventDefault();
-        editorSeek(editorState.currentTime + 1 / 30);
+        const stepR = (e.metaKey || e.ctrlKey) ? 5 / 30 : 1 / 30;
+        editorSeek(editorState.currentTime + stepR);
+      } else if (e.code === 'ArrowUp') {
+        e.preventDefault();
+        const boundaries = getTimelineBoundaries();
+        const nextB = boundaries.find(t => t > editorState.currentTime + 0.001);
+        if (nextB !== undefined) editorSeek(nextB);
+      } else if (e.code === 'ArrowDown') {
+        e.preventDefault();
+        const boundaries = getTimelineBoundaries();
+        let prevB = null;
+        for (const t of boundaries) {
+          if (t < editorState.currentTime - 0.001) prevB = t;
+          else break;
+        }
+        if (prevB !== null) editorSeek(prevB);
       } else if (e.code === 'Backspace' || e.code === 'Delete') {
         e.preventDefault();
-        deleteSelectedSection();
+        if (editorState?.selectedOverlayId) {
+          deleteSelectedOverlay();
+        } else {
+          deleteSelectedSection();
+        }
       } else if (e.code === 'KeyS') {
         e.preventDefault();
-        splitSectionAtPlayhead();
+        if (editorState?.selectedOverlayId) {
+          splitOverlayAtPlayhead();
+        } else {
+          splitSectionAtPlayhead();
+        }
       } else if (e.code === 'KeyC') {
         e.preventDefault();
         toggleCameraVisibility();

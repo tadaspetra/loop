@@ -6,7 +6,8 @@ const {
   buildFilterComplex,
   buildScreenFilter,
   resolveOutputSize,
-  panToFocusCoord
+  panToFocusCoord,
+  buildOverlayFilter
 } = require('../../src/main/services/render-filter-service');
 
 describe('main/services/render-filter-service', () => {
@@ -535,5 +536,90 @@ describe('main/services/render-filter-service', () => {
     );
     // Default pipScale 0.22 * outW 1920 = 422
     expect(filter).toContain('scale=422:422');
+  });
+
+  test('buildOverlayFilter returns empty for no overlays', () => {
+    const result = buildOverlayFilter([], 1920, 1080, 1920, 1080, 2, 'screen');
+    expect(result.inputs).toEqual([]);
+    expect(result.filterParts).toEqual([]);
+    expect(result.outputLabel).toBe('screen');
+  });
+
+  test('buildOverlayFilter generates image overlay filter', () => {
+    const overlays = [{
+      id: 'o1', mediaPath: 'overlay-media/img.png', mediaType: 'image',
+      startTime: 5, endTime: 10, sourceStart: 0, sourceEnd: 5,
+      landscape: { x: 200, y: 100, width: 400, height: 300 },
+      reel: { x: 50, y: 100, width: 200, height: 150 }
+    }];
+    const result = buildOverlayFilter(overlays, 1920, 1080, 1920, 1080, 2, 'screen', 'landscape');
+    expect(result.inputs.length).toBe(1);
+    expect(result.inputs[0]).toContain('-loop');
+    expect(result.filterParts.length).toBe(2); // prep + overlay
+    expect(result.filterParts[0]).toContain('scale=400:300');
+    expect(result.filterParts[0]).toContain('setpts=PTS+5.000/TB');
+    expect(result.filterParts[0]).toContain('fade=in:st=5.000');
+    expect(result.filterParts[0]).toContain('fade=out:st=9.700');
+    expect(result.filterParts[1]).toContain("enable='between(t,5.000,10.000)'");
+    expect(result.filterParts[1]).toContain("x='200'");
+    expect(result.filterParts[1]).toContain("y='100'");
+  });
+
+  test('buildOverlayFilter generates video overlay filter', () => {
+    const overlays = [{
+      id: 'o1', mediaPath: 'overlay-media/vid.mp4', mediaType: 'video',
+      startTime: 2, endTime: 8, sourceStart: 5, sourceEnd: 11,
+      landscape: { x: 100, y: 50, width: 500, height: 300 },
+      reel: { x: 50, y: 100, width: 200, height: 150 }
+    }];
+    const result = buildOverlayFilter(overlays, 1920, 1080, 1920, 1080, 2, 'screen', 'landscape');
+    expect(result.inputs.length).toBe(1);
+    expect(result.inputs[0]).not.toContain('-loop');
+    expect(result.filterParts[0]).toContain('trim=start=5.000:end=11.000');
+    expect(result.filterParts[0]).toContain('setpts=PTS-STARTPTS');
+    expect(result.filterParts[0]).toContain('scale=500:300');
+  });
+
+  test('buildOverlayFilter handles multiple non-overlapping overlays', () => {
+    const overlays = [
+      { id: 'o1', mediaPath: 'a.png', mediaType: 'image', startTime: 0, endTime: 5, sourceStart: 0, sourceEnd: 5,
+        landscape: { x: 0, y: 0, width: 200, height: 150 }, reel: { x: 0, y: 0, width: 100, height: 75 } },
+      { id: 'o2', mediaPath: 'b.png', mediaType: 'image', startTime: 8, endTime: 12, sourceStart: 0, sourceEnd: 4,
+        landscape: { x: 100, y: 100, width: 300, height: 200 }, reel: { x: 50, y: 50, width: 150, height: 100 } }
+    ];
+    const result = buildOverlayFilter(overlays, 1920, 1080, 1920, 1080, 2, 'screen', 'landscape');
+    expect(result.inputs.length).toBe(2);
+    expect(result.filterParts.length).toBe(4); // 2 prep + 2 overlay
+    expect(result.filterParts[1]).toContain("enable='between(t,0.000,5.000)'");
+    expect(result.filterParts[3]).toContain("enable='between(t,8.000,12.000)'");
+  });
+
+  test('buildOverlayFilter uses reel mode positions', () => {
+    const overlays = [{
+      id: 'o1', mediaPath: 'img.png', mediaType: 'image',
+      startTime: 0, endTime: 5, sourceStart: 0, sourceEnd: 5,
+      landscape: { x: 200, y: 100, width: 400, height: 300 },
+      reel: { x: 50, y: 200, width: 300, height: 200 }
+    }];
+    const result = buildOverlayFilter(overlays, 608, 1080, 608, 1080, 2, 'screen', 'reel');
+    expect(result.filterParts[0]).toContain('scale=300:200');
+    expect(result.filterParts[1]).toContain("x='50'");
+    expect(result.filterParts[1]).toContain("y='200'");
+  });
+
+  test('buildOverlayFilter skips fade between same-media adjacent segments', () => {
+    const overlays = [
+      { id: 'o1', mediaPath: 'img.png', mediaType: 'image', startTime: 0, endTime: 5, sourceStart: 0, sourceEnd: 5,
+        landscape: { x: 100, y: 100, width: 400, height: 300 }, reel: { x: 0, y: 0, width: 200, height: 150 } },
+      { id: 'o2', mediaPath: 'img.png', mediaType: 'image', startTime: 5, endTime: 10, sourceStart: 0, sourceEnd: 5,
+        landscape: { x: 500, y: 300, width: 400, height: 300 }, reel: { x: 0, y: 0, width: 200, height: 150 } }
+    ];
+    const result = buildOverlayFilter(overlays, 1920, 1080, 1920, 1080, 2, 'screen', 'landscape');
+    // First segment: fade-in only (no fade-out since next is same media)
+    expect(result.filterParts[0]).toContain('fade=in');
+    expect(result.filterParts[0]).not.toContain('fade=out');
+    // Second segment: fade-out only (no fade-in since prev is same media)
+    expect(result.filterParts[2]).not.toContain('fade=in');
+    expect(result.filterParts[2]).toContain('fade=out');
   });
 });

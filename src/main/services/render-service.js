@@ -13,7 +13,7 @@ const {
 } = require('../../shared/domain/project');
 const { chooseRenderFps, probeVideoFpsWithFfmpeg } = require('./fps-service');
 const { runFfmpeg } = require('./ffmpeg-runner');
-const { buildFilterComplex, buildScreenFilter } = require('./render-filter-service');
+const { buildFilterComplex, buildScreenFilter, buildOverlayFilter, resolveOutputSize } = require('./render-filter-service');
 
 function normalizeSectionInput(rawSections) {
   const sections = Array.isArray(rawSections) ? rawSections : [];
@@ -175,6 +175,7 @@ async function renderComposite(opts = {}, deps = {}) {
   const takes = Array.isArray(opts.takes) ? opts.takes : [];
   const sections = normalizeSectionInput(opts.sections);
   const keyframes = Array.isArray(opts.keyframes) ? opts.keyframes : [];
+  const overlays = Array.isArray(opts.overlays) ? opts.overlays.filter(o => o && o.mediaPath && o.mediaType) : [];
   const pipSize = Number.isFinite(Number(opts.pipSize)) ? Number(opts.pipSize) : 422;
   const screenFitMode = opts.screenFitMode === 'fit' ? 'fit' : 'fill';
   const exportAudioPreset = normalizeExportAudioPreset(opts.exportAudioPreset);
@@ -282,11 +283,21 @@ async function renderComposite(opts = {}, deps = {}) {
       targetFps,
       outputMode
     );
-    const adaptedOverlay = overlayFilter
+    let adaptedOverlay = overlayFilter
       .replace(/\[0:v\]/g, '[screen_raw]')
       .replace(/\[1:v\]/g, '[camera_raw]');
+    if (overlays.length > 0) {
+      // Insert overlay media BETWEEN screen and PIP:
+      // Replace [screen] → [screen_pre_ovl] in the PIP overlay line,
+      // so overlay media can chain [screen_pre_ovl] → [screen] before PIP composites.
+      adaptedOverlay = adaptedOverlay.replace(
+        /\[screen\]\[cam\]overlay/,
+        '[screen_ovl][cam]overlay'
+      );
+    }
     filterParts.push(adaptedOverlay);
   } else {
+    const outputLabel = overlays.length > 0 ? '[screen]' : '[out]';
     const screenOnlyFilter = buildScreenFilter(
       keyframes,
       screenFitMode,
@@ -294,12 +305,41 @@ async function renderComposite(opts = {}, deps = {}) {
       sourceHeight,
       canvasW,
       canvasH,
-      '[out]',
+      outputLabel,
       true,
       targetFps,
       outputMode
     ).replace(/\[0:v\]/g, '[screen_raw]');
     filterParts.push(screenOnlyFilter);
+  }
+
+  // Overlay media filters (between screen/PIP and final output)
+  if (overlays.length > 0) {
+    const { outW, outH } = resolveOutputSize(sourceWidth, sourceHeight, outputMode);
+    // Count existing -i flags in args to determine input index offset
+    let overlayInputOffset = 0;
+    for (const a of args) { if (a === '-i') overlayInputOffset += 1; }
+    const overlayResult = buildOverlayFilter(
+      overlays, canvasW, canvasH, outW, outH,
+      overlayInputOffset, 'screen', outputMode
+    );
+    // Add overlay media inputs to args
+    for (let i = 0; i < overlayResult.inputs.length; i++) {
+      const inputArgs = overlayResult.inputs[i];
+      const overlay = overlays[i];
+      const mediaAbsPath = path.join(outputFolder, overlay.mediaPath);
+      args.push(...inputArgs, mediaAbsPath);
+    }
+    // Append overlay filter parts
+    for (const part of overlayResult.filterParts) {
+      filterParts.push(part);
+    }
+    // Rename final overlay label: [screen_ovl] if PIP follows, [out] if no camera
+    const finalOvlLabel = hasCamera ? '[screen_ovl]' : '[out]';
+    const lastIdx = filterParts.length - 1;
+    if (lastIdx >= 0) {
+      filterParts[lastIdx] = filterParts[lastIdx].replace(/\[ovl_\d+\]$/, finalOvlLabel);
+    }
   }
 
   filterParts.push(`[out]fps=fps=${targetFps}:round=near[out_cfr]`);

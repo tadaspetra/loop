@@ -151,6 +151,18 @@ function registerIpcHandlers({
   ipcMain.handle('project:cleanupUnusedTakes', async (_event, projectPath) => {
     return projectService.cleanupUnusedTakes(projectPath);
   });
+
+  ipcMain.handle('project:importOverlayMedia', async (_event, projectPath, sourcePath) => {
+    return projectService.importOverlayMedia(projectPath, sourcePath);
+  });
+
+  ipcMain.handle('project:stageOverlayFile', async (_event, projectPath, mediaPath) => {
+    return projectService.stageOverlayFile(projectPath, mediaPath);
+  });
+
+  ipcMain.handle('project:unstageOverlayFile', async (_event, projectPath, mediaPath) => {
+    return projectService.unstageOverlayFile(projectPath, mediaPath);
+  });
 }
 
 module.exports = {

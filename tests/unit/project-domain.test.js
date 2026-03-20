@@ -14,7 +14,10 @@ const {
   normalizePipScale,
   createDefaultProject,
   normalizeProjectData,
-  normalizePipSnapPoint
+  normalizePipSnapPoint,
+  generateOverlayId,
+  normalizeOverlayPosition,
+  normalizeOverlays
 } = require('../../src/shared/domain/project');
 
 describe('shared/domain/project', () => {
@@ -354,5 +357,116 @@ describe('shared/domain/project', () => {
       '/tmp/my-project'
     );
     expect(project.timeline.savedSections).toEqual([]);
+  });
+
+  test('generateOverlayId returns unique IDs', () => {
+    const id1 = generateOverlayId();
+    const id2 = generateOverlayId();
+    expect(id1).toMatch(/^overlay-\d+-\d+$/);
+    expect(id2).toMatch(/^overlay-\d+-\d+$/);
+    expect(id1).not.toBe(id2);
+  });
+
+  test('normalizeOverlayPosition validates and defaults', () => {
+    expect(normalizeOverlayPosition(null)).toEqual({ x: 0, y: 0, width: 400, height: 300 });
+    expect(normalizeOverlayPosition({})).toEqual({ x: 0, y: 0, width: 400, height: 300 });
+    expect(normalizeOverlayPosition({ x: 100, y: 200, width: 500, height: 400 }))
+      .toEqual({ x: 100, y: 200, width: 500, height: 400 });
+    expect(normalizeOverlayPosition({ x: -50, y: 'bad', width: 0, height: 300 }))
+      .toEqual({ x: -50, y: 0, width: 400, height: 300 });
+  });
+
+  test('normalizeOverlays returns empty array for non-array input', () => {
+    expect(normalizeOverlays(null)).toEqual([]);
+    expect(normalizeOverlays(undefined)).toEqual([]);
+    expect(normalizeOverlays('string')).toEqual([]);
+  });
+
+  test('normalizeOverlays filters invalid segments', () => {
+    const result = normalizeOverlays([
+      { id: 'o1', mediaPath: 'img.png', mediaType: 'image', startTime: 0, endTime: 5 },
+      { id: '', mediaPath: 'img.png', mediaType: 'image', startTime: 5, endTime: 10 },
+      { mediaPath: 'img.png', mediaType: 'image', startTime: 10, endTime: 15 },
+      { id: 'o4', mediaPath: '', mediaType: 'image', startTime: 15, endTime: 20 },
+      { id: 'o5', mediaPath: 'img.png', mediaType: 'invalid', startTime: 20, endTime: 25 },
+      { id: 'o6', mediaPath: 'img.png', mediaType: 'image', startTime: 10, endTime: 5 }
+    ]);
+    expect(result.length).toBe(1);
+    expect(result[0].id).toBe('o1');
+  });
+
+  test('normalizeOverlays sorts by startTime', () => {
+    const result = normalizeOverlays([
+      { id: 'b', mediaPath: 'b.png', mediaType: 'image', startTime: 10, endTime: 15 },
+      { id: 'a', mediaPath: 'a.png', mediaType: 'image', startTime: 2, endTime: 5 }
+    ]);
+    expect(result[0].id).toBe('a');
+    expect(result[1].id).toBe('b');
+  });
+
+  test('normalizeOverlays enforces no-overlap by trimming later segment', () => {
+    const result = normalizeOverlays([
+      { id: 'a', mediaPath: 'a.png', mediaType: 'image', startTime: 2, endTime: 8 },
+      { id: 'b', mediaPath: 'b.png', mediaType: 'image', startTime: 5, endTime: 12 }
+    ]);
+    expect(result.length).toBe(2);
+    expect(result[0].endTime).toBe(8);
+    expect(result[1].startTime).toBe(8);
+    expect(result[1].endTime).toBe(12);
+  });
+
+  test('normalizeOverlays sets image sourceStart/sourceEnd', () => {
+    const result = normalizeOverlays([
+      { id: 'o1', mediaPath: 'img.png', mediaType: 'image', startTime: 0, endTime: 5, sourceStart: 99, sourceEnd: 99 }
+    ]);
+    expect(result[0].sourceStart).toBe(0);
+    expect(result[0].sourceEnd).toBe(5);
+  });
+
+  test('normalizeOverlays preserves video sourceStart/sourceEnd', () => {
+    const result = normalizeOverlays([
+      { id: 'o1', mediaPath: 'vid.mp4', mediaType: 'video', startTime: 0, endTime: 10, sourceStart: 5, sourceEnd: 15 }
+    ]);
+    expect(result[0].sourceStart).toBe(5);
+    expect(result[0].sourceEnd).toBe(15);
+  });
+
+  test('normalizeOverlays defaults video sourceStart/sourceEnd when missing', () => {
+    const result = normalizeOverlays([
+      { id: 'o1', mediaPath: 'vid.mp4', mediaType: 'video', startTime: 2, endTime: 8 }
+    ]);
+    expect(result[0].sourceStart).toBe(0);
+    expect(result[0].sourceEnd).toBe(6);
+  });
+
+  test('normalizeOverlays normalizes landscape and reel positions', () => {
+    const result = normalizeOverlays([
+      { id: 'o1', mediaPath: 'img.png', mediaType: 'image', startTime: 0, endTime: 5,
+        landscape: { x: 100, y: 200, width: 300, height: 250 },
+        reel: { x: 50, y: 100, width: 200, height: 150 } }
+    ]);
+    expect(result[0].landscape).toEqual({ x: 100, y: 200, width: 300, height: 250 });
+    expect(result[0].reel).toEqual({ x: 50, y: 100, width: 200, height: 150 });
+  });
+
+  test('normalizeOverlays removes fully overlapped segment', () => {
+    const result = normalizeOverlays([
+      { id: 'a', mediaPath: 'a.png', mediaType: 'image', startTime: 0, endTime: 10 },
+      { id: 'b', mediaPath: 'b.png', mediaType: 'image', startTime: 3, endTime: 5 }
+    ]);
+    // b starts at 3, but a ends at 10, so b.startTime becomes 10, but b.endTime is 5 < 10 → removed
+    expect(result.length).toBe(1);
+    expect(result[0].id).toBe('a');
+  });
+
+  test('normalizeProjectData includes overlays in timeline', () => {
+    const project = normalizeProjectData(
+      { timeline: { overlays: [
+        { id: 'o1', mediaPath: 'img.png', mediaType: 'image', startTime: 0, endTime: 5 }
+      ] } },
+      '/tmp/project'
+    );
+    expect(project.timeline.overlays.length).toBe(1);
+    expect(project.timeline.overlays[0].id).toBe('o1');
   });
 });

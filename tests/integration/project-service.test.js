@@ -351,4 +351,77 @@ describe('main/services/project-service integration', () => {
     service.cleanupUnusedTakes(created.projectPath);
     expect(fs.existsSync(path.join(created.projectPath, '.deleted'))).toBe(false);
   });
+
+  test('importOverlayMedia copies file to overlay-media/ and returns relative path', () => {
+    const created = service.createProject({ name: 'Overlay Test', parentFolder: sandbox.root });
+    // Create a source file to import
+    const sourceFile = path.join(sandbox.root, 'test-image.png');
+    fs.writeFileSync(sourceFile, 'fake-png-data');
+
+    const mediaPath = service.importOverlayMedia(created.projectPath, sourceFile);
+    expect(mediaPath).toMatch(/^overlay-media\/test-image-\d+\.png$/);
+    expect(fs.existsSync(path.join(created.projectPath, mediaPath))).toBe(true);
+  });
+
+  test('importOverlayMedia reuses existing file with identical content', () => {
+    const created = service.createProject({ name: 'Dedup Test', parentFolder: sandbox.root });
+    const sourceFile = path.join(sandbox.root, 'dedup-img.png');
+    fs.writeFileSync(sourceFile, 'identical-content');
+
+    const firstPath = service.importOverlayMedia(created.projectPath, sourceFile);
+    const secondPath = service.importOverlayMedia(created.projectPath, sourceFile);
+    // Same content → same path returned, no duplicate
+    expect(secondPath).toBe(firstPath);
+    // Only one file in overlay-media/
+    const files = fs.readdirSync(path.join(created.projectPath, 'overlay-media'));
+    expect(files.length).toBe(1);
+  });
+
+  test('importOverlayMedia creates new file for different content', () => {
+    const created = service.createProject({ name: 'Diff Test', parentFolder: sandbox.root });
+    const sourceA = path.join(sandbox.root, 'imgA.png');
+    const sourceB = path.join(sandbox.root, 'imgB.png');
+    fs.writeFileSync(sourceA, 'content-a');
+    fs.writeFileSync(sourceB, 'content-b');
+    const pathA = service.importOverlayMedia(created.projectPath, sourceA);
+    const pathB = service.importOverlayMedia(created.projectPath, sourceB);
+    expect(pathA).not.toBe(pathB);
+    const files = fs.readdirSync(path.join(created.projectPath, 'overlay-media'));
+    expect(files.length).toBe(2);
+  });
+
+  test('stageOverlayFile moves file to .deleted/overlay-media/', () => {
+    const created = service.createProject({ name: 'Stage Test', parentFolder: sandbox.root });
+    const sourceFile = path.join(sandbox.root, 'stage-img.png');
+    fs.writeFileSync(sourceFile, 'data');
+    const mediaPath = service.importOverlayMedia(created.projectPath, sourceFile);
+
+    service.stageOverlayFile(created.projectPath, mediaPath);
+    expect(fs.existsSync(path.join(created.projectPath, mediaPath))).toBe(false);
+    expect(fs.existsSync(path.join(created.projectPath, '.deleted', 'overlay-media', path.basename(mediaPath)))).toBe(true);
+  });
+
+  test('unstageOverlayFile restores file from .deleted/overlay-media/', () => {
+    const created = service.createProject({ name: 'Unstage Test', parentFolder: sandbox.root });
+    const sourceFile = path.join(sandbox.root, 'unstage-img.png');
+    fs.writeFileSync(sourceFile, 'data');
+    const mediaPath = service.importOverlayMedia(created.projectPath, sourceFile);
+
+    service.stageOverlayFile(created.projectPath, mediaPath);
+    expect(fs.existsSync(path.join(created.projectPath, mediaPath))).toBe(false);
+
+    service.unstageOverlayFile(created.projectPath, mediaPath);
+    expect(fs.existsSync(path.join(created.projectPath, mediaPath))).toBe(true);
+  });
+
+  test('cleanupDeletedFolder removes staged overlay media', () => {
+    const created = service.createProject({ name: 'Cleanup Test', parentFolder: sandbox.root });
+    const sourceFile = path.join(sandbox.root, 'cleanup-img.png');
+    fs.writeFileSync(sourceFile, 'data');
+    const mediaPath = service.importOverlayMedia(created.projectPath, sourceFile);
+
+    service.stageOverlayFile(created.projectPath, mediaPath);
+    service.cleanupDeletedFolder(created.projectPath);
+    expect(fs.existsSync(path.join(created.projectPath, '.deleted'))).toBe(false);
+  });
 });

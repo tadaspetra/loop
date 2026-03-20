@@ -18,9 +18,20 @@ const MAX_PIP_SCALE = 0.50;
 const DEFAULT_PIP_SCALE = 0.22;
 const VALID_PIP_SNAP_POINTS = ['tl', 'tc', 'tr', 'ml', 'center', 'mr', 'bl', 'bc', 'br'];
 const DEFAULT_PIP_SNAP_POINT = 'br';
+const VALID_OVERLAY_MEDIA_TYPES = ['image', 'video'];
+const OVERLAY_IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp'];
+const OVERLAY_VIDEO_EXTENSIONS = ['.mp4', '.webm', '.mov'];
+const DEFAULT_OVERLAY_POSITION = { x: 0, y: 0, width: 400, height: 300 };
+
+let overlayIdCounter = 0;
 
 function createProjectId() {
   return `project-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function generateOverlayId() {
+  overlayIdCounter += 1;
+  return `overlay-${Date.now()}-${overlayIdCounter}`;
 }
 
 function sanitizeProjectName(name) {
@@ -161,6 +172,77 @@ function normalizePipSnapPoint(value) {
   return VALID_PIP_SNAP_POINTS.includes(value) ? value : DEFAULT_PIP_SNAP_POINT;
 }
 
+function normalizeOverlayPosition(pos) {
+  if (!pos || typeof pos !== 'object') return { ...DEFAULT_OVERLAY_POSITION };
+  return {
+    x: Number.isFinite(Number(pos.x)) ? Number(pos.x) : 0,
+    y: Number.isFinite(Number(pos.y)) ? Number(pos.y) : 0,
+    width: Number.isFinite(Number(pos.width)) && Number(pos.width) > 0 ? Number(pos.width) : DEFAULT_OVERLAY_POSITION.width,
+    height: Number.isFinite(Number(pos.height)) && Number(pos.height) > 0 ? Number(pos.height) : DEFAULT_OVERLAY_POSITION.height
+  };
+}
+
+function normalizeOverlays(rawOverlays) {
+  if (!Array.isArray(rawOverlays)) return [];
+  const valid = rawOverlays
+    .filter((overlay) => {
+      if (!overlay || typeof overlay !== 'object') return false;
+      if (typeof overlay.id !== 'string' || !overlay.id) return false;
+      if (typeof overlay.mediaPath !== 'string' || !overlay.mediaPath) return false;
+      if (!VALID_OVERLAY_MEDIA_TYPES.includes(overlay.mediaType)) return false;
+      const start = Number(overlay.startTime);
+      const end = Number(overlay.endTime);
+      if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
+      if (end <= start) return false;
+      return true;
+    })
+    .map((overlay) => {
+      const startTime = Math.max(0, Number(overlay.startTime));
+      const endTime = Math.max(startTime + 0.001, Number(overlay.endTime));
+      const duration = endTime - startTime;
+      const isVideo = overlay.mediaType === 'video';
+      let sourceStart = isVideo && Number.isFinite(Number(overlay.sourceStart)) ? Math.max(0, Number(overlay.sourceStart)) : 0;
+      let sourceEnd = isVideo && Number.isFinite(Number(overlay.sourceEnd)) && Number(overlay.sourceEnd) > sourceStart
+        ? Number(overlay.sourceEnd)
+        : sourceStart + duration;
+      if (!isVideo) {
+        sourceStart = 0;
+        sourceEnd = duration;
+      }
+      return {
+        id: overlay.id,
+        mediaPath: overlay.mediaPath,
+        mediaType: overlay.mediaType,
+        startTime,
+        endTime,
+        sourceStart,
+        sourceEnd,
+        landscape: normalizeOverlayPosition(overlay.landscape),
+        reel: normalizeOverlayPosition(overlay.reel),
+        saved: !!overlay.saved
+      };
+    })
+    .sort((a, b) => a.startTime - b.startTime);
+
+  // Enforce no-overlap: later segments are trimmed
+  for (let i = 1; i < valid.length; i += 1) {
+    const prev = valid[i - 1];
+    if (valid[i].startTime < prev.endTime) {
+      const shift = prev.endTime - valid[i].startTime;
+      valid[i].startTime = prev.endTime;
+      if (valid[i].mediaType === 'video') {
+        valid[i].sourceStart += shift;
+      }
+    }
+    if (valid[i].endTime <= valid[i].startTime) {
+      valid.splice(i, 1);
+      i -= 1;
+    }
+  }
+
+  return valid;
+}
+
 function normalizeReelCropX(value) {
   const v = Number(value);
   if (!Number.isFinite(v)) return 0;
@@ -201,7 +283,9 @@ function createDefaultProject(name = 'Untitled Project') {
       selectedSectionId: null,
       hasCamera: false,
       sourceWidth: null,
-      sourceHeight: null
+      sourceHeight: null,
+      overlays: [],
+      savedOverlays: []
     }
   };
 }
@@ -255,7 +339,9 @@ function normalizeProjectData(rawProject, projectFolder) {
         : null,
       sourceHeight: Number.isFinite(Number(rawTimeline.sourceHeight))
         ? Number(rawTimeline.sourceHeight)
-        : null
+        : null,
+      overlays: normalizeOverlays(rawTimeline.overlays),
+      savedOverlays: normalizeOverlays(rawTimeline.savedOverlays)
     }
   };
 }
@@ -291,5 +377,12 @@ module.exports = {
   MIN_REEL_BACKGROUND_ZOOM,
   VALID_PIP_SNAP_POINTS,
   DEFAULT_PIP_SNAP_POINT,
-  normalizePipSnapPoint
+  normalizePipSnapPoint,
+  generateOverlayId,
+  normalizeOverlayPosition,
+  normalizeOverlays,
+  VALID_OVERLAY_MEDIA_TYPES,
+  OVERLAY_IMAGE_EXTENSIONS,
+  OVERLAY_VIDEO_EXTENSIONS,
+  DEFAULT_OVERLAY_POSITION
 };

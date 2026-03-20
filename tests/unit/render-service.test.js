@@ -536,4 +536,58 @@ describe('main/services/render-service', () => {
       })
     );
   });
+
+  test('renderComposite includes overlay media in filter chain', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-overlay-'));
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+    // Create overlay media file
+    const overlayDir = path.join(tmpDir, 'overlay-media');
+    fs.mkdirSync(overlayDir, { recursive: true });
+    const imgPath = path.join(overlayDir, 'test.png');
+    fs.writeFileSync(imgPath, 'fake-png', 'utf8');
+
+    const execCalls = [];
+    await renderComposite(
+      {
+        outputFolder: tmpDir,
+        takes: [{ id: 'take-1', screenPath, cameraPath: null }],
+        sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 10 }],
+        keyframes: [{ time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }],
+        pipSize: 300,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill',
+        overlays: [{
+          id: 'o1', mediaPath: 'overlay-media/test.png', mediaType: 'image',
+          startTime: 2, endTime: 7, sourceStart: 0, sourceEnd: 5,
+          landscape: { x: 200, y: 100, width: 400, height: 300 },
+          reel: { x: 50, y: 50, width: 200, height: 150 }
+        }]
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 777,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        runFfmpeg: async ({ args }) => {
+          execCalls.push(args);
+        }
+      }
+    );
+
+    expect(execCalls).toHaveLength(1);
+    const argsStr = execCalls[0].join(' ');
+    // Should include overlay image input
+    expect(argsStr).toContain('-loop 1');
+    expect(argsStr).toContain('test.png');
+    // Filter should contain overlay with enable expression
+    expect(argsStr).toContain("enable='between(t,2.000,7.000)'");
+    expect(argsStr).toContain('scale=400:300');
+    // PIP output goes to intermediate label, then overlay chains to [out]
+    // Overlay chains from [screen] to [out] (no camera in this test)
+    expect(argsStr).toContain('[screen]');
+    expect(argsStr).toContain('[out]');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
 });

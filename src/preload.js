@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron')
+const { contextBridge, ipcRenderer, webUtils } = require('electron')
 const url = require('node:url')
 
 function toFileUrl(filePath) {
@@ -43,5 +43,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   stageTakeFiles: (projectPath, filePaths) => ipcRenderer.invoke('project:stageTakeFiles', projectPath, filePaths),
   unstageTakeFiles: (projectPath, fileNames) => ipcRenderer.invoke('project:unstageTakeFiles', projectPath, fileNames),
   cleanupDeleted: (projectPath) => ipcRenderer.invoke('project:cleanupDeleted', projectPath),
-  cleanupUnusedTakes: (projectPath) => ipcRenderer.invoke('project:cleanupUnusedTakes', projectPath)
+  cleanupUnusedTakes: (projectPath) => ipcRenderer.invoke('project:cleanupUnusedTakes', projectPath),
+  importOverlayMedia: (projectPath, sourcePath) => ipcRenderer.invoke('project:importOverlayMedia', projectPath, sourcePath),
+  stageOverlayFile: (projectPath, mediaPath) => ipcRenderer.invoke('project:stageOverlayFile', projectPath, mediaPath),
+  unstageOverlayFile: (projectPath, mediaPath) => ipcRenderer.invoke('project:unstageOverlayFile', projectPath, mediaPath),
+  getFilePathFromDrop: (file) => {
+    try { return webUtils.getPathForFile(file); } catch (_) { return null; }
+  }
 })

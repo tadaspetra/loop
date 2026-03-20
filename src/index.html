@@ -169,11 +169,21 @@
 
   <!-- Editor View -->
   <div id="editorView" class="hidden flex-1 flex gap-3 p-4 w-full min-h-0">
-    <!-- Transcript panel (left) -->
+    <!-- Sidebar panel (left) -->
     <div class="w-56 shrink-0 flex flex-col gap-2 min-h-0">
       <span id="editorTime" class="text-sm text-neutral-500 font-mono tabular-nums px-1">00:00 / 00:00</span>
+      <!-- Tab buttons -->
+      <div class="flex border border-neutral-800 rounded-lg overflow-hidden">
+        <button id="sidebarTabSegments" class="flex-1 px-2 py-1 text-xs bg-white text-black transition-colors">Segments</button>
+        <button id="sidebarTabOverlays" class="flex-1 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-200 transition-colors">Overlays</button>
+      </div>
+      <!-- Segments list -->
       <div id="editorSectionTranscriptList" class="flex-1 overflow-y-auto space-y-0.5 min-h-0">
         <div class="text-xs text-neutral-500 px-1">Section transcript will appear here after trimming.</div>
+      </div>
+      <!-- Overlays list -->
+      <div id="editorOverlayList" class="flex-1 overflow-y-auto space-y-0.5 min-h-0 hidden">
+        <div class="text-xs text-neutral-500 px-1">Drop media onto the canvas to add overlays.</div>
       </div>
     </div>
 
@@ -186,47 +196,58 @@
 
       <!-- Timeline scrubber -->
       <div id="editorTimelineWrapper" class="rounded-lg border border-neutral-800 overflow-x-auto overflow-y-hidden">
-        <div id="editorTimeline" class="relative bg-neutral-900 h-12 cursor-pointer select-none overflow-hidden" style="min-width: 100%">
-          <canvas id="editorWaveformCanvas" class="absolute inset-0 w-full h-full pointer-events-none z-0" style="opacity: 0.4"></canvas>
-          <div id="editorSectionMarkers" class="absolute inset-0 z-1"></div>
+        <div id="editorTimeline" class="relative bg-neutral-900 cursor-pointer select-none overflow-hidden" style="min-width: 100%">
+          <div id="editorOverlayTrack" class="relative h-6 border-b border-neutral-700" style="background: rgba(99,102,241,0.08)"></div>
+          <div class="relative h-12">
+            <canvas id="editorWaveformCanvas" class="absolute inset-0 w-full h-full pointer-events-none z-0" style="opacity: 0.4"></canvas>
+            <div id="editorSectionMarkers" class="absolute inset-0 z-1"></div>
+          </div>
           <div id="editorScrubber" class="absolute top-0 bottom-0 w-0.5 bg-white pointer-events-none z-20" style="left: 0%"></div>
         </div>
       </div>
 
-      <!-- Playback controls -->
+      <!-- Editor controls -->
       <div class="flex items-center justify-center gap-2">
-        <button id="editorUndoBtn" title="Ctrl+Z" disabled class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors disabled:opacity-40 disabled:cursor-default disabled:hover:bg-neutral-800">Undo</button>
-        <button id="editorRedoBtn" title="Ctrl+Shift+Z" disabled class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors disabled:opacity-40 disabled:cursor-default disabled:hover:bg-neutral-800">Redo</button>
-        <button id="editorPlayBtn" title="Space" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Play</button>
-        <button id="editorSplitBtn" title="S" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Split</button>
-        <button id="editorToggleCamBtn" title="C" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Camera</button>
-        <button id="editorCamFullBtn" title="F" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Fullscreen</button>
-        <div class="flex items-center gap-2 px-2 py-1 border border-neutral-800 rounded-lg bg-neutral-900">
-          <label for="editorBgZoomInput" class="text-xs text-neutral-400">Zoom</label>
-          <input id="editorBgZoomInput" type="range" min="1" max="3" step="0.05" value="1"
-            class="w-28 accent-white disabled:opacity-50" />
-          <span id="editorBgZoomValue" class="text-xs font-mono tabular-nums text-neutral-300 min-w-[46px] text-right">1.00x</span>
+        <!-- Hidden buttons — still needed by JS but not visible -->
+        <button id="editorUndoBtn" class="hidden"></button>
+        <button id="editorRedoBtn" class="hidden"></button>
+        <button id="editorPlayBtn" class="hidden"></button>
+        <button id="editorSplitBtn" class="hidden"></button>
+        <button id="editorToggleCamBtn" class="hidden"></button>
+        <button id="editorCamFullBtn" class="hidden"></button>
+        <button id="editorApplyFutureBtn" class="hidden"></button>
+        <!-- Scrub-style Zoom control -->
+        <div class="flex items-center gap-1 px-2 py-1 border border-neutral-800 rounded-lg bg-neutral-900 select-none">
+          <span id="editorBgZoomScrub" class="text-xs text-neutral-400 cursor-ew-resize" title="Drag left/right to adjust zoom">Zoom</span>
+          <span id="editorBgZoomValue" class="text-xs font-mono tabular-nums text-neutral-300 min-w-[46px] text-right cursor-ew-resize">1.00x</span>
+          <input id="editorBgZoomInput" type="range" min="1" max="3" step="0.01" value="1" class="hidden" />
         </div>
-        <div id="editorPipSizeControl" class="hidden items-center gap-2 px-2 py-1 border border-neutral-800 rounded-lg bg-neutral-900">
-          <label for="editorPipSizeInput" class="text-xs text-neutral-400">PIP</label>
-          <input id="editorPipSizeInput" type="range" min="0.15" max="0.50" step="0.01" value="0.22"
-            class="w-24 accent-white disabled:opacity-50" />
-          <span id="editorPipSizeValue" class="text-xs font-mono tabular-nums text-neutral-300 min-w-[38px] text-right">0.22</span>
+        <!-- Scrub-style PIP size control -->
+        <div id="editorPipSizeControl" class="hidden items-center gap-1 px-2 py-1 border border-neutral-800 rounded-lg bg-neutral-900 select-none">
+          <span id="editorPipSizeScrub" class="text-xs text-neutral-400 cursor-ew-resize" title="Drag left/right to adjust PIP size">PIP</span>
+          <span id="editorPipSizeValue" class="text-xs font-mono tabular-nums text-neutral-300 min-w-[38px] text-right cursor-ew-resize">0.22</span>
+          <input id="editorPipSizeInput" type="range" min="0.15" max="0.50" step="0.01" value="0.22" class="hidden" />
         </div>
+        <!-- Overlay size scrub control -->
+        <div id="editorOverlaySizeControl" class="hidden items-center gap-1 px-2 py-1 border border-indigo-900 rounded-lg bg-neutral-900 select-none">
+          <span id="editorOverlaySizeScrub" class="text-xs text-indigo-400 cursor-ew-resize" title="Drag left/right to adjust overlay size">Size</span>
+          <span id="editorOverlaySizeValue" class="text-xs font-mono tabular-nums text-indigo-300 min-w-[38px] text-right cursor-ew-resize">100%</span>
+          <input id="editorOverlaySizeInput" type="range" min="0.05" max="5.0" step="0.01" value="1" class="hidden" />
+        </div>
+        <!-- Mode toggle -->
         <div class="flex items-center border border-neutral-800 rounded-lg bg-neutral-900 overflow-hidden">
           <button id="editorModeLandscape" class="px-2.5 py-1 text-xs bg-white text-black transition-colors">16:9</button>
           <button id="editorModeReel" class="px-2.5 py-1 text-xs text-neutral-400 hover:text-neutral-200 transition-colors">9:16</button>
         </div>
+        <!-- Crop presets -->
         <div id="editorCropPresets" class="hidden items-center border border-neutral-800 rounded-lg bg-neutral-900 overflow-hidden">
           <button id="editorCropLeft" class="px-2.5 py-1 text-xs text-neutral-400 hover:text-neutral-200 transition-colors" title="Crop left">&#9664;</button>
           <button id="editorCropCenter" class="px-2.5 py-1 text-xs text-neutral-400 hover:text-neutral-200 transition-colors" title="Crop center">&#9679;</button>
           <button id="editorCropRight" class="px-2.5 py-1 text-xs text-neutral-400 hover:text-neutral-200 transition-colors" title="Crop right">&#9654;</button>
         </div>
-        <div class="w-px h-5 bg-neutral-800 mx-1"></div>
-        <button id="editorApplyFutureBtn" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Apply to Future</button>
       </div>
       <div class="text-[11px] text-neutral-600 text-center">
-        <span class="text-neutral-500">⌘Z</span> undo · <span class="text-neutral-500">⇧⌘Z</span> redo · <span class="text-neutral-500">Space</span> play · <span class="text-neutral-500">L</span> speed · <span class="text-neutral-500">S</span> split · <span class="text-neutral-500">C</span> camera · <span class="text-neutral-500">F</span> fullscreen · <span class="text-neutral-500">← →</span> seek · <span class="text-neutral-500">⌫</span> delete section · drag camera to reposition
+        <span class="text-neutral-500">⌘Z</span> undo · <span class="text-neutral-500">⇧⌘Z</span> redo · <span class="text-neutral-500">Space</span> play/pause · <span class="text-neutral-500">L</span> speed · <span class="text-neutral-500">S</span> split · <span class="text-neutral-500">C</span> camera · <span class="text-neutral-500">F</span> fullscreen · <span class="text-neutral-500">← →</span> frame · <span class="text-neutral-500">⌘← ⌘→</span> 5 frames · <span class="text-neutral-500">↑ ↓</span> boundaries · <span class="text-neutral-500">⌫</span> delete
       </div>
     </div>
   </div>

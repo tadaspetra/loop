@@ -388,6 +388,121 @@ function buildFilterComplex(
   return `${screenFilter};${camFilter};[screen][cam]overlay=x='${xExpr}':y='${yExpr}':format=auto:eval=frame[out]`;
 }
 
+/**
+ * Build overlay filter fragments for all overlay segments.
+ * Returns { inputs: string[], filterParts: string[] } where:
+ *   - inputs: ffmpeg input args for each overlay (e.g., ['-loop', '1', '-t', '5', '-i', 'img.png'])
+ *   - filterParts: filter_complex fragments to chain overlays onto the base label
+ *
+ * @param {Array} overlays - normalized overlay segments
+ * @param {number} canvasW - editor canvas width (1920 or 608)
+ * @param {number} canvasH - editor canvas height (1080)
+ * @param {number} outW - render output width
+ * @param {number} outH - render output height
+ * @param {number} inputOffset - ffmpeg input index offset (overlays start after screen+camera inputs)
+ * @param {string} baseLabel - input label to overlay onto (e.g., 'screen' or 'out')
+ * @param {string} outputMode - 'landscape' or 'reel'
+ * @returns {{ inputs: string[][], filterParts: string[], outputLabel: string }}
+ */
+function buildOverlayFilter(overlays, canvasW, canvasH, outW, outH, inputOffset, baseLabel, outputMode = 'landscape') {
+  if (!Array.isArray(overlays) || overlays.length === 0) {
+    return { inputs: [], filterParts: [], outputLabel: baseLabel };
+  }
+
+  const scaleX = outW / canvasW;
+  const scaleY = outH / canvasH;
+  const mode = outputMode === 'reel' ? 'reel' : 'landscape';
+  const FADE = TRANSITION_DURATION;
+  const inputs = [];
+  const filterParts = [];
+  let currentLabel = baseLabel;
+
+  for (let i = 0; i < overlays.length; i++) {
+    const o = overlays[i];
+    const idx = inputOffset + i;
+    const pos = o[mode] || { x: 0, y: 0, width: 400, height: 300 };
+    const renderW = Math.max(2, Math.round(pos.width * scaleX));
+    const renderH = Math.max(2, Math.round(pos.height * scaleY));
+    const renderX = Math.round(pos.x * scaleX);
+    const renderY = Math.round(pos.y * scaleY);
+    const duration = o.endTime - o.startTime;
+
+    // Build input args
+    if (o.mediaType === 'image') {
+      inputs.push(['-loop', '1', '-t', duration.toFixed(3), '-i']);
+    } else {
+      inputs.push(['-i']);
+    }
+
+    // Build filter chain for this overlay
+    const overlayInputLabel = `[${idx}:v]`;
+    const prepLabel = `ovl_prep_${i}`;
+    const overlayLabel = `ovl_${i}`;
+
+    const prepParts = [];
+    if (o.mediaType === 'video') {
+      prepParts.push(`trim=start=${o.sourceStart.toFixed(3)}:end=${o.sourceEnd.toFixed(3)}`);
+      prepParts.push('setpts=PTS-STARTPTS');
+    }
+    prepParts.push(`scale=${renderW}:${renderH}`);
+    prepParts.push('format=yuva420p');
+
+    // Shift PTS to rendered timeline position so fade times align with enable window
+    prepParts.push(`setpts=PTS+${o.startTime.toFixed(3)}/TB`);
+
+    // Fade in/out (times in rendered timeline)
+    const fadeInTime = o.startTime;
+    const fadeOutTime = o.endTime - FADE;
+    const fadeIn = `fade=in:st=${fadeInTime.toFixed(3)}:d=${FADE.toFixed(3)}:alpha=1`;
+    const fadeOut = `fade=out:st=${fadeOutTime.toFixed(3)}:d=${FADE.toFixed(3)}:alpha=1`;
+
+    // Check if this segment has same-media neighbor — suppress fade at boundary
+    const next = i < overlays.length - 1 ? overlays[i + 1] : null;
+    const prev = i > 0 ? overlays[i - 1] : null;
+    const hasNextSameMedia = next && next.mediaPath === o.mediaPath && Math.abs(next.startTime - o.endTime) < 0.01;
+    const hasPrevSameMedia = prev && prev.mediaPath === o.mediaPath && Math.abs(o.startTime - prev.endTime) < 0.01;
+
+    if (!hasNextSameMedia && !hasPrevSameMedia) {
+      prepParts.push(fadeIn);
+      prepParts.push(fadeOut);
+    } else if (!hasPrevSameMedia) {
+      prepParts.push(fadeIn);
+    } else if (!hasNextSameMedia) {
+      prepParts.push(fadeOut);
+    }
+
+    filterParts.push(`${overlayInputLabel}${prepParts.join(',')}[${prepLabel}]`);
+
+    // Position — static or animated for same-media transitions
+    let xExpr = String(renderX);
+    let yExpr = String(renderY);
+    let useEvalFrame = false;
+
+    if (hasNextSameMedia) {
+      const nextPos = next[mode] || { x: 0, y: 0, width: 400, height: 300 };
+      const nextRenderX = Math.round(nextPos.x * scaleX);
+      const nextRenderY = Math.round(nextPos.y * scaleY);
+      if (nextRenderX !== renderX || nextRenderY !== renderY) {
+        const tStart = (duration - FADE).toFixed(3);
+        const tEnd = duration.toFixed(3);
+        xExpr = `if(gte(t,${tEnd}),${nextRenderX},if(gte(t,${tStart}),${renderX}+(${nextRenderX}-${renderX})*(t-${tStart})/${FADE.toFixed(3)},${renderX}))`;
+        yExpr = `if(gte(t,${tEnd}),${nextRenderY},if(gte(t,${tStart}),${renderY}+(${nextRenderY}-${renderY})*(t-${tStart})/${FADE.toFixed(3)},${renderY}))`;
+        useEvalFrame = true;
+      }
+    }
+
+    const nextLabel = i < overlays.length - 1 ? `ovl_out_${i}` : overlayLabel;
+    const enableExpr = `enable='between(t,${o.startTime.toFixed(3)},${o.endTime.toFixed(3)})'`;
+    const evalMode = useEvalFrame ? ':eval=frame' : '';
+    filterParts.push(`[${currentLabel}][${prepLabel}]overlay=x='${xExpr}':y='${yExpr}':${enableExpr}:format=auto${evalMode}[${nextLabel}]`);
+    currentLabel = nextLabel;
+  }
+
+  // Rename last label to a consistent output
+  const finalLabel = `ovl_${overlays.length - 1}`;
+  return { inputs, filterParts, outputLabel: finalLabel };
+}
+
 module.exports = {
   TRANSITION_DURATION,
   resolveOutputSize,
@@ -397,5 +512,6 @@ module.exports = {
   buildPosExpr,
   buildAlphaExpr,
   buildCamFullAlphaExpr,
-  buildFilterComplex
+  buildFilterComplex,
+  buildOverlayFilter
 };

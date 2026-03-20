@@ -16,7 +16,7 @@ A take SHALL be considered "referenced" if any section in `timeline.sections` OR
 - **THEN** the take is unreferenced and eligible for cleanup
 
 ### Requirement: Stage unreferenced take files to .deleted/
-When a take becomes unreferenced (last section deleted or unsaved), the system SHALL move its files (screenPath, cameraPath) to a `.deleted/` subfolder inside the project directory via IPC. The take SHALL be removed from `project.takes`.
+When a take becomes unreferenced (last section deleted or unsaved), the system SHALL move its files (screenPath, cameraPath) to a `.deleted/` subfolder inside the project directory via IPC. The take SHALL be removed from `project.takes`. An overlay media file is unreferenced when no overlay segment's `mediaPath` points to it. The `stageTakeIfUnreferenced` pattern SHALL be extended to also support overlay media files via a parallel `stageOverlayFileIfUnreferenced(mediaPath)` function.
 
 #### Scenario: Delete last section referencing a take
 - **WHEN** user deletes the last section (unsaved) that references take A
@@ -30,12 +30,24 @@ When a take becomes unreferenced (last section deleted or unsaved), the system S
 - **WHEN** an unreferenced take has only screenPath (cameraPath is null)
 - **THEN** only the screen file is moved to `.deleted/`
 
+#### Scenario: Stage unreferenced overlay media file
+- **WHEN** the last overlay segment referencing `overlay-media/img.png` is deleted
+- **THEN** `overlay-media/img.png` is moved to `.deleted/overlay-media/img.png`
+
+#### Scenario: Overlay media still referenced
+- **WHEN** an overlay segment is deleted but another segment still references the same `mediaPath`
+- **THEN** the media file is NOT staged for deletion
+
 ### Requirement: Unstage take files on undo
-When an undo operation restores a section that was the last reference to a take, the system SHALL move the take's files back from `.deleted/` to the project directory and re-add the take to `project.takes`.
+When an undo operation restores a section that was the last reference to a take, the system SHALL move the take's files back from `.deleted/` to the project directory and re-add the take to `project.takes`. This SHALL apply to both take files and overlay media files.
 
 #### Scenario: Undo restores unreferenced take
 - **WHEN** user undoes a section delete that had triggered file staging
 - **THEN** the take's files are moved back from `.deleted/` to the project directory and the take is restored to `project.takes`
+
+#### Scenario: Unstage overlay media on undo
+- **WHEN** an overlay deletion is undone and the media was staged
+- **THEN** `overlay-media/img.png` is restored from `.deleted/overlay-media/` to `overlay-media/`
 
 ### Requirement: Cleanup .deleted/ on project open
 When a project is opened via `activateProject()`, the system SHALL check for and permanently remove any `.deleted/` folder in the project directory. This handles stale files from a previous session.
@@ -71,4 +83,4 @@ The main process SHALL expose IPC channels for file staging operations: staging 
 
 #### Scenario: Cleanup via IPC
 - **WHEN** renderer sends `project:cleanupDeleted` with project path
-- **THEN** main process removes the `.deleted/` folder and all its contents
+- **THEN** main process removes the `.deleted/` folder and all its contents, including both take files and overlay media files
