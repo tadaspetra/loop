@@ -16,6 +16,8 @@ const MAX_REEL_CROP_X = 1;
 const MIN_PIP_SCALE = 0.15;
 const MAX_PIP_SCALE = 0.50;
 const DEFAULT_PIP_SCALE = 0.22;
+const VALID_PIP_SNAP_POINTS = ['tl', 'tc', 'tr', 'ml', 'center', 'mr', 'bl', 'bc', 'br'];
+const DEFAULT_PIP_SNAP_POINT = 'br';
 
 function createProjectId() {
   return `project-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -130,6 +132,7 @@ function normalizeKeyframes(rawKeyframes = []) {
       backgroundPanY: normalizeBackgroundPan(keyframe.backgroundPanY),
       reelCropX: normalizeReelCropX(keyframe.reelCropX),
       pipScale: normalizePipScale(keyframe.pipScale),
+      pipSnapPoint: normalizePipSnapPoint(keyframe.pipSnapPoint),
       sectionId: typeof keyframe.sectionId === 'string' ? keyframe.sectionId : null,
       autoSection: !!keyframe.autoSection,
       savedLandscape: keyframe.savedLandscape && typeof keyframe.savedLandscape === 'object'
@@ -152,6 +155,10 @@ function normalizeCameraSyncOffsetMs(value) {
   const offset = Math.round(Number(value));
   if (!Number.isFinite(offset)) return 0;
   return Math.max(MIN_CAMERA_SYNC_OFFSET_MS, Math.min(MAX_CAMERA_SYNC_OFFSET_MS, offset));
+}
+
+function normalizePipSnapPoint(value) {
+  return VALID_PIP_SNAP_POINTS.includes(value) ? value : DEFAULT_PIP_SNAP_POINT;
 }
 
 function normalizeReelCropX(value) {
@@ -281,5 +288,8 @@ module.exports = {
   MIN_PIP_SCALE,
   MAX_PIP_SCALE,
   DEFAULT_PIP_SCALE,
-  MIN_REEL_BACKGROUND_ZOOM
+  MIN_REEL_BACKGROUND_ZOOM,
+  VALID_PIP_SNAP_POINTS,
+  DEFAULT_PIP_SNAP_POINT,
+  normalizePipSnapPoint
 };

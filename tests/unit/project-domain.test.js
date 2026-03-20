@@ -13,7 +13,8 @@ const {
   normalizeOutputMode,
   normalizePipScale,
   createDefaultProject,
-  normalizeProjectData
+  normalizeProjectData,
+  normalizePipSnapPoint
 } = require('../../src/shared/domain/project');
 
 describe('shared/domain/project', () => {
@@ -243,6 +244,35 @@ describe('shared/domain/project', () => {
     expect(keyframes[0].backgroundZoom).toBe(0.7); // preserved (within reel range)
     expect(keyframes[1].backgroundZoom).toBe(0.5); // preserved (reel minimum)
     expect(keyframes[2].backgroundZoom).toBe(0.5); // clamped to reel minimum
+  });
+
+  test('normalizePipSnapPoint preserves valid values and defaults invalid', () => {
+    expect(normalizePipSnapPoint('tl')).toBe('tl');
+    expect(normalizePipSnapPoint('tc')).toBe('tc');
+    expect(normalizePipSnapPoint('tr')).toBe('tr');
+    expect(normalizePipSnapPoint('ml')).toBe('ml');
+    expect(normalizePipSnapPoint('center')).toBe('center');
+    expect(normalizePipSnapPoint('mr')).toBe('mr');
+    expect(normalizePipSnapPoint('bl')).toBe('bl');
+    expect(normalizePipSnapPoint('bc')).toBe('bc');
+    expect(normalizePipSnapPoint('br')).toBe('br');
+    expect(normalizePipSnapPoint(undefined)).toBe('br');
+    expect(normalizePipSnapPoint(null)).toBe('br');
+    expect(normalizePipSnapPoint('invalid')).toBe('br');
+    expect(normalizePipSnapPoint(42)).toBe('br');
+  });
+
+  test('normalizeKeyframes includes pipSnapPoint property', () => {
+    const keyframes = normalizeKeyframes([
+      { time: 0, pipX: 10, pipY: 20, pipSnapPoint: 'center' },
+      { time: 1, pipX: 30, pipY: 40, pipSnapPoint: 'tl' },
+      { time: 2, pipX: 50, pipY: 60 },
+      { time: 3, pipX: 70, pipY: 80, pipSnapPoint: 'invalid' }
+    ]);
+    expect(keyframes[0].pipSnapPoint).toBe('center');
+    expect(keyframes[1].pipSnapPoint).toBe('tl');
+    expect(keyframes[2].pipSnapPoint).toBe('br'); // default
+    expect(keyframes[3].pipSnapPoint).toBe('br'); // invalid → default
   });
 
   test('createDefaultProject includes outputMode and pipScale in settings', () => {

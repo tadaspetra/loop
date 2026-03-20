@@ -179,7 +179,7 @@ import {
     const MAX_PIP_SCALE = 0.50;
     const MODE_SPECIFIC_PROPS = [
       'backgroundZoom', 'backgroundPanX', 'backgroundPanY',
-      'pipX', 'pipY', 'pipScale', 'pipVisible', 'cameraFullscreen', 'reelCropX'
+      'pipX', 'pipY', 'pipScale', 'pipVisible', 'cameraFullscreen', 'reelCropX', 'pipSnapPoint'
     ];
 
     function normalizePipScale(value) {
@@ -189,16 +189,42 @@ import {
       return Math.max(MIN_PIP_SCALE, Math.min(MAX_PIP_SCALE, v));
     }
 
-    function snapToNearestCorner(cursorX, cursorY, effectiveW, effectiveH, pipSize) {
+    function getSnapPointPosition(snapPoint, w, h, ps) {
+      const midX = Math.round((w - ps) / 2);
+      const midY = Math.round((h - ps) / 2);
+      switch (snapPoint) {
+        case 'tl': return { x: PIP_MARGIN, y: PIP_MARGIN };
+        case 'tc': return { x: midX, y: PIP_MARGIN };
+        case 'tr': return { x: w - ps - PIP_MARGIN, y: PIP_MARGIN };
+        case 'ml': return { x: PIP_MARGIN, y: midY };
+        case 'center': return { x: midX, y: midY };
+        case 'mr': return { x: w - ps - PIP_MARGIN, y: midY };
+        case 'bl': return { x: PIP_MARGIN, y: h - ps - PIP_MARGIN };
+        case 'bc': return { x: midX, y: h - ps - PIP_MARGIN };
+        case 'br':
+        default: return { x: w - ps - PIP_MARGIN, y: h - ps - PIP_MARGIN };
+      }
+    }
+
+    function snapToNearest(cursorX, cursorY, effectiveW, effectiveH, pipSize) {
       const w = effectiveW || CANVAS_W;
       const h = effectiveH || CANVAS_H;
       const ps = pipSize || PIP_SIZE;
-      const midX = w / 2;
-      const midY = h / 2;
-      return {
-        x: cursorX < midX ? PIP_MARGIN : w - ps - PIP_MARGIN,
-        y: cursorY < midY ? PIP_MARGIN : h - ps - PIP_MARGIN
-      };
+      const points = ['tl', 'tc', 'tr', 'ml', 'center', 'mr', 'bl', 'bc', 'br'];
+      let bestDist = Infinity;
+      let bestSnap = 'br';
+      for (const sp of points) {
+        const pos = getSnapPointPosition(sp, w, h, ps);
+        const dx = cursorX - pos.x;
+        const dy = cursorY - pos.y;
+        const dist = dx * dx + dy * dy;
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestSnap = sp;
+        }
+      }
+      const pos = getSnapPointPosition(bestSnap, w, h, ps);
+      return { x: pos.x, y: pos.y, snapPoint: bestSnap };
     }
 
     function clampSectionZoom(value) {
@@ -269,7 +295,8 @@ import {
         pipScale: ps,
         pipVisible: true,
         cameraFullscreen: false,
-        reelCropX: 0
+        reelCropX: 0,
+        pipSnapPoint: 'br'
       };
     }
 
@@ -1163,6 +1190,7 @@ import {
         backgroundPanY: clampSectionPan(fallback.backgroundPanY),
         reelCropX: clampReelCropX(fallback.reelCropX),
         pipScale: normalizePipScale(fallback.pipScale),
+        pipSnapPoint: fallback.pipSnapPoint || 'br',
         sectionId: section.id,
         autoSection: true,
         savedLandscape: null,
@@ -1197,6 +1225,7 @@ import {
           backgroundPanY: existing ? clampSectionPan(existing.backgroundPanY) : 0,
           reelCropX: existing ? clampReelCropX(existing.reelCropX) : 0,
           pipScale: existing ? normalizePipScale(existing.pipScale) : (editorState.pipScale || DEFAULT_PIP_SCALE),
+          pipSnapPoint: existing?.pipSnapPoint || 'br',
           sectionId: section.id,
           autoSection: true,
           savedLandscape: existing?.savedLandscape ? { ...existing.savedLandscape } : null,
@@ -1249,6 +1278,7 @@ import {
         anchor.backgroundPanY = clampSectionPan(currentAnchor.backgroundPanY);
         anchor.reelCropX = clampReelCropX(currentAnchor.reelCropX);
         anchor.pipScale = normalizePipScale(currentAnchor.pipScale);
+        anchor.pipSnapPoint = currentAnchor.pipSnapPoint || 'br';
         anchor.savedLandscape = currentAnchor.savedLandscape ? { ...currentAnchor.savedLandscape } : null;
         anchor.savedReel = currentAnchor.savedReel ? { ...currentAnchor.savedReel } : null;
       }
@@ -2820,6 +2850,7 @@ import {
         backgroundPanX: 0,
         backgroundPanY: 0,
         reelCropX: 0,
+        pipSnapPoint: 'br',
         sectionId: section.id,
         autoSection: true
       }));
@@ -2944,7 +2975,8 @@ import {
         backgroundPanX: 0,
         backgroundPanY: 0,
         reelCropX: 0,
-        pipScale: editorState.pipScale || DEFAULT_PIP_SCALE
+        pipScale: editorState.pipScale || DEFAULT_PIP_SCALE,
+        pipSnapPoint: 'br'
       };
       const userKfs = editorState.keyframes;
       const kfs = userKfs.length > 0 && userKfs[0].time === 0 ? userKfs : [defaultKf, ...userKfs];
@@ -3047,7 +3079,8 @@ import {
         backgroundFocusX,
         backgroundFocusY,
         reelCropX,
-        pipScale
+        pipScale,
+        pipSnapPoint: active.pipSnapPoint || 'br'
       };
     }
 
@@ -3580,7 +3613,7 @@ import {
       const snapContentW = isReel ? getContentWidth(editorState.sourceWidth, editorState.sourceHeight, editorState.screenFitMode) : CANVAS_W;
       const snapX = isReel ? x - reelCropXToPixelOffset(currentState.reelCropX, currentState.backgroundZoom, snapContentW) : x;
       const dragPipSize = computePipSize(currentState.pipScale, w);
-      const snapped = snapToNearestCorner(snapX, y, w, h, dragPipSize);
+      const snapped = snapToNearest(snapX, y, w, h, dragPipSize);
 
       const selectedSection = getSelectedSection();
       const section = selectedSection || findSectionForTime(editorState.currentTime);
@@ -3589,6 +3622,7 @@ import {
         if (anchor) {
           anchor.pipX = snapped.x;
           anchor.pipY = snapped.y;
+          anchor.pipSnapPoint = snapped.snapPoint;
         }
       }
     });
@@ -3772,12 +3806,12 @@ import {
           const anchor = getSectionAnchorKeyframe(section.id, true);
           if (anchor) {
             anchor.pipScale = newScale;
-            // Re-snap this section's PIP to nearest corner with new size
+            // Recalculate position for the same snap point at the new size
             const { w, h } = getEffectiveCanvasDimensions();
             const newPipSize = computePipSize(newScale, w);
-            const snapped = snapToNearestCorner(anchor.pipX, anchor.pipY, w, h, newPipSize);
-            anchor.pipX = snapped.x;
-            anchor.pipY = snapped.y;
+            const pos = getSnapPointPosition(anchor.pipSnapPoint || 'br', w, h, newPipSize);
+            anchor.pipX = pos.x;
+            anchor.pipY = pos.y;
           }
         }
 
