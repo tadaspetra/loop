@@ -14,7 +14,7 @@ let win = null;
 
 const projectService = createProjectService({ app });
 
-registerIpcHandlers({
+const { cleanupMouseTrailTimer } = registerIpcHandlers({
   ipcMain,
   app,
   dialog,
@@ -26,6 +26,10 @@ registerIpcHandlers({
   renderComposite,
   computeSections,
   getScribeToken
+});
+
+app.on('before-quit', () => {
+  cleanupMouseTrailTimer();
 });
 
 function createMainWindow() {

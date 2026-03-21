@@ -27,6 +27,7 @@ import {
 import {
   lookupSmoothedMouseAt
 } from './features/timeline/mouse-trail.js';
+import { cleanupAllMedia } from './features/media-cleanup.js';
 
     const projectHomeView = document.getElementById('projectHomeView');
     const workspaceHeader = document.getElementById('workspaceHeader');
@@ -146,6 +147,8 @@ import {
     let mediaInitialized = false;
     let scribeWs = null;
     let scribeWorkletNode = null;
+    let mediaIdleTimer = null;
+    const MEDIA_IDLE_TIMEOUT_MS = 30000;
     let speechSegments = [];
     let audioChunkBuffer = [];
     let audioSendInterval = null;
@@ -725,10 +728,42 @@ import {
       processingView.classList.toggle('hidden', !showProcessing);
 
       if (showRecording) {
+        if (mediaIdleTimer) {
+          clearTimeout(mediaIdleTimer);
+          mediaIdleTimer = null;
+        }
+        if (!mediaInitialized) {
+          ensureMediaInitialized();
+        }
         updatePreview();
       } else if (drawRAF) {
         cancelAnimationFrame(drawRAF);
         drawRAF = null;
+      }
+
+      // Start idle timer when leaving recording view (and streams are active)
+      if (!showRecording && mediaInitialized && !recording && !mediaIdleTimer) {
+        mediaIdleTimer = setTimeout(() => {
+          mediaIdleTimer = null;
+          cleanupAllMedia({
+            recording, screenStream, cameraStream, audioStream,
+            recorders, screenRecInterval, audioSendInterval, timerInterval,
+            audioContext, scribeWorkletNode, scribeWs,
+            drawRAF, meterRAF, cancelEditorDrawLoop, stopAudioMeter
+          });
+          screenStream = null;
+          cameraStream = null;
+          audioStream = null;
+          recorders = [];
+          screenRecInterval = null;
+          audioSendInterval = null;
+          audioContext = null;
+          scribeWorkletNode = null;
+          scribeWs = null;
+          drawRAF = null;
+          meterRAF = null;
+          mediaInitialized = false;
+        }, MEDIA_IDLE_TIMEOUT_MS);
       }
 
       if (showTimeline && editorState && !hasPendingEditorDraw()) {
@@ -5458,6 +5493,41 @@ import {
     refreshRecentProjects();
 
     window.addEventListener('beforeunload', () => {
+      if (mediaIdleTimer) {
+        clearTimeout(mediaIdleTimer);
+        mediaIdleTimer = null;
+      }
+      cleanupAllMedia({
+        recording,
+        screenStream,
+        cameraStream,
+        audioStream,
+        recorders,
+        screenRecInterval,
+        audioSendInterval,
+        timerInterval,
+        audioContext,
+        scribeWorkletNode,
+        scribeWs,
+        drawRAF,
+        meterRAF,
+        cancelEditorDrawLoop,
+        stopAudioMeter
+      });
+      // Sync cleaned refs back to module scope
+      recording = false;
+      screenStream = null;
+      cameraStream = null;
+      audioStream = null;
+      recorders = [];
+      screenRecInterval = null;
+      audioSendInterval = null;
+      audioContext = null;
+      scribeWorkletNode = null;
+      scribeWs = null;
+      drawRAF = null;
+      meterRAF = null;
+
       flushScheduledProjectSave().catch((error) => {
         console.warn('Failed to flush project save on exit:', error);
       });

@@ -200,6 +200,16 @@ function registerIpcHandlers({
   ipcMain.handle('save-mouse-trail', async (_event, projectPath, suffix, trailData) => {
     return projectService.saveMouseTrail(projectPath, suffix, trailData);
   });
+
+  function cleanupMouseTrailTimer() {
+    if (mouseTrailTimer) {
+      clearInterval(mouseTrailTimer);
+      mouseTrailTimer = null;
+    }
+    mouseTrailSamples = [];
+  }
+
+  return { cleanupMouseTrailTimer };
 }
 
 module.exports = {
