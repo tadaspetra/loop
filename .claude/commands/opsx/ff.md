@@ -92,3 +92,6 @@ After completing all artifacts, summarize:
 - If context is critically unclear, ask the user - but prefer making reasonable decisions to keep momentum
 - If a change with that name already exists, ask if user wants to continue it or create a new one
 - Verify each artifact file exists after writing before proceeding to next
+- DONT BE LAZY, we perfer hard work over speed, and deep thinking quality over fast results.
+- Think this thorugh, every part of it, how dose that connect to the existing, if we have, what it modifying and adding to the project.
+- Be comprehesive, we need the spec to holde necessary info and context about the plan and existing project.
