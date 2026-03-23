@@ -54,8 +54,10 @@ describe('main/services/project-service integration', () => {
     const created = service.createProject({ name: 'Roundtrip', parentFolder: sandbox.root });
     const screenPath = path.join(created.projectPath, 'screen.webm');
     const cameraPath = path.join(created.projectPath, 'camera.webm');
+    const micPath = path.join(created.projectPath, 'mic.webm');
     fs.writeFileSync(screenPath, 'screen', 'utf8');
     fs.writeFileSync(cameraPath, 'camera', 'utf8');
+    fs.writeFileSync(micPath, 'mic', 'utf8');
 
     const saved = service.saveProject({
       projectPath: created.projectPath,
@@ -72,6 +74,9 @@ describe('main/services/project-service integration', () => {
             duration: 2.5,
             screenPath,
             cameraPath,
+            micPath,
+            screenHasAudio: false,
+            screenHasAudibleAudio: true,
             sections: [{ start: 0, end: 2.5, sourceStart: 0, sourceEnd: 2.5 }]
           }
         ],
@@ -107,6 +112,9 @@ describe('main/services/project-service integration', () => {
     );
     expect(raw.takes[0].screenPath).toBe('screen.webm');
     expect(raw.takes[0].cameraPath).toBe('camera.webm');
+    expect(raw.takes[0].micPath).toBe('mic.webm');
+    expect(raw.takes[0].screenHasAudio).toBe(false);
+    expect(raw.takes[0].screenHasAudibleAudio).toBe(true);
     expect(raw.timeline.keyframes[0].backgroundZoom).toBe(2.2);
     expect(raw.timeline.keyframes[0].backgroundPanX).toBe(0.3);
     expect(raw.timeline.keyframes[0].backgroundPanY).toBe(-0.4);
@@ -115,6 +123,10 @@ describe('main/services/project-service integration', () => {
 
     const opened = service.openProject(created.projectPath);
     expect(opened.project.takes[0].screenPath).toBe(screenPath);
+    expect(opened.project.takes[0].cameraPath).toBe(cameraPath);
+    expect(opened.project.takes[0].micPath).toBe(micPath);
+    expect(opened.project.takes[0].screenHasAudio).toBe(false);
+    expect(opened.project.takes[0].screenHasAudibleAudio).toBe(true);
     expect(opened.project.timeline.sections).toHaveLength(1);
     expect(opened.project.timeline.keyframes[0].backgroundZoom).toBe(2.2);
     expect(opened.project.timeline.keyframes[0].backgroundPanX).toBe(0.3);
@@ -126,13 +138,18 @@ describe('main/services/project-service integration', () => {
   test('recovery take lifecycle persists and clears payload', () => {
     const created = service.createProject({ name: 'Recovery', parentFolder: sandbox.root });
     const screenPath = path.join(created.projectPath, 'screen.webm');
+    const micPath = path.join(created.projectPath, 'mic.webm');
     fs.writeFileSync(screenPath, 'screen', 'utf8');
+    fs.writeFileSync(micPath, 'mic', 'utf8');
 
     const recovery = service.setRecoveryTake({
       projectPath: created.projectPath,
       take: {
         id: 'take-r',
         screenPath,
+        micPath,
+        screenHasAudio: false,
+        screenHasAudibleAudio: true,
         recordedDuration: 4.2,
         sections: [{ start: 0, end: 4.2, sourceStart: 0, sourceEnd: 4.2 }],
         trimSegments: [{ start: 0, end: 1, text: 'hello' }]
@@ -144,6 +161,9 @@ describe('main/services/project-service integration', () => {
     const opened = service.openProject(created.projectPath);
     expect(opened.recoveryTake).toBeTruthy();
     expect(opened.recoveryTake.id).toBe('take-r');
+    expect(opened.recoveryTake.micPath).toBe(micPath);
+    expect(opened.recoveryTake.screenHasAudio).toBe(false);
+    expect(opened.recoveryTake.screenHasAudibleAudio).toBe(true);
 
     expect(service.clearRecoveryByProject(created.projectPath)).toBe(true);
     const reopened = service.openProject(created.projectPath);

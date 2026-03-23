@@ -186,6 +186,11 @@ function normalizeProjectData(rawProject, projectFolder) {
       cameraPath: projectFolder
         ? toProjectAbsolutePath(projectFolder, take?.cameraPath)
         : take?.cameraPath || null,
+      micPath: projectFolder
+        ? toProjectAbsolutePath(projectFolder, take?.micPath)
+        : take?.micPath || null,
+      screenHasAudio: take?.screenHasAudio !== false,
+      screenHasAudibleAudio: !!take?.screenHasAudibleAudio,
       sections: normalizeSections(take?.sections)
     })),
     timeline: {

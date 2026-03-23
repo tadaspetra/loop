@@ -93,6 +93,31 @@ describe('shared/domain/project', () => {
     expect(project.settings.exportAudioPreset).toBe('compressed');
   });
 
+  test('normalizeProjectData preserves mic path metadata for takes', () => {
+    const project = normalizeProjectData(
+      {
+        takes: [
+          {
+            id: 'take-1',
+            screenPath: 'screen.webm',
+            cameraPath: 'camera.webm',
+            micPath: 'mic.webm',
+            screenHasAudio: false,
+            screenHasAudibleAudio: true,
+            sections: [{ start: 0, end: 1, sourceStart: 0, sourceEnd: 1 }]
+          }
+        ]
+      },
+      '/tmp/my-project'
+    );
+
+    expect(project.takes[0].screenPath).toBe(path.join('/tmp/my-project', 'screen.webm'));
+    expect(project.takes[0].cameraPath).toBe(path.join('/tmp/my-project', 'camera.webm'));
+    expect(project.takes[0].micPath).toBe(path.join('/tmp/my-project', 'mic.webm'));
+    expect(project.takes[0].screenHasAudio).toBe(false);
+    expect(project.takes[0].screenHasAudibleAudio).toBe(true);
+  });
+
   test('normalizeProjectData preserves valid export audio preset and falls back invalid values', () => {
     const compressedProject = normalizeProjectData(
       {

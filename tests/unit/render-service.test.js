@@ -148,7 +148,7 @@ describe('main/services/render-service', () => {
     );
 
     const argString = execCalls[0].args.join(' ');
-    expect(argString).toContain('[screen_raw][audio_out]');
+    expect(argString).toContain('[screen_audio_out]anull[audio_out]');
     expect(argString).toContain('-map [audio_out]');
     expect(argString).not.toContain('acompressor=');
     expect(argString).not.toContain('[audio_final]');
@@ -187,6 +187,87 @@ describe('main/services/render-service', () => {
     expect(argString).toContain('[audio_out]acompressor=');
     expect(argString).toContain('[audio_final]');
     expect(argString).toContain('-map [audio_final]');
+  });
+
+  test('renderComposite mixes microphone audio with screen audio when micPath is present', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-mic-mix-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    const micPath = path.join(tmpDir, 'mic.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+    fs.writeFileSync(micPath, 'mic', 'utf8');
+
+    const execCalls = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        takes: [{ id: 'take-1', screenPath, cameraPath: null, micPath }],
+        sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.25 }],
+        keyframes: [{ time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }],
+        pipSize: 300,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill',
+        exportAudioPreset: 'off'
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 741,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        runFfmpeg: async ({ ffmpegPath, args }) => {
+          execCalls.push({ bin: ffmpegPath, args });
+        }
+      }
+    );
+
+    const args = execCalls[0].args;
+    const argString = args.join(' ');
+    expect(args.filter((value) => value === '-i')).toHaveLength(2);
+    expect(args).toEqual(expect.arrayContaining([screenPath, micPath]));
+    expect(argString).toContain('[0:a]atrim=start=0.000:end=1.250,asetpts=PTS-STARTPTS[sa0]');
+    expect(argString).toContain('[1:a]atrim=start=0.000:end=1.250,asetpts=PTS-STARTPTS[ma0]');
+    expect(argString).toContain('[sa0]concat=n=1:v=0:a=1[screen_audio_out]');
+    expect(argString).toContain('[ma0]concat=n=1:v=0:a=1[mic_audio_out]');
+    expect(argString).toContain('[screen_audio_out][mic_audio_out]amix=inputs=2:weights=1 1:normalize=0[audio_out]');
+  });
+
+  test('renderComposite falls back to mic audio when screen recording has no system audio', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-mic-only-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    const micPath = path.join(tmpDir, 'mic.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+    fs.writeFileSync(micPath, 'mic', 'utf8');
+
+    const execCalls = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        takes: [{ id: 'take-1', screenPath, cameraPath: null, micPath, screenHasAudio: false }],
+        sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.25 }],
+        keyframes: [{ time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }],
+        pipSize: 300,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill',
+        exportAudioPreset: 'off'
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 852,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        runFfmpeg: async ({ ffmpegPath, args }) => {
+          execCalls.push({ bin: ffmpegPath, args });
+        }
+      }
+    );
+
+    const args = execCalls[0].args;
+    const argString = args.join(' ');
+    expect(args.filter((value) => value === '-i')).toHaveLength(2);
+    expect(argString).toContain('anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration=1.250,asetpts=PTS-STARTPTS[sa0]');
+    expect(argString).toContain('[1:a]atrim=start=0.000:end=1.250,asetpts=PTS-STARTPTS[ma0]');
+    expect(argString).toContain('[screen_audio_out][mic_audio_out]amix=inputs=2:weights=1 1:normalize=0[audio_out]');
   });
 
   test('renderComposite applies section zoom to background only', async () => {

@@ -69,7 +69,11 @@ function buildCameraTrimFilter(cameraIdx, section, targetFps, index, cameraSyncO
   return `[${cameraIdx}:v]trim=start=${sampleStart.toFixed(3)}:end=${sampleEnd.toFixed(3)},setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=${startPad.toFixed(3)}:stop_mode=clone:stop_duration=${stopPad.toFixed(3)},trim=duration=${duration.toFixed(3)},setpts=PTS-STARTPTS,fps=fps=${targetFps}${label}`;
 }
 
-function buildInputPlan(sections, takeMap, hasCamera) {
+function buildSilentAudioFilter(durationSec, outputLabel) {
+  return `anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration=${durationSec.toFixed(3)},asetpts=PTS-STARTPTS${outputLabel}`;
+}
+
+function buildInputPlan(sections, takeMap, hasCamera, hasMic) {
   const fpsProbePaths = new Set();
   const sectionInputs = [];
   const args = ['-progress', 'pipe:1', '-nostats'];
@@ -95,7 +99,19 @@ function buildInputPlan(sections, takeMap, hasCamera) {
         cameraIdx = inputIndex++;
       }
 
-      inputPlan = { screenIdx, cameraIdx };
+      let micIdx = -1;
+      if (hasMic && take.micPath) {
+        assertFilePath(take.micPath, 'Microphone');
+        args.push('-i', take.micPath);
+        micIdx = inputIndex++;
+      }
+
+      inputPlan = {
+        screenIdx,
+        cameraIdx,
+        micIdx,
+        screenHasAudio: take.screenHasAudio !== false
+      };
       takeInputs.set(section.takeId, inputPlan);
     }
 
@@ -198,11 +214,17 @@ async function renderComposite(opts = {}, deps = {}) {
   const takeMap = new Map();
   for (const take of takes) {
     if (!take || typeof take.id !== 'string' || !take.id) continue;
-    takeMap.set(take.id, { screenPath: take.screenPath, cameraPath: take.cameraPath });
+    takeMap.set(take.id, {
+      screenPath: take.screenPath,
+      cameraPath: take.cameraPath,
+      micPath: take.micPath || null,
+      screenHasAudio: take.screenHasAudio !== false
+    });
   }
 
   const hasCamera = keyframes.some((keyframe) => keyframe.pipVisible || keyframe.cameraFullscreen);
-  const { args, fpsProbePaths, sectionInputs } = buildInputPlan(sections, takeMap, hasCamera);
+  const hasMic = sections.some((section) => Boolean(takeMap.get(section.takeId)?.micPath));
+  const { args, fpsProbePaths, sectionInputs } = buildInputPlan(sections, takeMap, hasCamera, hasMic);
   const totalDurationSec = getTotalDurationSec(sections);
 
   const fpsProbeResults = await Promise.all(
@@ -230,17 +252,38 @@ async function renderComposite(opts = {}, deps = {}) {
   const filterParts = [];
   for (let i = 0; i < sections.length; i += 1) {
     const section = sections[i];
-    const { screenIdx } = sectionInputs[i];
+    const { screenIdx, micIdx, screenHasAudio } = sectionInputs[i];
     const start = section.sourceStart.toFixed(3);
     const end = section.sourceEnd.toFixed(3);
+    const duration = section.sourceEnd - section.sourceStart;
     filterParts.push(
       `[${screenIdx}:v]trim=start=${start}:end=${end},setpts=PTS-STARTPTS,fps=fps=${targetFps},setsar=1[sv${i}]`
     );
-    filterParts.push(`[${screenIdx}:a]atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS[sa${i}]`);
+    if (screenHasAudio) {
+      filterParts.push(`[${screenIdx}:a]atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS[sa${i}]`);
+    } else {
+      filterParts.push(buildSilentAudioFilter(duration, `[sa${i}]`));
+    }
+    if (hasMic) {
+      if (micIdx >= 0) {
+        filterParts.push(`[${micIdx}:a]atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS[ma${i}]`);
+      } else {
+        filterParts.push(buildSilentAudioFilter(duration, `[ma${i}]`));
+      }
+    }
   }
 
-  const screenLabels = sections.map((_, index) => `[sv${index}][sa${index}]`).join('');
-  filterParts.push(`${screenLabels}concat=n=${sections.length}:v=1:a=1[screen_raw][audio_out]`);
+  const screenVideoLabels = sections.map((_, index) => `[sv${index}]`).join('');
+  const screenAudioLabels = sections.map((_, index) => `[sa${index}]`).join('');
+  filterParts.push(`${screenVideoLabels}concat=n=${sections.length}:v=1:a=0[screen_raw]`);
+  filterParts.push(`${screenAudioLabels}concat=n=${sections.length}:v=0:a=1[screen_audio_out]`);
+  if (hasMic) {
+    const micAudioLabels = sections.map((_, index) => `[ma${index}]`).join('');
+    filterParts.push(`${micAudioLabels}concat=n=${sections.length}:v=0:a=1[mic_audio_out]`);
+    filterParts.push('[screen_audio_out][mic_audio_out]amix=inputs=2:weights=1 1:normalize=0[audio_out]');
+  } else {
+    filterParts.push('[screen_audio_out]anull[audio_out]');
+  }
   const exportAudioLabel = buildExportAudioLabel(exportAudioPreset);
   if (exportAudioLabel === 'audio_final') {
     filterParts.push(
