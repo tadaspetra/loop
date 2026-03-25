@@ -13,6 +13,33 @@ export function resolveCameraPlaybackTargetTime(screenTime, cameraSyncOffsetMs =
   return Math.max(0, baseTime + normalizeCameraSyncOffsetMs(cameraSyncOffsetMs) / 1000);
 }
 
+export function computePlaybackSeekPlan(
+  currentScreenTime,
+  currentCameraTime,
+  targetSourceTime,
+  cameraSyncOffsetMs = 0,
+  seekThreshold = 0.01
+) {
+  const safeTargetSourceTime = Number(targetSourceTime);
+  const targetCameraTime = resolveCameraPlaybackTargetTime(safeTargetSourceTime, cameraSyncOffsetMs);
+  const screenTime = Number(currentScreenTime);
+  const cameraTime = Number(currentCameraTime);
+  const safeSeekThreshold = Number.isFinite(Number(seekThreshold)) ? Math.max(0, Number(seekThreshold)) : 0.01;
+
+  const screenNeedsSeek = !Number.isFinite(screenTime)
+    || Math.abs(screenTime - safeTargetSourceTime) > safeSeekThreshold;
+  const cameraNeedsSeek = !Number.isFinite(cameraTime)
+    || Math.abs(cameraTime - targetCameraTime) > safeSeekThreshold;
+
+  return {
+    targetSourceTime: safeTargetSourceTime,
+    targetCameraTime,
+    screenNeedsSeek,
+    cameraNeedsSeek,
+    needsSeek: screenNeedsSeek || cameraNeedsSeek
+  };
+}
+
 export function computeCameraPlaybackDrift(screenTime, cameraTime, cameraSyncOffsetMs = 0) {
   const targetTime = resolveCameraPlaybackTargetTime(screenTime, cameraSyncOffsetMs);
   const actualTime = Number(cameraTime);

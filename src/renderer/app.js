@@ -17,6 +17,7 @@ import {
   buildSplitAnchorKeyframe
 } from './features/timeline/keyframe-ops.js';
 import {
+  computePlaybackSeekPlan,
   computeCameraPlaybackDrift,
   normalizeCameraSyncOffsetMs,
   resolveCameraPlaybackTargetTime
@@ -2604,12 +2605,12 @@ import {
       const targetSourceTime = Number.isFinite(Number(opts.sourceTime))
         ? Number(opts.sourceTime)
         : nextSection.sourceStart;
-      const targetCameraTime = resolveCameraPlaybackTargetTime(
+      const seekPlan = computePlaybackSeekPlan(
+        nextVideos.screen.currentTime,
+        nextVideos.camera?.currentTime,
         targetSourceTime,
         editorState.cameraSyncOffsetMs
       );
-      const currentSourceTime = Number(nextVideos.screen.currentTime);
-      const needsSeek = !Number.isFinite(currentSourceTime) || Math.abs(currentSourceTime - targetSourceTime) > 0.01;
 
       if (!sameTake && previousTakeId) {
         const previousVideos = getOrCreateTakeVideos(previousTakeId);
@@ -2622,10 +2623,8 @@ import {
         }
       }
 
-      if (needsSeek) {
-        nextVideos.screen.currentTime = targetSourceTime;
-        if (nextVideos.camera) nextVideos.camera.currentTime = targetCameraTime;
-      }
+      if (seekPlan.screenNeedsSeek) nextVideos.screen.currentTime = seekPlan.targetSourceTime;
+      if (nextVideos.camera && seekPlan.cameraNeedsSeek) nextVideos.camera.currentTime = seekPlan.targetCameraTime;
 
       activeTakeId = nextSection.takeId;
       activePlaybackSection = nextSection;
@@ -2635,7 +2634,7 @@ import {
           from: opts.fromSectionId || null,
           to: nextSection.id,
           sameTake,
-          seek: needsSeek,
+          seek: seekPlan.needsSeek,
           reason: opts.reason || 'unknown'
         });
       }
@@ -3258,6 +3257,7 @@ import {
     });
 
     let selectedSegmentIndex = -1;
+    const recordingUndoStack = [];
 
     function selectSegment(index) {
       // Deselect previous
@@ -3297,6 +3297,7 @@ import {
         if (selectedSegmentIndex >= 0 && selectedSegmentIndex < speechSegments.length) {
           // Toggle delete on selected segment
           const seg = speechSegments[selectedSegmentIndex];
+          recordingUndoStack.push({ segmentIndex: selectedSegmentIndex, wasDeleted: seg.deleted });
           seg.deleted = !seg.deleted;
           const el = transcriptContent.querySelector(`[data-segment-index="${selectedSegmentIndex}"]`);
           if (el) applySegmentDeletedStyle(el, seg.deleted);
@@ -3305,6 +3306,7 @@ import {
           // No selection: delete last non-deleted segment
           for (let i = speechSegments.length - 1; i >= 0; i--) {
             if (!speechSegments[i].deleted) {
+              recordingUndoStack.push({ segmentIndex: i, wasDeleted: false });
               speechSegments[i].deleted = true;
               const el = transcriptContent.querySelector(`[data-segment-index="${i}"]`);
               if (el) applySegmentDeletedStyle(el, true);
@@ -3312,6 +3314,19 @@ import {
               break;
             }
           }
+        }
+        return;
+      }
+
+      // Ctrl+Z during recording: undo last delete/undelete action
+      if (recording && e.code === 'KeyZ' && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
+        e.preventDefault();
+        const action = recordingUndoStack.pop();
+        if (action) {
+          speechSegments[action.segmentIndex].deleted = action.wasDeleted;
+          const el = transcriptContent.querySelector(`[data-segment-index="${action.segmentIndex}"]`);
+          if (el) applySegmentDeletedStyle(el, action.wasDeleted);
+          updateSegmentBadge();
         }
         return;
       }
