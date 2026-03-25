@@ -223,7 +223,12 @@ Default to:
 ## Learned User Preferences
 
 - Prefer compact plans and concise summaries unless more depth is requested.
+- Prefer resilient recording stop/finalize behavior: if one recorder (e.g. camera) fails during finalize, do not wedge the whole flow; allow partial success where possible and surface a clear error instead of hanging.
+- When judging recording reliability, do not treat helper-only unit tests as sufficient proof for real `MediaRecorder`, device, or OS-level capture edge cases.
 
 ## Learned Workspace Facts
 
 - Cross-platform behavior matters for this app; avoid macOS-only assumptions in filesystem paths, dialogs, and project workflows.
+- Editor PiP and similar overlay positions are authored in a fixed 1920×1080 canvas space; export/ffmpeg composition should use that same coordinate space so preview and rendered output stay aligned.
+- Same-screen system audio may require Electron display-media loopback (`getDisplayMedia` with main-process coordination); external capture-device paths are not a substitute for all desktop/window sources.
+- Screen and camera are separate capture/recorder pipelines; stop/save logic must tolerate independent outcomes so one stream cannot block finalization of the other.

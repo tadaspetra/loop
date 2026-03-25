@@ -1,16 +1,17 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "allowJs": true,
-    "checkJs": false,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowJs": false,
     "noEmit": true,
-    "strict": false,
+    "strict": true,
     "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
     "types": ["node", "vitest/globals"],
     "lib": ["ES2022", "DOM"]
   },
-  "include": ["src/**/*.js", "tests/**/*.js", "tests/**/*.mjs", "*.mjs"],
+  "include": ["src/**/*.ts", "src/**/*.d.ts", "tests/**/*.ts", "vite.config.ts"],
   "exclude": ["node_modules", "dist", "out", "coverage"]
 }
