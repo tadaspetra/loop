@@ -53,5 +53,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getCursorPosition: () => ipcRenderer.invoke('get-cursor-position'),
   startMouseTrail: () => ipcRenderer.invoke('start-mouse-trail'),
   stopMouseTrail: () => ipcRenderer.invoke('stop-mouse-trail'),
-  saveMouseTrail: (projectPath, suffix, trailData) => ipcRenderer.invoke('save-mouse-trail', projectPath, suffix, trailData)
+  saveMouseTrail: (projectPath, suffix, trailData) => ipcRenderer.invoke('save-mouse-trail', projectPath, suffix, trailData),
+  generateProxy: (opts) => ipcRenderer.invoke('proxy:generate', opts),
+  onProxyProgress: (listener) => {
+    if (typeof listener !== 'function') return () => {};
+    const handler = (_event, payload) => listener(payload);
+    ipcRenderer.on('proxy:progress', handler);
+    return () => ipcRenderer.removeListener('proxy:progress', handler);
+  }
 })

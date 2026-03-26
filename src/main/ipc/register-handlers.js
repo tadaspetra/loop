@@ -11,7 +11,8 @@ function registerIpcHandlers({
   projectService,
   renderComposite,
   computeSections,
-  getScribeToken
+  getScribeToken,
+  proxyService
 }) {
   ipcMain.handle('set-content-protection', async (_event, enabled) => {
     const win = getWindow();
@@ -199,6 +200,35 @@ function registerIpcHandlers({
 
   ipcMain.handle('save-mouse-trail', async (_event, projectPath, suffix, trailData) => {
     return projectService.saveMouseTrail(projectPath, suffix, trailData);
+  });
+
+  ipcMain.handle('proxy:generate', (event, { takeId, screenPath, projectFolder, durationSec }) => {
+    if (!proxyService || !screenPath || !projectFolder) return null;
+    const proxyPath = proxyService.deriveProxyPath(screenPath);
+    const totalDuration = Number.isFinite(durationSec) && durationSec > 0 ? durationSec : 0;
+
+    event.sender.send('proxy:progress', { takeId, status: 'started', percent: 0 });
+
+    const onProgress = totalDuration > 0 ? (progress) => {
+      if (event.sender.isDestroyed()) return;
+      const outSec = progress?.outTimeSec;
+      if (Number.isFinite(outSec) && outSec >= 0) {
+        const percent = Math.max(0, Math.min(1, outSec / totalDuration));
+        event.sender.send('proxy:progress', { takeId, status: 'progress', percent });
+      }
+    } : undefined;
+
+    proxyService.generateProxy({ screenPath, proxyPath, onProgress }).then(() => {
+      if (!event.sender.isDestroyed()) {
+        event.sender.send('proxy:progress', { takeId, status: 'done', proxyPath });
+      }
+    }).catch((err) => {
+      if (!event.sender.isDestroyed()) {
+        event.sender.send('proxy:progress', { takeId, status: 'error', error: err?.message || String(err) });
+      }
+    });
+
+    return proxyPath;
   });
 
   function cleanupMouseTrailTimer() {

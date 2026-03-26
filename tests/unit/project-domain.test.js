@@ -544,4 +544,28 @@ describe('shared/domain/project', () => {
     expect(project.timeline.overlays.length).toBe(1);
     expect(project.timeline.overlays[0].id).toBe('o1');
   });
+
+  test('normalizeProjectData resolves proxyPath to absolute path', () => {
+    const project = normalizeProjectData(
+      { takes: [{ id: 't1', screenPath: 'screen.webm', proxyPath: 'screen-proxy.mp4' }] },
+      '/tmp/project'
+    );
+    expect(project.takes[0].proxyPath).toBe('/tmp/project/screen-proxy.mp4');
+  });
+
+  test('normalizeProjectData sets proxyPath to null when absent', () => {
+    const project = normalizeProjectData(
+      { takes: [{ id: 't1', screenPath: 'screen.webm' }] },
+      '/tmp/project'
+    );
+    expect(project.takes[0].proxyPath).toBeNull();
+  });
+
+  test('normalizeProjectData keeps absolute proxyPath as-is', () => {
+    const project = normalizeProjectData(
+      { takes: [{ id: 't1', screenPath: 'screen.webm', proxyPath: '/abs/path/screen-proxy.mp4' }] },
+      '/tmp/project'
+    );
+    expect(project.takes[0].proxyPath).toBe('/abs/path/screen-proxy.mp4');
+  });
 });

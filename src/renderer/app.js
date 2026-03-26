@@ -180,6 +180,48 @@ import { cleanupAllMedia } from './features/media-cleanup.js';
         handleRenderProgress(update);
       });
     }
+
+    if (typeof window.electronAPI.onProxyProgress === 'function') {
+      window.electronAPI.onProxyProgress((payload) => {
+        if (!payload || !payload.takeId) return;
+        if (payload.status === 'progress') {
+          const current = proxyStatus.get(payload.takeId);
+          if (current && current.status === 'pending') {
+            current.percent = payload.percent || 0;
+            updateProxyProgressBars(payload.takeId, current.percent);
+          }
+        } else if (payload.status === 'done' && payload.proxyPath) {
+          proxyStatus.set(payload.takeId, { status: 'done' });
+          const take = activeProject?.takes?.find(t => t.id === payload.takeId);
+          if (take) {
+            take.proxyPath = payload.proxyPath;
+            persistProjectNow().catch(err => console.warn('[Proxy] Failed to persist proxyPath:', err));
+          }
+          // Hot-swap the cached video element to use the proxy
+          const cached = takeVideoPool.get(payload.takeId);
+          if (cached) {
+            const wasPlaying = !cached.screen.paused;
+            const currentTime = cached.screen.currentTime;
+            const rate = cached.screen.playbackRate;
+            cached.screen.src = pathToFileUrl(payload.proxyPath);
+            cached.screen.addEventListener('loadedmetadata', () => {
+              cached.screen.currentTime = currentTime;
+              if (wasPlaying) {
+                cached.screen.playbackRate = rate;
+                cached.screen.play().catch(() => {});
+                // Restart draw loop since requestVideoFrameCallback on the old src is dead
+                if (!hasPendingEditorDraw()) scheduleEditorDrawLoop();
+              }
+            }, { once: true });
+          }
+          renderSectionMarkers();
+        } else if (payload.status === 'error') {
+          proxyStatus.set(payload.takeId, { status: 'error' });
+          console.warn('[Proxy] Generation failed for take', payload.takeId, payload.error);
+          renderSectionMarkers();
+        }
+      });
+    }
     let scribeAudioOffset = 0; // seconds between recording start and first audio sent to Scribe
     let workletRegistered = null; // tracks which AudioContext has the worklet registered
 
@@ -480,6 +522,7 @@ import { cleanupAllMedia } from './features/media-cleanup.js';
     let editorPausedDrawTimer = null;
     let editorVideoFrameCallbackId = null;
     let editorVideoFrameHost = null;
+    let editorVideoFrameSafetyTimer = null;
     let draggingPip = false;
     let pipDragMoved = false;
     let waveformPeaks = null;
@@ -491,6 +534,7 @@ import { cleanupAllMedia } from './features/media-cleanup.js';
     let backgroundDragState = null;
     let takeAudioBufferCache = new Map(); // takeId -> AudioBuffer
     let takeVideoPool = new Map(); // takeId -> { screen: HTMLVideoElement, camera: HTMLVideoElement|null }
+    const proxyStatus = new Map(); // takeId -> 'pending' | 'done' | 'error'
     const overlayImageCache = new Map(); // mediaPath -> HTMLImageElement
     const mouseTrailCache = new Map(); // takeId -> { captureWidth, captureHeight, trail }
     const overlayVideoEls = [null, null]; // per-track reusable <video> elements
@@ -514,7 +558,7 @@ import { cleanupAllMedia } from './features/media-cleanup.js';
       const screen = document.createElement('video');
       screen.playsInline = true;
       screen.preload = 'auto';
-      screen.src = pathToFileUrl(take.screenPath);
+      screen.src = pathToFileUrl(take.proxyPath || take.screenPath);
       let camera = null;
       if (take.cameraPath) {
         camera = document.createElement('video');
@@ -680,6 +724,10 @@ import { cleanupAllMedia } from './features/media-cleanup.js';
       }
       editorVideoFrameCallbackId = null;
       editorVideoFrameHost = null;
+      if (editorVideoFrameSafetyTimer) {
+        clearTimeout(editorVideoFrameSafetyTimer);
+        editorVideoFrameSafetyTimer = null;
+      }
     }
 
     function scheduleEditorDrawLoop() {
@@ -691,10 +739,24 @@ import { cleanupAllMedia } from './features/media-cleanup.js';
         if (screen && typeof screen.requestVideoFrameCallback === 'function') {
           editorVideoFrameHost = screen;
           editorVideoFrameCallbackId = screen.requestVideoFrameCallback(() => {
+            if (editorVideoFrameSafetyTimer) { clearTimeout(editorVideoFrameSafetyTimer); editorVideoFrameSafetyTimer = null; }
             editorVideoFrameCallbackId = null;
             editorVideoFrameHost = null;
             editorDrawLoop();
           });
+          // Safety fallback: if the video frame callback doesn't fire within
+          // 200 ms (e.g. src was swapped or video stalled), fall back to rAF
+          // so the draw loop doesn't die.
+          editorVideoFrameSafetyTimer = setTimeout(() => {
+            editorVideoFrameSafetyTimer = null;
+            if (editorVideoFrameCallbackId !== null && editorState?.playing) {
+              cancelEditorDrawLoop();
+              editorDrawRAF = requestAnimationFrame(() => {
+                editorDrawRAF = null;
+                editorDrawLoop();
+              });
+            }
+          }, 200);
           return;
         }
       }
@@ -923,6 +985,7 @@ import { cleanupAllMedia } from './features/media-cleanup.js';
         overlayVideoCurrentPaths[t] = null;
       }
       editorState = null;
+      proxyStatus.clear();
       undoStack.length = 0;
       redoStack.length = 0;
       waveformPeaks = null;
@@ -944,7 +1007,7 @@ import { cleanupAllMedia } from './features/media-cleanup.js';
       if (isTakeReferenced(takeId)) return;
       const take = activeProject.takes?.find(t => t.id === takeId);
       if (!take) return;
-      const filePaths = [take.screenPath, take.cameraPath, take.mousePath].filter(Boolean);
+      const filePaths = [take.screenPath, take.cameraPath, take.mousePath, take.proxyPath].filter(Boolean);
       if (filePaths.length > 0) {
         await window.electronAPI.stageTakeFiles(activeProjectPath, filePaths);
       }
@@ -954,7 +1017,7 @@ import { cleanupAllMedia } from './features/media-cleanup.js';
       if (!takeId || !activeProjectPath || !activeProject) return;
       const take = activeProject.takes?.find(t => t.id === takeId);
       if (!take) return;
-      const fileNames = [take.screenPath, take.cameraPath, take.mousePath]
+      const fileNames = [take.screenPath, take.cameraPath, take.mousePath, take.proxyPath]
         .filter(Boolean)
         .map(p => {
           const parts = p.split(/[/\\]/);
@@ -1248,6 +1311,24 @@ import { cleanupAllMedia } from './features/media-cleanup.js';
 
       await window.electronAPI.projectSetLast(projectPath);
       updateWorkspaceHeader();
+
+      // Queue background proxy generation for any takes missing a proxy
+      if (Array.isArray(project.takes)) {
+        let needsMarkerUpdate = false;
+        for (const take of project.takes) {
+          if (!take.proxyPath && take.screenPath) {
+            proxyStatus.set(take.id, { status: 'pending', percent: 0 });
+            needsMarkerUpdate = true;
+            window.electronAPI.generateProxy({
+              takeId: take.id,
+              screenPath: take.screenPath,
+              projectFolder: projectPath,
+              durationSec: take.duration || 0
+            }).catch(err => console.warn('[Proxy] Failed to start proxy generation:', err));
+          }
+        }
+        if (needsMarkerUpdate) renderSectionMarkers();
+      }
     }
 
     async function ensureMediaInitialized() {
@@ -1905,6 +1986,18 @@ import { cleanupAllMedia } from './features/media-cleanup.js';
           rightHandle.style.cssText = 'position:absolute;top:0;bottom:0;right:0;width:6px;cursor:col-resize;z-index:30;border-right:3px solid rgba(255,255,255,0.5);';
           band.appendChild(rightHandle);
         }
+
+        const takeProxy = proxyStatus.get(section.takeId);
+        if (takeProxy && takeProxy.status === 'pending') {
+          const pct = Math.round((takeProxy.percent || 0) * 100);
+          const proxyBar = document.createElement('div');
+          proxyBar.className = 'absolute bottom-0 left-0 pointer-events-none';
+          proxyBar.dataset.proxyBar = section.takeId;
+          proxyBar.style.cssText = `height:3px;width:${pct}%;background:rgba(251,191,36,0.85);z-index:10;transition:width 0.3s ease;`;
+          proxyBar.title = `Optimizing for editing… ${pct}%`;
+          band.appendChild(proxyBar);
+        }
+
         editorSectionMarkers.appendChild(band);
 
         if (section.index < editorState.sections.length - 1) {
@@ -1919,6 +2012,15 @@ import { cleanupAllMedia } from './features/media-cleanup.js';
       }
       renderSectionTranscriptList();
       renderOverlayMarkers();
+    }
+
+    function updateProxyProgressBars(takeId, percent) {
+      const pct = Math.round(percent * 100);
+      const bars = editorSectionMarkers.querySelectorAll(`[data-proxy-bar="${takeId}"]`);
+      for (const bar of bars) {
+        bar.style.width = `${pct}%`;
+        bar.title = `Optimizing for editing… ${pct}%`;
+      }
     }
 
     function renderOverlayMarkers() {
@@ -3439,6 +3541,13 @@ import { cleanupAllMedia } from './features/media-cleanup.js';
               take.sections = appendResult.takeSections;
             }
             await persistProjectNow();
+            // Trigger background proxy generation for the new take (fire and forget)
+            if (activeProjectPath && screenPath) {
+              proxyStatus.set(takeId, { status: 'pending', percent: 0 });
+              renderSectionMarkers();
+              window.electronAPI.generateProxy({ takeId, screenPath, projectFolder: activeProjectPath, durationSec: recordedDuration })
+                .catch(err => console.warn('[Proxy] Failed to start proxy generation:', err));
+            }
           }
           await completeRecoveryTake();
         } catch (error) {
@@ -3576,15 +3685,19 @@ import { cleanupAllMedia } from './features/media-cleanup.js';
         }
       }
 
-      // Wait for metadata from first take's screen video to get source resolution
+      // Probe the ORIGINAL source video for resolution (not the proxy which is 960×540).
+      // This drives the export canvas size — must be the real recording dimensions.
       if (referencedTakeIds.size > 0) {
         const firstTakeId = sections[0]?.takeId;
+        const firstTake = activeProject?.takes?.find(t => t.id === firstTakeId);
         const videos = firstTakeId ? getOrCreateTakeVideos(firstTakeId) : null;
         if (videos) {
-          const onMeta = () => {
+          const applySourceResolution = (w, h) => {
             if (!editorState) return;
-            editorState.sourceWidth = videos.screen.videoWidth || editorState.sourceWidth;
-            editorState.sourceHeight = videos.screen.videoHeight || editorState.sourceHeight;
+            if (w && h) {
+              editorState.sourceWidth = w;
+              editorState.sourceHeight = h;
+            }
             syncSectionAnchorKeyframes();
             renderSectionMarkers();
             updateEditorTimeDisplay();
@@ -3595,8 +3708,22 @@ import { cleanupAllMedia } from './features/media-cleanup.js';
               renderWaveform();
             });
           };
-          if (videos.screen.readyState >= 1) onMeta();
-          else videos.screen.addEventListener('loadedmetadata', onMeta, { once: true });
+
+          // If the take has a proxy, probe the original source for true dimensions
+          if (firstTake?.proxyPath && firstTake?.screenPath) {
+            const sourceProbe = document.createElement('video');
+            sourceProbe.preload = 'metadata';
+            sourceProbe.src = pathToFileUrl(firstTake.screenPath);
+            sourceProbe.addEventListener('loadedmetadata', () => {
+              applySourceResolution(sourceProbe.videoWidth, sourceProbe.videoHeight);
+              sourceProbe.src = '';
+            }, { once: true });
+          } else {
+            // No proxy — the pool video IS the original, read dimensions from it
+            const onMeta = () => applySourceResolution(videos.screen.videoWidth, videos.screen.videoHeight);
+            if (videos.screen.readyState >= 1) onMeta();
+            else videos.screen.addEventListener('loadedmetadata', onMeta, { once: true });
+          }
         }
       }
 

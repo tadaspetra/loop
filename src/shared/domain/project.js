@@ -346,6 +346,9 @@ function normalizeProjectData(rawProject, projectFolder) {
       mousePath: projectFolder
         ? toProjectAbsolutePath(projectFolder, take?.mousePath)
         : take?.mousePath || null,
+      proxyPath: projectFolder
+        ? toProjectAbsolutePath(projectFolder, take?.proxyPath)
+        : take?.proxyPath || null,
       sections: normalizeSections(take?.sections)
     })),
     timeline: {

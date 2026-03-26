@@ -424,4 +424,87 @@ describe('main/services/project-service integration', () => {
     service.cleanupDeletedFolder(created.projectPath);
     expect(fs.existsSync(path.join(created.projectPath, '.deleted'))).toBe(false);
   });
+
+  test('saveProject serializes proxyPath as relative and openProject resolves it back', () => {
+    const created = service.createProject({ name: 'ProxyRoundtrip', parentFolder: sandbox.root });
+    const screenPath = path.join(created.projectPath, 'screen.webm');
+    const proxyPath = path.join(created.projectPath, 'screen-proxy.mp4');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+    fs.writeFileSync(proxyPath, 'proxy', 'utf8');
+
+    service.saveProject({
+      projectPath: created.projectPath,
+      project: {
+        ...created.project,
+        takes: [{ id: 'take-1', duration: 5, screenPath, proxyPath, sections: [] }]
+      }
+    });
+
+    const raw = JSON.parse(fs.readFileSync(path.join(created.projectPath, 'project.json'), 'utf8'));
+    expect(raw.takes[0].proxyPath).toBe('screen-proxy.mp4');
+
+    const loaded = service.openProject(created.projectPath);
+    expect(loaded.project.takes[0].proxyPath).toBe(proxyPath);
+  });
+
+  test('saveProject serializes proxyPath as null when absent', () => {
+    const created = service.createProject({ name: 'ProxyNull', parentFolder: sandbox.root });
+    const screenPath = path.join(created.projectPath, 'screen.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+
+    service.saveProject({
+      projectPath: created.projectPath,
+      project: {
+        ...created.project,
+        takes: [{ id: 'take-1', duration: 5, screenPath, sections: [] }]
+      }
+    });
+
+    const raw = JSON.parse(fs.readFileSync(path.join(created.projectPath, 'project.json'), 'utf8'));
+    expect(raw.takes[0].proxyPath).toBeNull();
+  });
+
+  test('stageTakeFiles moves proxyPath file to .deleted/ alongside other files', () => {
+    const created = service.createProject({ name: 'StageProxy', parentFolder: sandbox.root });
+    const screenFile = path.join(created.projectPath, 'screen.webm');
+    const proxyFile = path.join(created.projectPath, 'screen-proxy.mp4');
+    fs.writeFileSync(screenFile, 'screen-data', 'utf8');
+    fs.writeFileSync(proxyFile, 'proxy-data', 'utf8');
+
+    service.stageTakeFiles(created.projectPath, [screenFile, proxyFile]);
+
+    expect(fs.existsSync(screenFile)).toBe(false);
+    expect(fs.existsSync(proxyFile)).toBe(false);
+    expect(fs.existsSync(path.join(created.projectPath, '.deleted', 'screen.webm'))).toBe(true);
+    expect(fs.existsSync(path.join(created.projectPath, '.deleted', 'screen-proxy.mp4'))).toBe(true);
+  });
+
+  test('stageTakeFiles skips proxyPath gracefully when file does not exist', () => {
+    const created = service.createProject({ name: 'StageProxyMissing', parentFolder: sandbox.root });
+    const screenFile = path.join(created.projectPath, 'screen.webm');
+    fs.writeFileSync(screenFile, 'screen-data', 'utf8');
+    const missingProxy = path.join(created.projectPath, 'screen-proxy.mp4');
+
+    // Should not throw even though proxy does not exist
+    service.stageTakeFiles(created.projectPath, [screenFile, missingProxy]);
+
+    expect(fs.existsSync(path.join(created.projectPath, '.deleted', 'screen.webm'))).toBe(true);
+    expect(fs.existsSync(path.join(created.projectPath, '.deleted', 'screen-proxy.mp4'))).toBe(false);
+  });
+
+  test('unstageTakeFiles restores proxyPath from .deleted/ folder', () => {
+    const created = service.createProject({ name: 'UnstageProxy', parentFolder: sandbox.root });
+    const screenFile = path.join(created.projectPath, 'screen.webm');
+    const proxyFile = path.join(created.projectPath, 'screen-proxy.mp4');
+    fs.writeFileSync(screenFile, 'screen-data', 'utf8');
+    fs.writeFileSync(proxyFile, 'proxy-data', 'utf8');
+
+    service.stageTakeFiles(created.projectPath, [screenFile, proxyFile]);
+    expect(fs.existsSync(proxyFile)).toBe(false);
+
+    service.unstageTakeFiles(created.projectPath, ['screen.webm', 'screen-proxy.mp4']);
+    expect(fs.existsSync(screenFile)).toBe(true);
+    expect(fs.existsSync(proxyFile)).toBe(true);
+    expect(fs.readFileSync(proxyFile, 'utf8')).toBe('proxy-data');
+  });
 });

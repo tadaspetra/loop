@@ -138,7 +138,8 @@ function createProjectService({ app }) {
       ...take,
       screenPath: toProjectRelativePath(projectFolder, take.screenPath),
       cameraPath: toProjectRelativePath(projectFolder, take.cameraPath),
-      mousePath: toProjectRelativePath(projectFolder, take.mousePath)
+      mousePath: toProjectRelativePath(projectFolder, take.mousePath),
+      proxyPath: toProjectRelativePath(projectFolder, take.proxyPath)
     }));
 
     writeJsonFile(getProjectFilePath(projectFolder), serializable);

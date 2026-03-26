@@ -9,6 +9,7 @@ const { createProjectService } = require('./main/services/project-service');
 const { renderComposite } = require('./main/services/render-service');
 const { computeSections } = require('./main/services/sections-service');
 const { getScribeToken } = require('./main/services/scribe-service');
+const proxyService = require('./main/services/proxy-service');
 
 let win = null;
 
@@ -25,7 +26,8 @@ const { cleanupMouseTrailTimer } = registerIpcHandlers({
   projectService,
   renderComposite,
   computeSections,
-  getScribeToken
+  getScribeToken,
+  proxyService
 });
 
 // Defensive cleanup for stale timer state from a previous hot-reload
