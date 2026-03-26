@@ -5,6 +5,10 @@ import {
   extractSpokenWordTokens
 } from './features/transcript/transcript-utils';
 import {
+  getScribeStatusFromCloseEvent,
+  getScribeStatusFromMessage
+} from './features/transcript/scribe-status';
+import {
   roundMs,
   buildRemappedSectionsFromSegments,
   normalizeSections,
@@ -70,6 +74,7 @@ import {
     const recordingView = document.getElementById('recordingView');
     const transcriptPanel = document.getElementById('transcriptPanel');
     const transcriptContent = document.getElementById('transcriptContent');
+    const transcriptStatus = document.getElementById('transcriptStatus');
     const segmentBadge = document.getElementById('segmentBadge');
     const processingView = document.getElementById('processingView');
     const processingTitle = document.getElementById('processingTitle');
@@ -126,6 +131,8 @@ import {
     let speechSegments = [];
     let audioChunkBuffer = [];
     let audioSendInterval = null;
+    let scribeLastFailureReason = null;
+    let scribeManualClose = false;
     let micSourceNode = null;
 
     function handleRenderProgress(update) {
@@ -1683,11 +1690,42 @@ import {
       return merged;
     }
 
+    function setTranscriptStatus(text, tone = 'neutral') {
+      if (!transcriptStatus) return;
+
+      const toneClasses = {
+        neutral: 'text-neutral-500',
+        success: 'text-emerald-400',
+        warning: 'text-amber-400',
+        error: 'text-red-400'
+      };
+      const resolvedTone = toneClasses[tone] || toneClasses.neutral;
+      const hasText = typeof text === 'string' && text.trim().length > 0;
+
+      transcriptStatus.className = `px-1 pb-1 text-[11px] ${resolvedTone}`;
+      transcriptStatus.classList.toggle('hidden', !hasText);
+      transcriptStatus.textContent = hasText ? text : '';
+    }
+
+    function applyScribeStatus(status) {
+      if (!status) return;
+
+      if (status.failureReason) {
+        scribeLastFailureReason = status.failureReason;
+      } else if (status.tone === 'success') {
+        scribeLastFailureReason = null;
+      }
+
+      setTranscriptStatus(status.text, status.tone);
+    }
+
     async function startRecording() {
       if (!activeProjectPath) return;
       recorders = [];
       speechSegments = [];
       audioChunkBuffer = [];
+      scribeLastFailureReason = null;
+      scribeManualClose = false;
 
       // Individual screen (with audio)
       // Route through a canvas at constant 30fps to prevent keyframe flicker
@@ -1735,6 +1773,7 @@ import {
       transcriptPanel.classList.remove('hidden');
       transcriptContent.innerHTML = '';
       segmentBadge.textContent = '0 segments';
+      setTranscriptStatus('Transcription connecting...', 'neutral');
 
       // Set up Scribe via direct WebSocket
       if (audioContext && audioStream && micSourceNode) {
@@ -1759,8 +1798,21 @@ import {
 
           scribeWs = new WebSocket(wsUrl);
 
+          scribeWs.onopen = () => {
+            setTranscriptStatus('Transcription connecting...', 'neutral');
+          };
+
           scribeWs.onmessage = (event) => {
-            const msg = JSON.parse(event.data);
+            let msg;
+            try {
+              msg = JSON.parse(event.data);
+            } catch (error) {
+              console.warn('Failed to parse Scribe message:', error);
+              return;
+            }
+
+            applyScribeStatus(getScribeStatusFromMessage(msg));
+
             if (msg.message_type === 'partial_transcript') {
               updatePartialTranscript(msg.text || '');
             } else if (msg.message_type === 'committed_transcript_with_timestamps') {
@@ -1770,6 +1822,24 @@ import {
 
           scribeWs.onerror = (err) => {
             console.error('Scribe WebSocket error:', err);
+            if (!scribeManualClose) {
+              setTranscriptStatus('Transcription connection error', 'error');
+            }
+          };
+
+          scribeWs.onclose = (event) => {
+            console.warn('Scribe WebSocket closed:', {
+              code: event.code,
+              reason: event.reason,
+              wasClean: event.wasClean,
+              lastFailureReason: scribeLastFailureReason,
+              manualClose: scribeManualClose
+            });
+            if (!scribeManualClose) {
+              applyScribeStatus(
+                getScribeStatusFromCloseEvent(event, scribeLastFailureReason)
+              );
+            }
           };
 
           // Set up AudioWorklet for PCM capture (only register module once per AudioContext)
@@ -1811,7 +1881,11 @@ import {
 
         } catch (err) {
           console.warn('Scribe setup failed:', err);
+          const reason = err instanceof Error ? err.message : 'setup failed';
+          setTranscriptStatus(`Transcription unavailable: ${reason}`, 'error');
         }
+      } else {
+        setTranscriptStatus('Transcription unavailable: microphone not ready', 'warning');
       }
     }
 
@@ -2227,12 +2301,14 @@ import {
 
       // Send final commit and close WebSocket
       const hadScribe = !!scribeWs;
+      scribeManualClose = true;
       if (scribeWs && scribeWs.readyState === WebSocket.OPEN) {
         scribeWs.send(JSON.stringify({ message_type: 'commit' }));
         await new Promise(r => setTimeout(r, 1000));
         scribeWs.close();
       }
       scribeWs = null;
+      scribeLastFailureReason = null;
       audioChunkBuffer = [];
 
       if (screenRecInterval) {
@@ -2263,6 +2339,7 @@ import {
 
       // Hide transcript panel
       transcriptPanel.classList.add('hidden');
+      setTranscriptStatus('', 'neutral');
 
       // Enter editor if we have at least a screen recording
       if (results.screen) {
