@@ -102,6 +102,9 @@ import {
     const editorTimeline = document.getElementById('editorTimeline');
     const editorSectionMarkers = document.getElementById('editorSectionMarkers');
     const editorScrubber = document.getElementById('editorScrubber');
+    const editorCameraTrack = document.getElementById('editorCameraTrack');
+    const editorCameraMarkers = document.getElementById('editorCameraMarkers');
+    const cameraTrackLabel = document.getElementById('cameraTrackLabel');
     const editorSectionTranscriptList = document.getElementById('editorSectionTranscriptList');
     let editorRenderTimeout = null;
     const editorWaveformCanvas = document.getElementById('editorWaveformCanvas');
@@ -1171,6 +1174,53 @@ import {
         }
       }
       renderSectionTranscriptList();
+      renderCameraMarkers();
+    }
+
+    function renderCameraMarkers() {
+      if (!editorCameraMarkers) return;
+      editorCameraMarkers.innerHTML = '';
+
+      const showCameraTrack = editorState && editorState.hasCamera;
+      if (editorCameraTrack) editorCameraTrack.style.display = showCameraTrack ? '' : 'none';
+      if (cameraTrackLabel) cameraTrackLabel.style.display = showCameraTrack ? '' : 'none';
+
+      if (!showCameraTrack || !editorState.duration || !editorState.sections || editorState.sections.length === 0) return;
+
+      for (const section of editorState.sections) {
+        const anchor = editorState.keyframes.find(kf => kf.sectionId === section.id);
+        const pipVisible = anchor ? anchor.pipVisible : true;
+        const cameraFullscreen = anchor ? !!anchor.cameraFullscreen : false;
+
+        const sectionStart = (section.start / editorState.duration) * 100;
+        const sectionWidth = Math.max(0.35, ((section.end - section.start) / editorState.duration) * 100);
+        const selected = section.id === editorState.selectedSectionId;
+
+        const band = document.createElement('div');
+        band.className = 'absolute top-0 bottom-0';
+        band.dataset.sectionId = section.id;
+        band.style.left = sectionStart + '%';
+        band.style.width = sectionWidth + '%';
+
+        if (cameraFullscreen) {
+          band.style.backgroundColor = selected ? 'rgba(59,130,246,0.35)' : 'rgba(59,130,246,0.2)';
+        } else if (pipVisible) {
+          band.style.backgroundColor = selected ? 'rgba(59,130,246,0.25)' : 'rgba(59,130,246,0.12)';
+        } else {
+          band.style.backgroundColor = selected ? 'rgba(255,255,255,0.08)' : 'rgba(23,23,23,0.5)';
+        }
+
+        band.style.borderLeft = section.index === 0 ? 'none' : '1px solid rgba(10,10,10,0.7)';
+
+        const label = document.createElement('div');
+        label.className = 'absolute text-[8px] font-medium pointer-events-none truncate';
+        label.style.cssText = 'left:4px;top:50%;transform:translateY(-50%);right:4px;';
+        label.style.color = pipVisible ? 'rgba(147,197,253,0.7)' : 'rgba(100,100,100,0.5)';
+        label.textContent = cameraFullscreen ? 'Full' : pipVisible ? 'PiP' : 'Off';
+        band.appendChild(label);
+
+        editorCameraMarkers.appendChild(band);
+      }
     }
 
     function startTrimDrag(e, sectionId, edge) {

@@ -180,12 +180,32 @@
         <canvas id="editorCanvas" class="w-full h-full object-contain" style="aspect-ratio: 16/9;"></canvas>
       </div>
 
-      <!-- Timeline scrubber -->
-      <div id="editorTimelineWrapper" class="rounded-lg border border-neutral-800 overflow-x-auto overflow-y-hidden">
-        <div id="editorTimeline" class="relative bg-neutral-900 h-12 cursor-pointer select-none overflow-hidden" style="min-width: 100%">
-          <canvas id="editorWaveformCanvas" class="absolute inset-0 w-full h-full pointer-events-none z-0" style="opacity: 0.4"></canvas>
-          <div id="editorSectionMarkers" class="absolute inset-0 z-1"></div>
-          <div id="editorScrubber" class="absolute top-0 bottom-0 w-0.5 bg-white pointer-events-none z-20" style="left: 0%"></div>
+      <!-- Timeline tracks -->
+      <div class="flex rounded-lg border border-neutral-800 overflow-hidden">
+        <!-- Track labels (fixed) -->
+        <div class="shrink-0 bg-neutral-950 border-r border-neutral-800/60 select-none">
+          <div class="h-8 flex items-center px-2.5 text-[10px] font-medium text-neutral-500 uppercase tracking-wider">Screen</div>
+          <div id="cameraTrackLabel" class="h-5 flex items-center px-2.5 text-[10px] font-medium text-neutral-500 uppercase tracking-wider border-t border-neutral-800/40">Cam</div>
+          <div class="h-7 flex items-center px-2.5 text-[10px] font-medium text-neutral-500 uppercase tracking-wider border-t border-neutral-800/40">Audio</div>
+        </div>
+        <!-- Track content (scrollable) -->
+        <div id="editorTimelineWrapper" class="flex-1 overflow-x-auto overflow-y-hidden">
+          <div id="editorTimeline" class="relative cursor-pointer select-none" style="min-width: 100%">
+            <!-- Screen track -->
+            <div class="relative h-8 bg-neutral-900 overflow-hidden">
+              <div id="editorSectionMarkers" class="absolute inset-0 z-[1]"></div>
+            </div>
+            <!-- Camera track -->
+            <div id="editorCameraTrack" class="relative h-5 bg-neutral-900/60 overflow-hidden border-t border-neutral-800/40">
+              <div id="editorCameraMarkers" class="absolute inset-0 z-[1]"></div>
+            </div>
+            <!-- Audio track -->
+            <div class="relative h-7 bg-neutral-900/40 overflow-hidden border-t border-neutral-800/40">
+              <canvas id="editorWaveformCanvas" class="absolute inset-0 w-full h-full pointer-events-none z-0" style="opacity: 0.5"></canvas>
+            </div>
+            <!-- Scrubber (spans all tracks) -->
+            <div id="editorScrubber" class="absolute top-0 bottom-0 w-0.5 bg-white pointer-events-none z-20" style="left: 0%"></div>
+          </div>
         </div>
       </div>
 
