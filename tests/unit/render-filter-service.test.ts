@@ -127,7 +127,7 @@ describe('main/services/render-filter-service', () => {
       1920,
       1080
     );
-    expect(filter).toContain('scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080[screen]');
+    expect(filter).toContain('scale=1920:1080:flags=lanczos:force_original_aspect_ratio=increase,crop=1920:1080[screen]');
   });
 
   test('buildFilterComplex keeps PiP coordinates in editor canvas space', () => {
@@ -154,7 +154,34 @@ describe('main/services/render-filter-service', () => {
 
     expect(filter).toContain('scale=422:422');
     expect(filter).toContain("overlay=x='1478':y='638'");
-    expect(filter).toContain('scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080');
+    expect(filter).toContain('scale=1920:1080:flags=lanczos:force_original_aspect_ratio=increase,crop=1920:1080');
+  });
+
+  test('buildFilterComplex scales PiP size and position for 1440p export canvases', () => {
+    const filter = buildFilterComplex(
+      [
+        {
+          time: 0,
+          pipX: 1478,
+          pipY: 638,
+          pipVisible: true,
+          cameraFullscreen: false,
+          backgroundZoom: 1,
+          backgroundPanX: 0,
+          backgroundPanY: 0
+        }
+      ] as Keyframe[],
+      422,
+      'fill',
+      2560,
+      1440,
+      2560,
+      1440
+    );
+
+    expect(filter).toContain('scale=562:562');
+    expect(filter).toContain("overlay=x='1971':y='851'");
+    expect(filter).toContain('scale=2560:1440:flags=lanczos:force_original_aspect_ratio=increase,crop=2560:1440');
   });
 
   test('buildAlphaExpr collapses redundant visibility anchors for long timelines', () => {

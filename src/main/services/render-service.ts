@@ -9,7 +9,9 @@ import {
   normalizeBackgroundZoom,
   normalizeCameraSyncOffsetMs,
   normalizeExportAudioPreset,
+  normalizeExportVideoPreset,
   type ExportAudioPreset,
+  type ExportVideoPreset,
   type Keyframe,
   type ScreenFitMode,
 } from '../../shared/domain/project';
@@ -44,6 +46,7 @@ export interface RenderCompositeOptions {
   pipSize?: number;
   screenFitMode?: ScreenFitMode;
   exportAudioPreset?: ExportAudioPreset;
+  exportVideoPreset?: ExportVideoPreset;
   cameraSyncOffsetMs?: number;
   sourceWidth?: number;
   sourceHeight?: number;
@@ -60,8 +63,100 @@ export interface RenderCompositeDeps {
 
 const MAX_OVERLAY_FILTER_LENGTH = 100000;
 
+interface RenderVideoConfig {
+  maxWidth: number;
+  maxHeight: number;
+  minWidth: number;
+  minHeight: number;
+  crf: string;
+  preset: string;
+  pixelFormat: string;
+  audioBitrate: string;
+}
+
+const QUALITY_RENDER_CONFIG: RenderVideoConfig = {
+  maxWidth: 2560,
+  maxHeight: 1440,
+  minWidth: 1920,
+  minHeight: 1080,
+  crf: '8',
+  preset: 'slow',
+  pixelFormat: 'yuv420p',
+  audioBitrate: '192k',
+};
+
+const FAST_RENDER_CONFIG: RenderVideoConfig = {
+  maxWidth: 1280,
+  maxHeight: 720,
+  minWidth: 2,
+  minHeight: 2,
+  crf: '24',
+  preset: 'veryfast',
+  pixelFormat: 'yuv420p',
+  audioBitrate: '128k',
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function roundDownToEven(value: number): number {
+  const rounded = Math.floor(value);
+  if (rounded <= 2) return 2;
+  return rounded % 2 === 0 ? rounded : rounded - 1;
+}
+
+function getRenderVideoConfig(exportVideoPreset: ExportVideoPreset): RenderVideoConfig {
+  return exportVideoPreset === 'fast'
+    ? FAST_RENDER_CONFIG
+    : QUALITY_RENDER_CONFIG;
+}
+
+export function deriveRenderCanvasSize(
+  sourceWidth: number,
+  sourceHeight: number,
+  exportVideoPreset: ExportVideoPreset = 'quality',
+) {
+  const config = getRenderVideoConfig(exportVideoPreset);
+  const normalizedWidth = Number(sourceWidth);
+  const normalizedHeight = Number(sourceHeight);
+  if (
+    !Number.isFinite(normalizedWidth) ||
+    !Number.isFinite(normalizedHeight) ||
+    normalizedWidth <= 0 ||
+    normalizedHeight <= 0
+  ) {
+    return { canvasW: config.minWidth, canvasH: config.minHeight };
+  }
+
+  const boundedWidth = roundDownToEven(Math.min(normalizedWidth, config.maxWidth));
+  const boundedHeight = roundDownToEven(Math.min(normalizedHeight, config.maxHeight));
+  if (boundedWidth < config.minWidth || boundedHeight < config.minHeight) {
+    return { canvasW: config.minWidth, canvasH: config.minHeight };
+  }
+
+  const fitHeight = roundDownToEven((boundedWidth * 9) / 16);
+  const fitWidth = roundDownToEven((boundedHeight * 16) / 9);
+  const candidates = [
+    fitHeight <= boundedHeight ? { canvasW: boundedWidth, canvasH: fitHeight } : null,
+    fitWidth <= boundedWidth ? { canvasW: fitWidth, canvasH: boundedHeight } : null,
+  ].filter((candidate): candidate is { canvasW: number; canvasH: number } => Boolean(candidate));
+
+  const bestFit = candidates.reduce<{ canvasW: number; canvasH: number } | null>(
+    (best, candidate) => {
+      if (!best) return candidate;
+      return candidate.canvasW * candidate.canvasH > best.canvasW * best.canvasH
+        ? candidate
+        : best;
+    },
+    null,
+  );
+
+  if (!bestFit || bestFit.canvasW < config.minWidth || bestFit.canvasH < config.minHeight) {
+    return { canvasW: config.minWidth, canvasH: config.minHeight };
+  }
+
+  return bestFit;
 }
 
 export function normalizeSectionInput(rawSections: unknown): RenderSectionInput[] {
@@ -196,7 +291,12 @@ function buildInputPlan(
   };
 }
 
-function buildOutputArgs(targetFps: number, outputPath: string): string[] {
+function buildOutputArgs(
+  targetFps: number,
+  outputPath: string,
+  exportVideoPreset: ExportVideoPreset,
+): string[] {
+  const config = getRenderVideoConfig(exportVideoPreset);
   return [
     '-r',
     String(targetFps),
@@ -205,13 +305,15 @@ function buildOutputArgs(targetFps: number, outputPath: string): string[] {
     '-c:v',
     'libx264',
     '-crf',
-    '12',
+    config.crf,
     '-preset',
-    'slow',
+    config.preset,
+    '-pix_fmt',
+    config.pixelFormat,
     '-c:a',
     'aac',
     '-b:a',
-    '192k',
+    config.audioBitrate,
     '-y',
     outputPath,
   ];
@@ -280,6 +382,7 @@ export async function renderComposite(
   const pipSize = Number.isFinite(Number(opts.pipSize)) ? Number(opts.pipSize) : 422;
   const screenFitMode = opts.screenFitMode === 'fit' ? 'fit' : 'fill';
   const exportAudioPreset = normalizeExportAudioPreset(opts.exportAudioPreset);
+  const exportVideoPreset = normalizeExportVideoPreset(opts.exportVideoPreset);
   const cameraSyncOffsetMs = normalizeCameraSyncOffsetMs(opts.cameraSyncOffsetMs);
   const sourceWidth = Number.isFinite(Number(opts.sourceWidth)) ? Number(opts.sourceWidth) : 1920;
   const sourceHeight = Number.isFinite(Number(opts.sourceHeight)) ? Number(opts.sourceHeight) : 1080;
@@ -299,8 +402,11 @@ export async function renderComposite(
   if (!ffmpegPath) throw new Error('ffmpeg-static is unavailable on this platform');
 
   const outputPath = path.join(outputFolder, `recording-${now()}-edited.mp4`);
-  const canvasW = 1920;
-  const canvasH = 1080;
+  const { canvasW, canvasH } = deriveRenderCanvasSize(
+    sourceWidth,
+    sourceHeight,
+    exportVideoPreset,
+  );
 
   const takeMap = new Map<string, { screenPath: string | null; cameraPath: string | null }>();
   for (const take of takes) {
@@ -353,15 +459,15 @@ export async function renderComposite(
 
     if (imageIdx >= 0) {
       const imageScale = screenFitMode === 'fill'
-        ? `scale=${canvasW}:${canvasH}:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH}`
-        : `scale=${canvasW}:${canvasH}:force_original_aspect_ratio=decrease,pad=${canvasW}:${canvasH}:(ow-iw)/2:(oh-ih)/2:black`;
+        ? `scale=${canvasW}:${canvasH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH}`
+        : `scale=${canvasW}:${canvasH}:flags=lanczos:force_original_aspect_ratio=decrease,pad=${canvasW}:${canvasH}:(ow-iw)/2:(oh-ih)/2:black`;
       filterParts.push(
         `[${imageIdx}:v]${imageScale},format=yuv420p,setpts=PTS-STARTPTS,setsar=1[sv${index}]`,
       );
     } else if (hasImageSections) {
       // Pre-scale video to canvas size so concat inputs match image sections
       filterParts.push(
-        `[${screenIdx}:v]trim=start=${start}:end=${end},setpts=PTS-STARTPTS,scale=${canvasW}:${canvasH}:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH},setsar=1[sv${index}]`,
+        `[${screenIdx}:v]trim=start=${start}:end=${end},setpts=PTS-STARTPTS,scale=${canvasW}:${canvasH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH},setsar=1[sv${index}]`,
       );
     } else {
       filterParts.push(
@@ -400,7 +506,7 @@ export async function renderComposite(
           ),
         );
       } else {
-        filterParts.push(`color=black:s=1920x1080:d=${duration}[cv${index}]`);
+        filterParts.push(`color=black:s=${canvasW}x${canvasH}:d=${duration}[cv${index}]`);
       }
     }
 
@@ -444,7 +550,7 @@ export async function renderComposite(
     '-map',
     `[${exportAudioLabel}]`,
   );
-  args.push(...buildOutputArgs(targetFps, outputPath));
+  args.push(...buildOutputArgs(targetFps, outputPath, exportVideoPreset));
 
   console.log('ffmpeg args:', args.join(' '));
 

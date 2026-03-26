@@ -230,9 +230,10 @@ Default to:
 ## Learned Workspace Facts
 
 - Cross-platform behavior matters for this app; avoid macOS-only assumptions in filesystem paths, dialogs, and project workflows.
-- Editor PiP and similar overlay positions are authored in a fixed 1920×1080 canvas space; export/ffmpeg composition should use that same coordinate space so preview and rendered output stay aligned.
+- Editor PiP and overlay positions are authored in a fixed 1920×1080 space; when export resolution is above 1080p (derived from source, capped at 2560×1440), scale PiP and overlay geometry proportionally so placement matches preview instead of reusing literal 1080p pixel offsets on a larger frame.
 - Same-screen system audio may require Electron display-media loopback (`getDisplayMedia` with main-process coordination); external capture-device paths are not a substitute for all desktop/window sources.
 - Screen and camera are separate capture/recorder pipelines; stop/save logic must tolerate independent outcomes so one stream cannot block finalization of the other.
 - Multi-section ffmpeg export should apply constant-FPS normalization after A/V concat/composition, not per-section before concat, so trimmed durations stay matched and export does not drift versus in-app preview.
 - Very long timelines with dense camera-overlay keyframes can produce extremely nested ffmpeg filter expressions that exceed parser limits and fail render; the overlay graph needs to stay bounded for long sessions.
 - `pnpm dev` runs the full build pipeline (clean, styles, main/preload compile, renderer bundle) then launches Electron; it is not a lightweight watch-only dev server unless that workflow is added separately.
+- Heavy H.264 screen exports (high resolution, high quality, dense UI detail) can stress QuickTime playback more than NLEs; explicit yuv420p and a compatible profile/level—and avoiding unnecessary output resolution—improves default macOS playback.

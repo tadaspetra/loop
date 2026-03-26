@@ -8,11 +8,16 @@ export const MIN_CAMERA_SYNC_OFFSET_MS = -2000;
 export const MAX_CAMERA_SYNC_OFFSET_MS = 2000;
 export const EXPORT_AUDIO_PRESET_OFF = 'off';
 export const EXPORT_AUDIO_PRESET_COMPRESSED = 'compressed';
+export const EXPORT_VIDEO_PRESET_FAST = 'fast';
+export const EXPORT_VIDEO_PRESET_QUALITY = 'quality';
 
 export type ScreenFitMode = 'fill' | 'fit';
 export type ExportAudioPreset =
   | typeof EXPORT_AUDIO_PRESET_OFF
   | typeof EXPORT_AUDIO_PRESET_COMPRESSED;
+export type ExportVideoPreset =
+  | typeof EXPORT_VIDEO_PRESET_FAST
+  | typeof EXPORT_VIDEO_PRESET_QUALITY;
 
 export interface Section {
   id: string;
@@ -45,6 +50,7 @@ export interface ProjectSettings {
   screenFitMode: ScreenFitMode;
   hideFromRecording: boolean;
   exportAudioPreset: ExportAudioPreset;
+  exportVideoPreset: ExportVideoPreset;
   cameraSyncOffsetMs: number;
 }
 
@@ -264,6 +270,12 @@ export function normalizeExportAudioPreset(value: unknown): ExportAudioPreset {
     : EXPORT_AUDIO_PRESET_COMPRESSED;
 }
 
+export function normalizeExportVideoPreset(value: unknown): ExportVideoPreset {
+  return value === EXPORT_VIDEO_PRESET_FAST
+    ? EXPORT_VIDEO_PRESET_FAST
+    : EXPORT_VIDEO_PRESET_QUALITY;
+}
+
 export function normalizeCameraSyncOffsetMs(value: unknown): number {
   const offset = Math.round(Number(value));
   if (!Number.isFinite(offset)) return 0;
@@ -284,6 +296,7 @@ export function createDefaultProject(name: unknown = 'Untitled Project'): Projec
       screenFitMode: 'fill',
       hideFromRecording: true,
       exportAudioPreset: EXPORT_AUDIO_PRESET_COMPRESSED,
+      exportVideoPreset: EXPORT_VIDEO_PRESET_QUALITY,
       cameraSyncOffsetMs: 0,
     },
     takes: [],
@@ -331,6 +344,9 @@ export function normalizeProjectData(
       hideFromRecording: rawSettings.hideFromRecording !== false,
       exportAudioPreset: normalizeExportAudioPreset(
         rawSettings.exportAudioPreset,
+      ),
+      exportVideoPreset: normalizeExportVideoPreset(
+        rawSettings.exportVideoPreset,
       ),
       cameraSyncOffsetMs: normalizeCameraSyncOffsetMs(
         rawSettings.cameraSyncOffsetMs,

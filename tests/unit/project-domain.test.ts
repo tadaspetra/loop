@@ -7,6 +7,7 @@ import {
   normalizeCameraSyncOffsetMs,
   normalizeKeyframes,
   normalizeProjectData,
+  normalizeExportVideoPreset,
   normalizeSections,
   sanitizeProjectName,
   toProjectAbsolutePath,
@@ -93,6 +94,7 @@ describe('shared/domain/project', () => {
     expect(project.settings.screenFitMode).toBe('fill');
     expect(project.settings.hideFromRecording).toBe(true);
     expect(project.settings.exportAudioPreset).toBe('compressed');
+    expect(project.settings.exportVideoPreset).toBe('quality');
   });
 
   test('normalizeProjectData preserves valid export audio preset and falls back invalid values', () => {
@@ -116,6 +118,35 @@ describe('shared/domain/project', () => {
     expect(compressedProject.settings.exportAudioPreset).toBe('compressed');
     expect(fallbackProject.settings.exportAudioPreset).toBe('compressed');
     expect(createDefaultProject('Demo').settings.exportAudioPreset).toBe('compressed');
+  });
+
+  test('normalizeExportVideoPreset preserves fast and falls back to quality', () => {
+    expect(normalizeExportVideoPreset('fast')).toBe('fast');
+    expect(normalizeExportVideoPreset('quality')).toBe('quality');
+    expect(normalizeExportVideoPreset('turbo')).toBe('quality');
+    expect(createDefaultProject('Demo').settings.exportVideoPreset).toBe('quality');
+  });
+
+  test('normalizeProjectData preserves valid export video preset and falls back invalid values', () => {
+    const fastProject = normalizeProjectData(
+      {
+        settings: {
+          exportVideoPreset: 'fast'
+        }
+      },
+      '/tmp/my-project'
+    );
+    const fallbackProject = normalizeProjectData(
+      {
+        settings: {
+          exportVideoPreset: 'draft'
+        }
+      },
+      '/tmp/my-project'
+    );
+
+    expect(fastProject.settings.exportVideoPreset).toBe('fast');
+    expect(fallbackProject.settings.exportVideoPreset).toBe('quality');
   });
 
   test('normalizeCameraSyncOffsetMs rounds and clamps camera sync offset values', () => {

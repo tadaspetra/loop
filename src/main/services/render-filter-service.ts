@@ -1,6 +1,8 @@
 import type { Keyframe, ScreenFitMode } from '../../shared/domain/project';
 
 export const TRANSITION_DURATION = 0.3;
+const AUTHORING_CANVAS_W = 1920;
+const AUTHORING_CANVAS_H = 1080;
 
 interface KeyframeProp extends Keyframe {
   backgroundFocusX?: number;
@@ -22,10 +24,15 @@ function collapseConsecutiveKeyframes<T extends Keyframe>(
   return collapsed;
 }
 
-export function resolveOutputSize(sourceWidth: number, _sourceHeight: number) {
-  const outW = sourceWidth % 2 === 0 ? sourceWidth : sourceWidth - 1;
-  let outH = Math.round((outW * 9) / 16);
-  if (outH % 2 !== 0) outH -= 1;
+function roundToEven(value: number): number {
+  const rounded = Math.round(value);
+  if (rounded <= 2) return 2;
+  return rounded % 2 === 0 ? rounded : rounded - 1;
+}
+
+export function resolveOutputSize(sourceWidth: number, sourceHeight: number) {
+  const outW = roundToEven(sourceWidth);
+  const outH = roundToEven(sourceHeight);
   return { outW, outH };
 }
 
@@ -233,8 +240,8 @@ export function buildScreenFilter(
   );
 
   const baseFilter = screenFitMode === 'fill'
-    ? `[0:v]scale=${outW}:${outH}:force_original_aspect_ratio=increase,crop=${outW}:${outH}[screen_base]`
-    : `[0:v]scale=${outW}:${outH}:force_original_aspect_ratio=decrease,pad=${outW}:${outH}:'(ow-iw)/2':'(oh-ih)/2':color=black[screen_base]`;
+    ? `[0:v]scale=${outW}:${outH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${outW}:${outH}[screen_base]`
+    : `[0:v]scale=${outW}:${outH}:flags=lanczos:force_original_aspect_ratio=decrease,pad=${outW}:${outH}:'(ow-iw)/2':'(oh-ih)/2':color=black[screen_base]`;
 
   const hasBackgroundAnimation = normalizedKeyframes.some((keyframe) => {
     return (
@@ -284,18 +291,21 @@ export function buildFilterComplex(
   targetFps = 30,
 ): string {
   const { outW, outH } = resolveOutputSize(canvasW, canvasH);
+  const scaleX = outW / AUTHORING_CANVAS_W;
+  const scaleY = outH / AUTHORING_CANVAS_H;
 
   // Compose in the same fixed canvas space as the editor preview so exported
   // screen fit, PiP size, and PiP coordinates match authored values exactly.
-  const actualPipSize = Math.round(pipSize);
-  const radius = 12;
+  // Larger exports scale authored overlay geometry proportionally.
+  const actualPipSize = roundToEven(pipSize * scaleX);
+  const radius = Math.max(1, Math.round(12 * scaleX));
   const maxCoord = actualPipSize - 1 - radius;
   const radiusSquared = radius * radius;
 
   const scaledKeyframes = keyframes.map((keyframe) => ({
     ...keyframe,
-    pipX: Math.round(keyframe.pipX),
-    pipY: Math.round(keyframe.pipY),
+    pipX: Math.round(keyframe.pipX * scaleX),
+    pipY: Math.round(keyframe.pipY * scaleY),
   }));
 
   const screenFilter = buildScreenFilter(
@@ -318,7 +328,7 @@ export function buildFilterComplex(
     const camPipFilter = `[cam1]setpts=PTS-STARTPTS,crop='min(iw,ih)':'min(iw,ih)':'(iw-min(iw,ih))/2':'(ih-min(iw,ih))/2',scale=${actualPipSize}:${actualPipSize},format=yuva420p,geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='255*${roundCornerExpr}*(${alphaExpr})'[cam]`;
 
     const camFullAlpha = buildCamFullAlphaExpr(keyframes);
-    const camFullFilter = `[cam2]setpts=PTS-STARTPTS,scale=${outW}:${outH}:force_original_aspect_ratio=increase,crop=${outW}:${outH},format=yuva420p,geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='255*(${camFullAlpha})'[camfull]`;
+    const camFullFilter = `[cam2]setpts=PTS-STARTPTS,scale=${outW}:${outH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${outW}:${outH},format=yuva420p,geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='255*(${camFullAlpha})'[camfull]`;
 
     const xExpr = buildPosExpr(scaledKeyframes, 'pipX');
     const yExpr = buildPosExpr(scaledKeyframes, 'pipY');
@@ -328,7 +338,7 @@ export function buildFilterComplex(
 
   if (hasCamFull) {
     const camFullAlpha = buildCamFullAlphaExpr(keyframes);
-    const camFullFilter = `[1:v]setpts=PTS-STARTPTS,scale=${outW}:${outH}:force_original_aspect_ratio=increase,crop=${outW}:${outH},format=yuva420p,geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='255*(${camFullAlpha})'[camfull]`;
+    const camFullFilter = `[1:v]setpts=PTS-STARTPTS,scale=${outW}:${outH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${outW}:${outH},format=yuva420p,geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='255*(${camFullAlpha})'[camfull]`;
     return `${screenFilter};${camFullFilter};[screen][camfull]overlay=0:0:format=auto[out]`;
   }
 

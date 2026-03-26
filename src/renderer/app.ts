@@ -54,6 +54,8 @@ import {
     const switchProjectBtn = document.getElementById('switchProjectBtn');
     const exportAudioPresetControl = document.getElementById('exportAudioPresetControl');
     const exportAudioPresetSelect = document.getElementById('exportAudioPreset');
+    const exportVideoPresetControl = document.getElementById('exportVideoPresetControl');
+    const exportVideoPresetSelect = document.getElementById('exportVideoPreset');
     const cameraSyncOffsetControl = document.getElementById('cameraSyncOffsetControl');
     const cameraSyncOffsetInput = document.getElementById('cameraSyncOffsetMs');
 
@@ -180,6 +182,8 @@ import {
     const MAX_SECTION_PAN = 1;
     const EXPORT_AUDIO_PRESET_OFF = 'off';
     const EXPORT_AUDIO_PRESET_COMPRESSED = 'compressed';
+    const EXPORT_VIDEO_PRESET_FAST = 'fast';
+    const EXPORT_VIDEO_PRESET_QUALITY = 'quality';
 
     function snapToNearestCorner(cursorX, cursorY) {
       const midX = CANVAS_W / 2;
@@ -210,6 +214,12 @@ import {
       return value === EXPORT_AUDIO_PRESET_OFF
         ? EXPORT_AUDIO_PRESET_OFF
         : EXPORT_AUDIO_PRESET_COMPRESSED;
+    }
+
+    function normalizeExportVideoPreset(value) {
+      return value === EXPORT_VIDEO_PRESET_FAST
+        ? EXPORT_VIDEO_PRESET_FAST
+        : EXPORT_VIDEO_PRESET_QUALITY;
     }
 
     function getZoomCropBounds(zoom) {
@@ -417,6 +427,8 @@ import {
       cameraSyncOffsetControl.classList.toggle('flex', showTimelineTools);
       exportAudioPresetControl.classList.toggle('hidden', !showTimelineTools);
       exportAudioPresetControl.classList.toggle('flex', showTimelineTools);
+      exportVideoPresetControl.classList.toggle('hidden', !showTimelineTools);
+      exportVideoPresetControl.classList.toggle('flex', showTimelineTools);
       editorRenderBtn.classList.toggle('hidden', !showTimelineTools);
     }
 
@@ -548,6 +560,7 @@ import {
           screenFitMode: screenFitSelect.value || 'fill',
           hideFromRecording: hideFromRecording === 'true',
           exportAudioPreset: normalizeExportAudioPreset(exportAudioPresetSelect.value),
+          exportVideoPreset: normalizeExportVideoPreset(exportVideoPresetSelect.value),
           cameraSyncOffsetMs: normalizeCameraSyncOffsetMs(cameraSyncOffsetInput.value)
         },
         timeline: getProjectTimelineSnapshot()
@@ -779,6 +792,7 @@ import {
       screenFitSelect.value = project.settings?.screenFitMode === 'fit' ? 'fit' : 'fill';
       hideFromRecording = project.settings?.hideFromRecording === false ? 'false' : 'true';
       exportAudioPresetSelect.value = normalizeExportAudioPreset(project.settings?.exportAudioPreset);
+      exportVideoPresetSelect.value = normalizeExportVideoPreset(project.settings?.exportVideoPreset);
       cameraSyncOffsetInput.value = String(normalizeCameraSyncOffsetMs(project.settings?.cameraSyncOffsetMs));
       await syncContentProtection();
 
@@ -3520,6 +3534,7 @@ import {
           pipSize: editorState.pipSize,
           screenFitMode: editorState.screenFitMode,
           exportAudioPreset: normalizeExportAudioPreset(exportAudioPresetSelect.value),
+          exportVideoPreset: normalizeExportVideoPreset(exportVideoPresetSelect.value),
           cameraSyncOffsetMs: editorState.cameraSyncOffsetMs,
           sourceWidth: editorState.sourceWidth || CANVAS_W,
           sourceHeight: editorState.sourceHeight || CANVAS_H,
@@ -3705,6 +3720,14 @@ import {
       exportAudioPresetSelect.value = normalizeExportAudioPreset(exportAudioPresetSelect.value);
       if (activeProject?.settings) {
         activeProject.settings.exportAudioPreset = exportAudioPresetSelect.value;
+      }
+      scheduleProjectSave();
+    });
+
+    exportVideoPresetSelect.addEventListener('change', () => {
+      exportVideoPresetSelect.value = normalizeExportVideoPreset(exportVideoPresetSelect.value);
+      if (activeProject?.settings) {
+        activeProject.settings.exportVideoPreset = exportVideoPresetSelect.value;
       }
       scheduleProjectSave();
     });

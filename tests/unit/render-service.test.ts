@@ -140,15 +140,69 @@ describe('main/services/render-service', () => {
         '-c:v',
         'libx264',
         '-crf',
-        '12',
+        '8',
         '-preset',
         'slow',
+        '-pix_fmt',
+        'yuv420p',
         '-c:a',
         'aac',
         '-b:a',
         '192k'
       ])
     );
+  });
+
+  test('renderComposite uses fast export preset for faster sanity-check renders', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-fast-preset-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    const cameraPath = path.join(tmpDir, 'camera.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+    fs.writeFileSync(cameraPath, 'camera', 'utf8');
+
+    const execCalls: { bin: string; args: string[] }[] = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        takes: [{ id: 'take-1', screenPath, cameraPath }],
+        sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.0 }],
+        keyframes: [{ time: 0, pipX: 1478, pipY: 638, pipVisible: true, cameraFullscreen: false }] as Keyframe[],
+        pipSize: 422,
+        sourceWidth: 3840,
+        sourceHeight: 2160,
+        screenFitMode: 'fill',
+        exportVideoPreset: 'fast'
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 124,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
+          execCalls.push({ bin: ffmpegPath, args });
+        })
+      }
+    );
+
+    expect(execCalls[0].args).toEqual(
+      expect.arrayContaining([
+        '-c:v',
+        'libx264',
+        '-crf',
+        '24',
+        '-preset',
+        'veryfast',
+        '-pix_fmt',
+        'yuv420p',
+        '-b:a',
+        '128k'
+      ])
+    );
+
+    const argString = execCalls[0].args.join(' ');
+    expect(argString).toContain('scale=1280:720:flags=lanczos:force_original_aspect_ratio=increase,crop=1280:720[screen]');
+    expect(argString).toContain('scale=280:280');
+    expect(argString).toContain("overlay=x='985':y='425'");
   });
 
   test('renderComposite keeps default audio mapping when export audio preset is off', async () => {
@@ -253,9 +307,78 @@ describe('main/services/render-service', () => {
     );
 
     const argString = execCalls[0].args.join(' ');
-    expect(argString).toContain("[screen_raw]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080[screen_base];[screen_base]zoompan=z='2.000'");
+    expect(argString).toContain("[screen_raw]scale=1920:1080:flags=lanczos:force_original_aspect_ratio=increase,crop=1920:1080[screen_base];[screen_base]zoompan=z='2.000'");
     expect(argString).toContain('[1:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS[cv0]');
     expect(argString).not.toContain('scale=3840:2160,crop=1920:1080:960:540[cv0]');
+  });
+
+  test('renderComposite caps larger sources at 1440p and scales pip layout', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-4k-export-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    const cameraPath = path.join(tmpDir, 'camera.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+    fs.writeFileSync(cameraPath, 'camera', 'utf8');
+
+    const execCalls: { bin: string; args: string[] }[] = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        takes: [{ id: 'take-1', screenPath, cameraPath }],
+        sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.0 }],
+        keyframes: [{ time: 0, pipX: 1478, pipY: 638, pipVisible: true, cameraFullscreen: false }] as Keyframe[],
+        pipSize: 422,
+        sourceWidth: 3840,
+        sourceHeight: 2160,
+        screenFitMode: 'fill'
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 457,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
+          execCalls.push({ bin: ffmpegPath, args });
+        })
+      }
+    );
+
+    const argString = execCalls[0].args.join(' ');
+    expect(argString).toContain('scale=2560:1440:flags=lanczos:force_original_aspect_ratio=increase,crop=2560:1440[screen]');
+    expect(argString).toContain('scale=562:562');
+    expect(argString).toContain("overlay=x='1971':y='851'");
+  });
+
+  test('renderComposite keeps minimum 1080p export for smaller sources', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-min-1080p-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+
+    const execCalls: { bin: string; args: string[] }[] = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        takes: [{ id: 'take-1', screenPath, cameraPath: null }],
+        sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.0 }],
+        keyframes: [{ time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }] as Keyframe[],
+        pipSize: 300,
+        sourceWidth: 1510,
+        sourceHeight: 982,
+        screenFitMode: 'fill'
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 458,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
+          execCalls.push({ bin: ffmpegPath, args });
+        })
+      }
+    );
+
+    const argString = execCalls[0].args.join(' ');
+    expect(argString).toContain('scale=1920:1080:flags=lanczos:force_original_aspect_ratio=increase,crop=1920:1080[out]');
+    expect(argString).not.toContain('scale=1510:982');
   });
 
   test('renderComposite advances camera video when camera sync offset is positive', async () => {
