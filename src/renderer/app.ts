@@ -19,7 +19,9 @@ import {
 import {
   generateSectionId,
   reindexSections,
-  buildSplitAnchorKeyframe
+  buildSplitAnchorKeyframe,
+  moveSectionToIndex,
+  moveSectionsToIndex
 } from './features/timeline/keyframe-ops';
 import {
   computePlaybackSeekPlan,
@@ -289,6 +291,7 @@ import {
     let waveformPeaks = null;
     let timelineZoom = 1;
     let trimDragState = null;
+    let sectionDragState = null;
     let sectionZoomDragActive = false;
     let draggingBackground = false;
     let backgroundDragMoved = false;
@@ -664,6 +667,7 @@ import {
         sections: editorState.sections.map(s => ({ ...s })),
         keyframes: editorState.keyframes.map(kf => ({ ...kf })),
         selectedSectionId: editorState.selectedSectionId,
+        selectedSectionIds: new Set(editorState.selectedSectionIds || []),
         duration: editorState.duration
       };
     }
@@ -672,6 +676,7 @@ import {
       editorState.sections = snapshot.sections;
       editorState.keyframes = snapshot.keyframes;
       editorState.selectedSectionId = snapshot.selectedSectionId;
+      editorState.selectedSectionIds = snapshot.selectedSectionIds || new Set([snapshot.selectedSectionId].filter(Boolean));
       editorState.duration = snapshot.duration;
       recalculateTimelinePositions();
       syncSectionAnchorKeyframes();
@@ -946,11 +951,26 @@ import {
       }
     }
 
-    function selectEditorSection(sectionId) {
+    function selectEditorSection(sectionId, shiftKey) {
       if (!editorState || !editorState.sections || editorState.sections.length === 0) return;
       if (!editorState.sections.some(section => section.id === sectionId)) return;
       commitSectionZoomChange();
-      editorState.selectedSectionId = sectionId;
+
+      if (shiftKey && editorState.selectedSectionId) {
+        const anchorIndex = editorState.sections.findIndex(s => s.id === editorState.selectedSectionId);
+        const targetIndex = editorState.sections.findIndex(s => s.id === sectionId);
+        if (anchorIndex >= 0 && targetIndex >= 0) {
+          const lo = Math.min(anchorIndex, targetIndex);
+          const hi = Math.max(anchorIndex, targetIndex);
+          editorState.selectedSectionIds = new Set(
+            editorState.sections.slice(lo, hi + 1).map(s => s.id)
+          );
+        }
+      } else {
+        editorState.selectedSectionId = sectionId;
+        editorState.selectedSectionIds = new Set([sectionId]);
+      }
+
       renderSectionMarkers();
       updateSectionZoomControls();
       updateEditorTimeDisplay();
@@ -1031,7 +1051,8 @@ import {
 
       editorSectionTranscriptList.innerHTML = '';
       for (const section of editorState.sections) {
-        const selected = section.id === editorState.selectedSectionId;
+        const inSelection = editorState.selectedSectionIds?.has(section.id);
+        const selected = inSelection || section.id === editorState.selectedSectionId;
         const transcript = normalizeTranscriptText(section.transcript);
 
         const row = document.createElement('button');
@@ -1159,7 +1180,8 @@ import {
       for (const section of editorState.sections) {
         const sectionStart = (section.start / editorState.duration) * 100;
         const sectionWidth = Math.max(0.35, ((section.end - section.start) / editorState.duration) * 100);
-        const selected = section.id === editorState.selectedSectionId;
+        const inSelection = editorState.selectedSectionIds?.has(section.id);
+        const selected = inSelection || section.id === editorState.selectedSectionId;
         const hasImage = !!section.imagePath;
         const baseColor = hasImage
           ? (section.index % 2 === 0 ? 'rgba(76,29,149,0.45)' : 'rgba(88,28,135,0.4)')
@@ -1232,7 +1254,8 @@ import {
 
         const sectionStart = (section.start / editorState.duration) * 100;
         const sectionWidth = Math.max(0.35, ((section.end - section.start) / editorState.duration) * 100);
-        const selected = section.id === editorState.selectedSectionId;
+        const inSelection = editorState.selectedSectionIds?.has(section.id);
+        const selected = inSelection || section.id === editorState.selectedSectionId;
 
         const band = document.createElement('div');
         band.className = 'absolute top-0 bottom-0';
@@ -2676,6 +2699,7 @@ import {
         keyframes,
         sections,
         selectedSectionId: opts.selectedSectionId || sections[0]?.id || null,
+        selectedSectionIds: new Set([opts.selectedSectionId || sections[0]?.id || null].filter(Boolean)),
         screenFitMode: opts.screenFitMode || screenFitSelect.value,
         rendering: false,
         renderProgress: 0,
@@ -3339,16 +3363,59 @@ import {
 
     editorTimeline.addEventListener('mousedown', (e) => {
       if (!editorState || editorState.rendering) return;
+
+      const isSelected = (id) => editorState.selectedSectionIds?.has(id) || id === editorState.selectedSectionId;
+
+      // Trim handles only work on already-selected sections
       const trimEdge = e.target?.dataset?.trimEdge;
       if (trimEdge) {
         const trimSectionId = e.target.dataset.sectionId;
-        if (trimSectionId) {
+        if (trimSectionId && isSelected(trimSectionId)) {
           startTrimDrag(e, trimSectionId, trimEdge);
           return;
         }
+        // Clicked trim handle on unselected section — just select it
+        if (trimSectionId) {
+          selectEditorSection(trimSectionId);
+          return;
+        }
       }
-      const sectionId = e.target && e.target.dataset ? e.target.dataset.sectionId : null;
-      if (sectionId) selectEditorSection(sectionId);
+
+      const bandEl = e.target?.closest?.('[data-section-id]');
+      const sectionId = bandEl?.dataset?.sectionId || null;
+
+      if (sectionId) {
+        // Shift-click: range select, no drag
+        if (e.shiftKey) {
+          selectEditorSection(sectionId, true);
+          return;
+        }
+
+        // Click on section: select if needed, then set up potential drag
+        if (!isSelected(sectionId)) {
+          selectEditorSection(sectionId);
+        }
+
+        if (editorState.sections.length > 1) {
+          sectionDragState = {
+            sectionId,
+            startX: e.clientX,
+            started: false,
+            dropIndicator: null
+          };
+          const onMove = (e2) => updateSectionDrag(e2);
+          const onUp = (e2) => {
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+            finishSectionDrag(e2);
+          };
+          window.addEventListener('mousemove', onMove);
+          window.addEventListener('mouseup', onUp);
+        }
+        return;
+      }
+
+      // Background click: seek
       seekFromTimeline(e);
       const onMove = (e2) => seekFromTimeline(e2);
       const onUp = () => {
@@ -3363,6 +3430,106 @@ import {
       const rect = editorTimeline.getBoundingClientRect();
       const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
       editorSeek(pct * editorState.duration);
+    }
+
+    const SECTION_DRAG_THRESHOLD = 5;
+
+    function getDragSelectedIds() {
+      if (!editorState) return new Set();
+      const ids = editorState.selectedSectionIds;
+      if (ids && ids.size > 0) return ids;
+      if (editorState.selectedSectionId) return new Set([editorState.selectedSectionId]);
+      return new Set();
+    }
+
+    function computeDropTarget(clientX) {
+      const dragIds = getDragSelectedIds();
+      const remaining = editorState.sections.filter(s => !dragIds.has(s.id));
+      const bands = Array.from(editorSectionMarkers.querySelectorAll('[data-section-id]'));
+
+      let slotIndex = 0;
+      for (const section of remaining) {
+        const band = bands.find(b => b.dataset.sectionId === section.id);
+        if (!band) { slotIndex++; continue; }
+        const rect = band.getBoundingClientRect();
+        if (clientX < rect.left + rect.width / 2) {
+          return { insertIndex: slotIndex, section };
+        }
+        slotIndex++;
+      }
+      return { insertIndex: remaining.length, section: null };
+    }
+
+    function showDropIndicator(target) {
+      removeDropIndicator();
+      if (!editorState || editorState.sections.length === 0) return;
+      const indicator = document.createElement('div');
+      indicator.className = 'section-drop-indicator';
+      indicator.style.cssText = 'position:absolute;top:0;bottom:0;width:3px;background:rgba(59,130,246,0.9);z-index:40;pointer-events:none;border-radius:1px;box-shadow:0 0 6px rgba(59,130,246,0.5);';
+
+      if (target.section) {
+        const pct = (target.section.start / editorState.duration) * 100;
+        indicator.style.left = pct + '%';
+      } else {
+        // After all remaining sections — show at the end
+        indicator.style.right = '0';
+      }
+      indicator.style.transform = 'translateX(-1.5px)';
+      editorSectionMarkers.appendChild(indicator);
+      if (sectionDragState) sectionDragState.dropIndicator = indicator;
+    }
+
+    function removeDropIndicator() {
+      if (sectionDragState?.dropIndicator) {
+        sectionDragState.dropIndicator.remove();
+        sectionDragState.dropIndicator = null;
+      }
+      editorSectionMarkers.querySelectorAll('.section-drop-indicator').forEach(el => el.remove());
+    }
+
+    function updateSectionDrag(e) {
+      if (!sectionDragState || !editorState) return;
+      const dx = Math.abs(e.clientX - sectionDragState.startX);
+      if (!sectionDragState.started && dx < SECTION_DRAG_THRESHOLD) return;
+      if (!sectionDragState.started) {
+        sectionDragState.started = true;
+        document.body.style.cursor = 'grabbing';
+      }
+      e.preventDefault();
+      showDropIndicator(computeDropTarget(e.clientX));
+    }
+
+    function finishSectionDrag(e) {
+      if (!sectionDragState || !editorState) { sectionDragState = null; return; }
+      const wasDrag = sectionDragState.started;
+      removeDropIndicator();
+      document.body.style.cursor = '';
+      if (!wasDrag) {
+        seekFromTimeline(e);
+        sectionDragState = null;
+        return;
+      }
+      const { insertIndex } = computeDropTarget(e.clientX);
+      const dragIds = getDragSelectedIds();
+      sectionDragState = null;
+
+      pushUndo();
+      const moved = dragIds.size > 1
+        ? moveSectionsToIndex(editorState.sections, dragIds, insertIndex)
+        : moveSectionToIndex(
+            editorState.sections,
+            editorState.sections.findIndex(s => dragIds.has(s.id)),
+            insertIndex >= editorState.sections.length ? editorState.sections.length - 1 : insertIndex
+          );
+      if (!moved) { undoStack.pop(); updateUndoRedoButtons(); return; }
+      recalculateTimelinePositions();
+      syncSectionAnchorKeyframes();
+      renderSectionMarkers();
+      refreshWaveform();
+      // Seek to the start of the first moved section
+      const firstMoved = editorState.sections.find(s => dragIds.has(s.id));
+      editorSeek(firstMoved?.start || 0);
+      scheduleProjectSave();
     }
 
     function applyTimelineZoom(newZoom, pivotClientX) {

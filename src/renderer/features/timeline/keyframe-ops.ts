@@ -34,6 +34,64 @@ export function reindexSections(
 }
 
 /**
+ * Move a section from one array position to another.
+ * Mutates the array in place and reindexes.
+ * Returns true if the move was performed.
+ */
+export function moveSectionToIndex(
+  sections: Array<{ id: string; index: number; label: string }>,
+  fromIndex: number,
+  toIndex: number,
+): boolean {
+  if (fromIndex < 0 || fromIndex >= sections.length) return false;
+  if (toIndex < 0 || toIndex >= sections.length) return false;
+  if (fromIndex === toIndex) return false;
+
+  const [moved] = sections.splice(fromIndex, 1);
+  sections.splice(toIndex, 0, moved);
+  reindexSections(sections);
+  return true;
+}
+
+/**
+ * Move a group of sections to a new position among the remaining sections.
+ * `insertBefore` is the index in the non-selected sections where the group
+ * should be inserted (0 = before all remaining, remaining.length = after all).
+ * Mutates the array in place and reindexes.
+ * Returns true if the order changed.
+ */
+export function moveSectionsToIndex(
+  sections: Array<{ id: string; index: number; label: string }>,
+  selectedIds: Set<string>,
+  insertBefore: number,
+): boolean {
+  if (selectedIds.size === 0) return false;
+
+  const selected: typeof sections = [];
+  const remaining: typeof sections = [];
+  for (const s of sections) {
+    if (selectedIds.has(s.id)) selected.push(s);
+    else remaining.push(s);
+  }
+
+  if (selected.length === 0 || remaining.length === 0) return false;
+
+  const clamped = Math.max(0, Math.min(insertBefore, remaining.length));
+  const result = [
+    ...remaining.slice(0, clamped),
+    ...selected,
+    ...remaining.slice(clamped),
+  ];
+
+  if (result.every((s, i) => s.id === sections[i].id)) return false;
+
+  sections.length = 0;
+  sections.push(...result);
+  reindexSections(sections);
+  return true;
+}
+
+/**
  * Create an anchor keyframe for a split-off section,
  * inheriting camera state from the parent section's anchor.
  */

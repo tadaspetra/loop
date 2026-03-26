@@ -3,6 +3,8 @@ import { describe, expect, test } from 'vitest';
 import {
   buildSplitAnchorKeyframe,
   generateSectionId,
+  moveSectionToIndex,
+  moveSectionsToIndex,
   reindexSections
 } from '../../src/renderer/features/timeline/keyframe-ops';
 import type { Keyframe } from '../../src/shared/domain/project';
@@ -31,6 +33,139 @@ describe('keyframe-ops', () => {
       expect(sections[1].id).toBe('custom-def');
       expect(sections[1].index).toBe(1);
       expect(sections[1].label).toBe('Section 2');
+    });
+  });
+
+  describe('moveSectionToIndex', () => {
+    function makeSections(count: number) {
+      return Array.from({ length: count }, (_, i) => ({
+        id: `s-${i + 1}`,
+        index: i,
+        label: `Section ${i + 1}`,
+      }));
+    }
+
+    test('moves section forward in array', () => {
+      const sections = makeSections(4);
+      const result = moveSectionToIndex(sections, 0, 2);
+      expect(result).toBe(true);
+      expect(sections.map(s => s.id)).toEqual(['s-2', 's-3', 's-1', 's-4']);
+      expect(sections[0].index).toBe(0);
+      expect(sections[0].label).toBe('Section 1');
+      expect(sections[2].index).toBe(2);
+      expect(sections[2].label).toBe('Section 3');
+    });
+
+    test('moves section backward in array', () => {
+      const sections = makeSections(4);
+      const result = moveSectionToIndex(sections, 3, 1);
+      expect(result).toBe(true);
+      expect(sections.map(s => s.id)).toEqual(['s-1', 's-4', 's-2', 's-3']);
+    });
+
+    test('returns false for same position', () => {
+      const sections = makeSections(3);
+      expect(moveSectionToIndex(sections, 1, 1)).toBe(false);
+      expect(sections.map(s => s.id)).toEqual(['s-1', 's-2', 's-3']);
+    });
+
+    test('returns false for out of bounds indices', () => {
+      const sections = makeSections(3);
+      expect(moveSectionToIndex(sections, -1, 1)).toBe(false);
+      expect(moveSectionToIndex(sections, 1, 5)).toBe(false);
+      expect(moveSectionToIndex(sections, 3, 0)).toBe(false);
+    });
+
+    test('handles move to first position', () => {
+      const sections = makeSections(3);
+      moveSectionToIndex(sections, 2, 0);
+      expect(sections.map(s => s.id)).toEqual(['s-3', 's-1', 's-2']);
+      expect(sections[0].label).toBe('Section 1');
+    });
+
+    test('handles move to last position', () => {
+      const sections = makeSections(3);
+      moveSectionToIndex(sections, 0, 2);
+      expect(sections.map(s => s.id)).toEqual(['s-2', 's-3', 's-1']);
+      expect(sections[2].label).toBe('Section 3');
+    });
+
+    test('preserves section IDs', () => {
+      const sections = makeSections(4);
+      const originalIds = sections.map(s => s.id);
+      moveSectionToIndex(sections, 1, 3);
+      const newIds = sections.map(s => s.id);
+      expect(newIds.sort()).toEqual(originalIds.sort());
+    });
+
+    test('works with two sections', () => {
+      const sections = makeSections(2);
+      moveSectionToIndex(sections, 0, 1);
+      expect(sections.map(s => s.id)).toEqual(['s-2', 's-1']);
+    });
+  });
+
+  describe('moveSectionsToIndex', () => {
+    function makeSections(count: number) {
+      return Array.from({ length: count }, (_, i) => ({
+        id: `s-${i + 1}`,
+        index: i,
+        label: `Section ${i + 1}`,
+      }));
+    }
+
+    test('moves a group of sections to the beginning', () => {
+      const sections = makeSections(5);
+      const result = moveSectionsToIndex(sections, new Set(['s-3', 's-4']), 0);
+      expect(result).toBe(true);
+      expect(sections.map(s => s.id)).toEqual(['s-3', 's-4', 's-1', 's-2', 's-5']);
+    });
+
+    test('moves a group of sections to the end', () => {
+      const sections = makeSections(5);
+      const result = moveSectionsToIndex(sections, new Set(['s-2', 's-3']), 3);
+      expect(result).toBe(true);
+      expect(sections.map(s => s.id)).toEqual(['s-1', 's-4', 's-5', 's-2', 's-3']);
+    });
+
+    test('moves non-contiguous sections preserving their relative order', () => {
+      const sections = makeSections(5);
+      const result = moveSectionsToIndex(sections, new Set(['s-1', 's-4']), 2);
+      expect(result).toBe(true);
+      expect(sections.map(s => s.id)).toEqual(['s-2', 's-3', 's-1', 's-4', 's-5']);
+    });
+
+    test('returns false when order does not change', () => {
+      const sections = makeSections(4);
+      // s-2, s-3 are already at insert position 1 among remaining [s-1, s-4]
+      const result = moveSectionsToIndex(sections, new Set(['s-2', 's-3']), 1);
+      expect(result).toBe(false);
+      expect(sections.map(s => s.id)).toEqual(['s-1', 's-2', 's-3', 's-4']);
+    });
+
+    test('returns false for empty selectedIds', () => {
+      const sections = makeSections(3);
+      expect(moveSectionsToIndex(sections, new Set(), 0)).toBe(false);
+    });
+
+    test('returns false when all sections are selected', () => {
+      const sections = makeSections(3);
+      expect(moveSectionsToIndex(sections, new Set(['s-1', 's-2', 's-3']), 0)).toBe(false);
+    });
+
+    test('clamps insertBefore to valid range', () => {
+      const sections = makeSections(4);
+      moveSectionsToIndex(sections, new Set(['s-1']), 99);
+      expect(sections.map(s => s.id)).toEqual(['s-2', 's-3', 's-4', 's-1']);
+    });
+
+    test('reindexes sections after move', () => {
+      const sections = makeSections(4);
+      moveSectionsToIndex(sections, new Set(['s-4']), 0);
+      expect(sections[0].index).toBe(0);
+      expect(sections[0].label).toBe('Section 1');
+      expect(sections[3].index).toBe(3);
+      expect(sections[3].label).toBe('Section 4');
     });
   });
 
