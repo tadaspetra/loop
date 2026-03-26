@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; media-src 'self' blob: file:; connect-src 'self' blob: file: wss://api.elevenlabs.io" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' file:; media-src 'self' blob: file:; connect-src 'self' blob: file: wss://api.elevenlabs.io" />
   <link rel="stylesheet" href="./renderer/styles/main.css" />
   <title>loop</title>
 </head>
@@ -192,7 +192,7 @@
         <div id="editorTimelineWrapper" class="flex-1 overflow-x-auto overflow-y-hidden">
           <div id="editorTimeline" class="relative cursor-pointer select-none" style="min-width: 100%">
             <!-- Screen track -->
-            <div class="relative h-8 bg-neutral-900 overflow-hidden">
+            <div id="editorScreenTrack" class="relative h-8 bg-neutral-900 overflow-hidden">
               <div id="editorSectionMarkers" class="absolute inset-0 z-[1]"></div>
             </div>
             <!-- Camera track -->
@@ -217,6 +217,7 @@
         <button id="editorSplitBtn" title="S" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Split</button>
         <button id="editorToggleCamBtn" title="C" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Camera</button>
         <button id="editorCamFullBtn" title="F" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Fullscreen</button>
+        <button id="editorImageBtn" title="I" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Image</button>
         <div class="flex items-center gap-2 px-2 py-1 border border-neutral-800 rounded-lg bg-neutral-900">
           <label for="editorBgZoomInput" class="text-xs text-neutral-400">Zoom</label>
           <input id="editorBgZoomInput" type="range" min="1" max="3" step="0.05" value="1"
@@ -227,7 +228,7 @@
         <button id="editorApplyFutureBtn" class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors">Apply to Future</button>
       </div>
       <div class="text-[11px] text-neutral-600 text-center">
-        <span class="text-neutral-500">⌘Z</span> undo · <span class="text-neutral-500">⇧⌘Z</span> redo · <span class="text-neutral-500">Space</span> play · <span class="text-neutral-500">L</span> speed · <span class="text-neutral-500">S</span> split · <span class="text-neutral-500">C</span> camera · <span class="text-neutral-500">F</span> fullscreen · <span class="text-neutral-500">← →</span> seek · <span class="text-neutral-500">⌫</span> delete section · drag camera to reposition
+        <span class="text-neutral-500">⌘Z</span> undo · <span class="text-neutral-500">⇧⌘Z</span> redo · <span class="text-neutral-500">Space</span> play · <span class="text-neutral-500">L</span> speed · <span class="text-neutral-500">S</span> split · <span class="text-neutral-500">C</span> camera · <span class="text-neutral-500">F</span> fullscreen · <span class="text-neutral-500">I</span> image · <span class="text-neutral-500">← →</span> seek · <span class="text-neutral-500">⌫</span> delete section · drag image to section
       </div>
     </div>
   </div>

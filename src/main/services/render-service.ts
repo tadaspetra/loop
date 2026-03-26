@@ -28,6 +28,7 @@ export interface RenderSectionInput {
   backgroundZoom: number;
   backgroundPanX: number;
   backgroundPanY: number;
+  imagePath: string | null;
 }
 
 export interface RenderTakeInput {
@@ -81,6 +82,10 @@ export function normalizeSectionInput(rawSections: unknown): RenderSectionInput[
         backgroundZoom: normalizeBackgroundZoom(rawSection.backgroundZoom),
         backgroundPanX: normalizeBackgroundPan(rawSection.backgroundPanX),
         backgroundPanY: normalizeBackgroundPan(rawSection.backgroundPanY),
+        imagePath:
+          typeof rawSection.imagePath === 'string' && rawSection.imagePath
+            ? rawSection.imagePath
+            : null,
       };
     })
     .filter((section): section is RenderSectionInput => Boolean(section));
@@ -139,7 +144,7 @@ function buildInputPlan(
   hasCamera: boolean,
 ) {
   const fpsProbePaths = new Set<string>();
-  const sectionInputs: Array<{ screenIdx: number; cameraIdx: number }> = [];
+  const sectionInputs: Array<{ screenIdx: number; cameraIdx: number; imageIdx: number }> = [];
   const args = ['-progress', 'pipe:1', '-nostats'];
   const takeInputs = new Map<string, { screenIdx: number; cameraIdx: number }>();
   let inputIndex = 0;
@@ -172,7 +177,16 @@ function buildInputPlan(
       takeInputs.set(takeId, inputPlan);
     }
 
-    sectionInputs.push(inputPlan);
+    let imageIdx = -1;
+    if (section.imagePath) {
+      assertFilePath(section.imagePath, 'Image');
+      const duration = (section.sourceEnd - section.sourceStart).toFixed(3);
+      args.push('-loop', '1', '-framerate', '30', '-t', duration, '-i', section.imagePath);
+      imageIdx = inputIndex;
+      inputIndex += 1;
+    }
+
+    sectionInputs.push({ ...inputPlan, imageIdx });
   }
 
   return {
@@ -329,15 +343,31 @@ export async function renderComposite(
     targetFps,
   );
 
+  const hasImageSections = sections.some((s) => s.imagePath);
   const filterParts: string[] = [];
   for (let index = 0; index < sections.length; index += 1) {
     const section = sections[index];
-    const { screenIdx } = sectionInputs[index];
+    const { screenIdx, imageIdx } = sectionInputs[index];
     const start = section.sourceStart.toFixed(3);
     const end = section.sourceEnd.toFixed(3);
-    filterParts.push(
-      `[${screenIdx}:v]trim=start=${start}:end=${end},setpts=PTS-STARTPTS,setsar=1[sv${index}]`,
-    );
+
+    if (imageIdx >= 0) {
+      const imageScale = screenFitMode === 'fill'
+        ? `scale=${canvasW}:${canvasH}:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH}`
+        : `scale=${canvasW}:${canvasH}:force_original_aspect_ratio=decrease,pad=${canvasW}:${canvasH}:(ow-iw)/2:(oh-ih)/2:black`;
+      filterParts.push(
+        `[${imageIdx}:v]${imageScale},format=yuv420p,setpts=PTS-STARTPTS,setsar=1[sv${index}]`,
+      );
+    } else if (hasImageSections) {
+      // Pre-scale video to canvas size so concat inputs match image sections
+      filterParts.push(
+        `[${screenIdx}:v]trim=start=${start}:end=${end},setpts=PTS-STARTPTS,scale=${canvasW}:${canvasH}:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH},setsar=1[sv${index}]`,
+      );
+    } else {
+      filterParts.push(
+        `[${screenIdx}:v]trim=start=${start}:end=${end},setpts=PTS-STARTPTS,setsar=1[sv${index}]`,
+      );
+    }
     filterParts.push(
       `[${screenIdx}:a]atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS[sa${index}]`,
     );

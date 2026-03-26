@@ -55,5 +55,7 @@ export interface ElectronApi {
   }) => Promise<{ sections: ProjectData['timeline']['sections']; trimmedDuration: number }>;
   renderComposite: (opts: Record<string, unknown>) => Promise<string>;
   onRenderProgress: (listener: (payload: RenderProgressUpdate) => void) => () => void;
+  importFile: (sourcePath: string, projectFolder: string) => Promise<string>;
+  pickImageFile: () => Promise<string | null>;
   getScribeToken: () => Promise<string>;
 }

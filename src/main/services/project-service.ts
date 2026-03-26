@@ -203,6 +203,10 @@ export function createProjectService({ app }: { app: Pick<App, 'getPath'> }) {
       screenPath: toProjectRelativePath(projectFolder, take.screenPath),
       cameraPath: toProjectRelativePath(projectFolder, take.cameraPath),
     }));
+    serializable.timeline.sections = serializable.timeline.sections.map((section) => ({
+      ...section,
+      imagePath: toProjectRelativePath(projectFolder, section.imagePath),
+    }));
 
     writeJsonFile(getProjectFilePath(projectFolder), serializable);
     return normalized;

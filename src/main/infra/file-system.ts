@@ -38,4 +38,14 @@ export function isDirectoryEmpty(folderPath: string): boolean {
   }
 }
 
+export function copyFile(sourcePath: string, destFolder: string, prefix: string): string {
+  const ext = path.extname(sourcePath);
+  const baseName = path.basename(sourcePath, ext);
+  const destName = `${prefix}-${Date.now()}-${baseName}${ext}`;
+  ensureDirectory(destFolder);
+  const destPath = path.join(destFolder, destName);
+  fs.copyFileSync(sourcePath, destPath);
+  return destPath;
+}
+
 export { fs };

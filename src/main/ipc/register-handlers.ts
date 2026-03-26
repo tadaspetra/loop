@@ -1,5 +1,6 @@
 import path from 'node:path';
 
+import { copyFile } from '../infra/file-system';
 import type {
   App,
   BrowserWindow,
@@ -181,6 +182,26 @@ export function registerIpcHandlers({
       });
     },
   );
+
+  ipcMain.handle(
+    'import-file',
+    async (_event, sourcePath: string, projectFolder: string) => {
+      if (!sourcePath || !projectFolder) throw new Error('Missing source path or project folder');
+      return copyFile(path.resolve(sourcePath), path.resolve(projectFolder), 'image');
+    },
+  );
+
+  ipcMain.handle('pick-image-file', async () => {
+    const { canceled, filePaths } = await showOpenDialog({
+      title: 'Select Image',
+      filters: [
+        { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] },
+      ],
+      properties: ['openFile'],
+    });
+    if (canceled || !filePaths.length) return null;
+    return filePaths[0];
+  });
 
   ipcMain.handle('get-scribe-token', async () => {
     try {

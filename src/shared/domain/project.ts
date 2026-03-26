@@ -25,6 +25,7 @@ export interface Section {
   sourceEnd: number;
   takeId: string | null;
   transcript: string;
+  imagePath: string | null;
 }
 
 export interface Keyframe {
@@ -206,6 +207,10 @@ export function normalizeSections(rawSections: unknown = []): Section[] {
             ? section.takeId
             : null,
         transcript,
+        imagePath:
+          typeof section.imagePath === 'string' && section.imagePath
+            ? section.imagePath
+            : null,
       };
     })
     .filter((section) => section.end - section.start > 0.0001)
@@ -363,7 +368,12 @@ export function normalizeProjectData(
       duration: Number.isFinite(Number(rawTimeline.duration))
         ? Number(rawTimeline.duration)
         : 0,
-      sections: normalizeSections(rawTimeline.sections),
+      sections: normalizeSections(rawTimeline.sections).map((section) => ({
+        ...section,
+        imagePath: projectFolder
+          ? toProjectAbsolutePath(projectFolder, section.imagePath)
+          : section.imagePath,
+      })),
       keyframes: normalizeKeyframes(rawTimeline.keyframes),
       selectedSectionId:
         typeof rawTimeline.selectedSectionId === 'string'

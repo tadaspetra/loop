@@ -46,6 +46,9 @@ const electronApi: ElectronApi = {
     ipcRenderer.on('render-composite-progress', handler);
     return () => ipcRenderer.removeListener('render-composite-progress', handler);
   },
+  importFile: (sourcePath, projectFolder) =>
+    ipcRenderer.invoke('import-file', sourcePath, projectFolder),
+  pickImageFile: () => ipcRenderer.invoke('pick-image-file'),
   getScribeToken: () => ipcRenderer.invoke('get-scribe-token'),
 };
 

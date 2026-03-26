@@ -149,4 +149,34 @@ describe('shared/domain/project', () => {
     expect(fallbackProject.settings.cameraSyncOffsetMs).toBe(0);
     expect(createDefaultProject('Demo').settings.cameraSyncOffsetMs).toBe(0);
   });
+
+  test('normalizeSections preserves imagePath and defaults to null', () => {
+    const sections = normalizeSections([
+      { start: 0, end: 2, imagePath: '/tmp/photo.png' },
+      { start: 3, end: 5 },
+      { start: 6, end: 8, imagePath: '' },
+    ]);
+
+    expect(sections).toHaveLength(3);
+    expect(sections[0].imagePath).toBe('/tmp/photo.png');
+    expect(sections[1].imagePath).toBeNull();
+    expect(sections[2].imagePath).toBeNull();
+  });
+
+  test('normalizeProjectData converts section imagePath to absolute path', () => {
+    const project = normalizeProjectData(
+      {
+        timeline: {
+          sections: [
+            { start: 0, end: 2, imagePath: 'image-123-photo.png' },
+            { start: 3, end: 5 },
+          ],
+        },
+      },
+      '/tmp/my-project',
+    );
+
+    expect(project.timeline.sections[0].imagePath).toBe('/tmp/my-project/image-123-photo.png');
+    expect(project.timeline.sections[1].imagePath).toBeNull();
+  });
 });

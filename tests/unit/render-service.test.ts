@@ -47,6 +47,19 @@ describe('main/services/render-service', () => {
     expect(sections[1].backgroundPanY).toBe(1);
   });
 
+  test('normalizeSectionInput preserves imagePath and defaults to null', () => {
+    const sections = normalizeSectionInput([
+      { takeId: 'a', sourceStart: 0, sourceEnd: 1, imagePath: '/tmp/photo.png' },
+      { takeId: 'b', sourceStart: 2, sourceEnd: 4 },
+      { takeId: 'c', sourceStart: 5, sourceEnd: 7, imagePath: '' },
+    ]);
+
+    expect(sections).toHaveLength(3);
+    expect(sections[0].imagePath).toBe('/tmp/photo.png');
+    expect(sections[1].imagePath).toBeNull();
+    expect(sections[2].imagePath).toBeNull();
+  });
+
   test('assertFilePath throws for missing files and accepts existing file', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-test-'));
     const file = path.join(tmpDir, 'input.webm');

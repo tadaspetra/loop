@@ -293,6 +293,26 @@ import {
     editorZoomBuffer.height = CANVAS_H;
     const editorZoomBufferCtx = editorZoomBuffer.getContext('2d');
 
+    const sectionImageCache = new Map();
+
+    function loadSectionImage(imagePath) {
+      if (!imagePath) return Promise.resolve(null);
+      if (sectionImageCache.has(imagePath)) return Promise.resolve(sectionImageCache.get(imagePath));
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => { sectionImageCache.set(imagePath, img); resolve(img); };
+        img.onerror = () => { console.warn('Failed to load section image:', imagePath); resolve(null); };
+        img.src = pathToFileUrl(imagePath);
+      });
+    }
+
+    function preloadSectionImages() {
+      if (!editorState?.sections) return;
+      for (const section of editorState.sections) {
+        if (section.imagePath) loadSectionImage(section.imagePath);
+      }
+    }
+
     function getOrCreateTakeVideos(takeId) {
       if (takeVideoPool.has(takeId)) return takeVideoPool.get(takeId);
       const take = activeProject?.takes?.find(t => t.id === takeId);
@@ -1125,14 +1145,17 @@ import {
         const sectionStart = (section.start / editorState.duration) * 100;
         const sectionWidth = Math.max(0.35, ((section.end - section.start) / editorState.duration) * 100);
         const selected = section.id === editorState.selectedSectionId;
-        const baseColor = section.index % 2 === 0 ? 'rgba(23,23,23,0.72)' : 'rgba(38,38,38,0.68)';
+        const hasImage = !!section.imagePath;
+        const baseColor = hasImage
+          ? (section.index % 2 === 0 ? 'rgba(76,29,149,0.45)' : 'rgba(88,28,135,0.4)')
+          : (section.index % 2 === 0 ? 'rgba(23,23,23,0.72)' : 'rgba(38,38,38,0.68)');
 
         const band = document.createElement('div');
         band.className = 'absolute top-0 bottom-0';
         band.dataset.sectionId = section.id;
         band.style.left = sectionStart + '%';
         band.style.width = sectionWidth + '%';
-        band.style.backgroundColor = selected ? 'rgba(255,255,255,0.12)' : baseColor;
+        band.style.backgroundColor = selected ? (hasImage ? 'rgba(139,92,246,0.25)' : 'rgba(255,255,255,0.12)') : baseColor;
         band.style.borderLeft = section.index === 0 ? 'none' : '1px solid rgba(10,10,10,0.9)';
         if (selected) {
           band.style.boxShadow = 'inset 0 0 0 2px rgba(255,255,255,0.3)';
@@ -1147,7 +1170,7 @@ import {
         label.style.top = '50%';
         label.style.transform = 'translateY(-50%)';
         label.style.color = selected ? 'rgba(255,255,255,0.9)' : 'rgba(163,163,163,0.8)';
-        label.textContent = String(section.index + 1);
+        label.textContent = hasImage ? `${section.index + 1} IMG` : String(section.index + 1);
         band.appendChild(label);
         if (selected) {
           const leftHandle = document.createElement('div');
@@ -1350,7 +1373,8 @@ import {
           sourceEnd: section.sourceEnd,
           backgroundZoom: clampSectionZoom(anchor?.backgroundZoom),
           backgroundPanX: clampSectionPan(anchor?.backgroundPanX),
-          backgroundPanY: clampSectionPan(anchor?.backgroundPanY)
+          backgroundPanY: clampSectionPan(anchor?.backgroundPanY),
+          imagePath: section.imagePath || null
         };
       });
     }
@@ -1587,9 +1611,17 @@ import {
       drawRAF = requestAnimationFrame(drawComposite);
     }
 
+    function getSourceWidth(source) {
+      return source.videoWidth || source.naturalWidth || source.width || 0;
+    }
+
+    function getSourceHeight(source) {
+      return source.videoHeight || source.naturalHeight || source.height || 0;
+    }
+
     function drawFit(targetCtx, video, x, y, w, h) {
-      const vw = video.videoWidth;
-      const vh = video.videoHeight;
+      const vw = getSourceWidth(video);
+      const vh = getSourceHeight(video);
       if (!vw || !vh) return;
       const scale = Math.min(w / vw, h / vh);
       const dw = vw * scale;
@@ -1600,8 +1632,8 @@ import {
     }
 
     function drawFill(targetCtx, video, x, y, w, h) {
-      const vw = video.videoWidth;
-      const vh = video.videoHeight;
+      const vw = getSourceWidth(video);
+      const vh = getSourceHeight(video);
       if (!vw || !vh) return;
       const scale = Math.max(w / vw, h / vh);
       const dw = vw * scale;
@@ -2657,6 +2689,7 @@ import {
 
       updateEditorTimeDisplay();
       renderSectionMarkers();
+      preloadSectionImages();
       const initialView = opts.initialView === 'recording' ? 'recording' : 'timeline';
       setWorkspaceView(initialView);
     }
@@ -3018,7 +3051,21 @@ import {
       const hasCamera = editorState.hasCamera && activeVideos?.camera && activeVideos.camera.videoWidth > 0;
       const state = getStateAtTime(editorState.currentTime);
 
-      if (hasScreen) {
+      const currentSection = findSectionForTime(editorState.currentTime);
+      const sectionImage = currentSection?.imagePath ? sectionImageCache.get(currentSection.imagePath) : null;
+
+      if (sectionImage) {
+        drawEditorScreenWithZoom(
+          editorCtx,
+          sectionImage,
+          editorState.screenFitMode,
+          state.backgroundZoom,
+          state.backgroundPanX,
+          state.backgroundPanY,
+          state.backgroundFocusX,
+          state.backgroundFocusY
+        );
+      } else if (hasScreen) {
         drawEditorScreenWithZoom(
           editorCtx,
           activeVideos.screen,
@@ -3306,6 +3353,76 @@ import {
       }
     }
 
+    // ===== Screen track drag-and-drop for images =====
+
+    const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'];
+    const editorScreenTrack = document.getElementById('editorScreenTrack');
+
+    function isImageFile(fileName) {
+      const ext = '.' + fileName.split('.').pop().toLowerCase();
+      return IMAGE_EXTENSIONS.includes(ext);
+    }
+
+    async function importImageToSection(sourcePath, section) {
+      if (!section || !activeProjectPath) return;
+      try {
+        const copiedPath = await window.electronAPI.importFile(sourcePath, activeProjectPath);
+        pushUndo();
+        section.imagePath = copiedPath;
+        await loadSectionImage(copiedPath);
+        renderSectionMarkers();
+        scheduleProjectSave();
+      } catch (err) {
+        console.error('Failed to import image:', err);
+      }
+    }
+
+    editorScreenTrack.addEventListener('dragover', (e) => {
+      if (!editorState || editorState.rendering) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      const bandEl = e.target.closest?.('[data-section-id]');
+      // Clear previous highlights and highlight current target
+      editorScreenTrack.querySelectorAll('[data-section-id]').forEach(el => el.style.outline = '');
+      if (bandEl) bandEl.style.outline = '2px solid rgba(59,130,246,0.6)';
+    });
+
+    editorScreenTrack.addEventListener('dragleave', (e) => {
+      // Only clear if leaving the track entirely
+      if (!editorScreenTrack.contains(e.relatedTarget)) {
+        editorScreenTrack.querySelectorAll('[data-section-id]').forEach(el => el.style.outline = '');
+      }
+    });
+
+    editorScreenTrack.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      editorScreenTrack.querySelectorAll('[data-section-id]').forEach(el => el.style.outline = '');
+
+      if (!editorState || editorState.rendering || !activeProjectPath) return;
+      const file = e.dataTransfer?.files?.[0];
+      if (!file || !file.path || !isImageFile(file.name)) return;
+
+      const bandEl = e.target.closest?.('[data-section-id]');
+      const sectionId = bandEl?.dataset?.sectionId;
+      const section = sectionId ? editorState.sections.find(s => s.id === sectionId) : null;
+      if (!section) return;
+
+      await importImageToSection(file.path, section);
+    });
+
+    // ===== Image picker button =====
+    const editorImageBtn = document.getElementById('editorImageBtn');
+    editorImageBtn.addEventListener('click', async () => {
+      if (!editorState || editorState.rendering || !activeProjectPath) return;
+      const section = getSelectedSection();
+      if (!section) return;
+
+      const filePath = await window.electronAPI.pickImageFile();
+      if (!filePath) return;
+
+      await importImageToSection(filePath, section);
+    });
+
     // ===== Editor button handlers =====
 
     new ResizeObserver(() => renderWaveform()).observe(editorTimelineWrapper);
@@ -3557,6 +3674,9 @@ import {
       } else if (e.code === 'KeyL') {
         e.preventDefault();
         cyclePlaybackSpeed();
+      } else if (e.code === 'KeyI') {
+        e.preventDefault();
+        editorImageBtn.click();
       }
     });
 

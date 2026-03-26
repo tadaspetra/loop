@@ -61,6 +61,7 @@ export function computeSections(
       label: `Section ${index + 1}`,
       transcript: '',
       takeId: null,
+      imagePath: null,
     });
     timelineCursor += sectionDuration;
   }

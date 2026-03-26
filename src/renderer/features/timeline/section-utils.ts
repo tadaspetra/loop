@@ -86,6 +86,7 @@ export function buildRemappedSectionsFromSegments(
       transcript: normalizeTranscriptText(segment.transcripts.join(' ')),
       label: `Section ${index + 1}`,
       takeId: null,
+      imagePath: null,
     });
     timelineCursor += duration;
   }
@@ -150,6 +151,10 @@ export function normalizeSections(
         index,
         label: `Section ${index + 1}`,
         duration: 0,
+        imagePath:
+          typeof section.imagePath === 'string' && section.imagePath
+            ? section.imagePath
+            : null,
       } satisfies Section;
     })
     .filter((section) => section.end - section.start > 0.0001)
@@ -194,6 +199,7 @@ export function buildDefaultSectionsForDuration(duration: number): Section[] {
       duration: roundMs(safeDuration),
       transcript: '',
       takeId: null,
+      imagePath: null,
     },
   ];
 }
