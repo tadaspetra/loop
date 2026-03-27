@@ -10,6 +10,21 @@ export interface RenderProgressUpdate {
   speed?: number | null;
 }
 
+export interface ProxyProgressUpdate {
+  takeId: string;
+  status: 'started' | 'progress' | 'done' | 'error';
+  percent?: number;
+  proxyPath?: string;
+  error?: string;
+}
+
+export interface GenerateProxyOpts {
+  takeId: string;
+  screenPath: string;
+  projectFolder: string;
+  durationSec?: number;
+}
+
 export interface ProjectEnvelope {
   projectPath: string;
   project: ProjectData;
@@ -58,4 +73,6 @@ export interface ElectronApi {
   importFile: (sourcePath: string, projectFolder: string) => Promise<string>;
   pickImageFile: () => Promise<string | null>;
   getScribeToken: () => Promise<string>;
+  generateProxy: (opts: GenerateProxyOpts) => Promise<string | null>;
+  onProxyProgress: (listener: (payload: ProxyProgressUpdate) => void) => () => void;
 }

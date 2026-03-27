@@ -60,6 +60,7 @@ export interface Take {
   duration: number;
   screenPath: string | null;
   cameraPath: string | null;
+  proxyPath: string | null;
   sections: Section[];
 }
 
@@ -376,6 +377,11 @@ export function normalizeProjectData(
           ? toProjectAbsolutePath(projectFolder, take.cameraPath)
           : typeof take.cameraPath === 'string'
             ? take.cameraPath
+            : null,
+        proxyPath: projectFolder
+          ? toProjectAbsolutePath(projectFolder, take.proxyPath)
+          : typeof take.proxyPath === 'string'
+            ? take.proxyPath
             : null,
         sections: normalizeSections(take.sections),
       };

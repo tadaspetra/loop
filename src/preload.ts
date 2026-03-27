@@ -1,8 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import url from 'node:url';
 
-import type { ElectronApi } from './shared/electron-api';
-import type { RenderProgressUpdate } from './shared/electron-api';
+import type { ElectronApi, RenderProgressUpdate, ProxyProgressUpdate } from './shared/electron-api';
 
 function toFileUrl(filePath: string | null | undefined): string {
   const value = String(filePath || '');
@@ -50,6 +49,13 @@ const electronApi: ElectronApi = {
     ipcRenderer.invoke('import-file', sourcePath, projectFolder),
   pickImageFile: () => ipcRenderer.invoke('pick-image-file'),
   getScribeToken: () => ipcRenderer.invoke('get-scribe-token'),
+  generateProxy: (opts) => ipcRenderer.invoke('proxy:generate', opts),
+  onProxyProgress: (listener) => {
+    if (typeof listener !== 'function') return () => {};
+    const handler = (_event: unknown, payload: ProxyProgressUpdate) => listener(payload);
+    ipcRenderer.on('proxy:progress', handler);
+    return () => ipcRenderer.removeListener('proxy:progress', handler);
+  },
 };
 
 contextBridge.exposeInMainWorld('electronAPI', electronApi);

@@ -130,6 +130,69 @@ describe('main/services/project-service integration', () => {
     expect(opened.project.settings.cameraSyncOffsetMs).toBe(145);
   });
 
+  test('proxyPath round-trips through save and open as relative path', () => {
+    const created = service.createProject({ name: 'Proxy', parentFolder: sandbox.root });
+    const screenPath = path.join(created.projectPath, 'screen.webm');
+    const proxyPath = path.join(created.projectPath, 'screen-proxy.mp4');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+    fs.writeFileSync(proxyPath, 'proxy', 'utf8');
+
+    service.saveProject({
+      projectPath: created.projectPath,
+      project: {
+        ...created.project,
+        takes: [
+          {
+            id: 'take-1',
+            createdAt: new Date().toISOString(),
+            duration: 5,
+            screenPath,
+            cameraPath: null,
+            proxyPath,
+            sections: [],
+          },
+        ],
+      },
+    });
+
+    // Verify on-disk format uses relative path
+    const raw = JSON.parse(
+      fs.readFileSync(path.join(created.projectPath, 'project.json'), 'utf8'),
+    );
+    expect(raw.takes[0].proxyPath).toBe('screen-proxy.mp4');
+
+    // Verify open resolves back to absolute
+    const opened = service.openProject(created.projectPath);
+    expect(opened.project.takes[0].proxyPath).toBe(proxyPath);
+  });
+
+  test('proxyPath defaults to null for legacy takes without proxy', () => {
+    const created = service.createProject({ name: 'Legacy', parentFolder: sandbox.root });
+    const screenPath = path.join(created.projectPath, 'screen.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+
+    service.saveProject({
+      projectPath: created.projectPath,
+      project: {
+        ...created.project,
+        takes: [
+          {
+            id: 'take-1',
+            createdAt: new Date().toISOString(),
+            duration: 5,
+            screenPath,
+            cameraPath: null,
+            proxyPath: null,
+            sections: [],
+          },
+        ],
+      },
+    });
+
+    const opened = service.openProject(created.projectPath);
+    expect(opened.project.takes[0].proxyPath).toBeNull();
+  });
+
   test('recovery take lifecycle persists and clears payload', () => {
     const created = service.createProject({ name: 'Recovery', parentFolder: sandbox.root });
     const screenPath = path.join(created.projectPath, 'screen.webm');

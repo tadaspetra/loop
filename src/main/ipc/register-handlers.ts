@@ -15,11 +15,13 @@ import type {
 import type { createProjectService } from '../services/project-service';
 import type { renderComposite } from '../services/render-service';
 import type { computeSections } from '../services/sections-service';
+import type * as proxyServiceModule from '../services/proxy-service';
 
 type ProjectService = ReturnType<typeof createProjectService>;
 
 type RenderComposite = typeof renderComposite;
 type ComputeSections = typeof computeSections;
+type ProxyService = typeof proxyServiceModule;
 
 interface PickFolderOptions {
   title?: string;
@@ -38,6 +40,7 @@ export function registerIpcHandlers({
   renderComposite,
   computeSections,
   getScribeToken,
+  proxyService,
 }: {
   ipcMain: IpcMain;
   app: App;
@@ -49,6 +52,7 @@ export function registerIpcHandlers({
   renderComposite: RenderComposite;
   computeSections: ComputeSections;
   getScribeToken: () => Promise<string>;
+  proxyService: ProxyService;
 }): void {
   async function showOpenDialog(opts: OpenDialogOptions) {
     const win = getWindow();
@@ -215,4 +219,41 @@ export function registerIpcHandlers({
   ipcMain.handle('compute-sections', async (_event, opts: unknown) => {
     return computeSections(opts as Parameters<ComputeSections>[0]);
   });
+
+  ipcMain.handle(
+    'proxy:generate',
+    (event: IpcMainInvokeEvent, opts: { takeId: string; screenPath: string; projectFolder: string; durationSec?: number }) => {
+      if (!proxyService || !opts.screenPath || !opts.projectFolder) return null;
+      const proxyPath = proxyService.deriveProxyPath(opts.screenPath);
+      const totalDuration = Number.isFinite(opts.durationSec) && (opts.durationSec as number) > 0
+        ? (opts.durationSec as number)
+        : 0;
+
+      event.sender.send('proxy:progress', { takeId: opts.takeId, status: 'started', percent: 0 });
+
+      const onProgress = totalDuration > 0
+        ? (progress: { outTimeSec: number | null }) => {
+            if (event.sender.isDestroyed()) return;
+            const outSec = progress.outTimeSec;
+            if (Number.isFinite(outSec) && outSec !== null && outSec >= 0) {
+              const percent = Math.max(0, Math.min(1, outSec / totalDuration));
+              event.sender.send('proxy:progress', { takeId: opts.takeId, status: 'progress', percent });
+            }
+          }
+        : undefined;
+
+      proxyService.generateProxy({ screenPath: opts.screenPath, proxyPath, onProgress }).then(() => {
+        if (!event.sender.isDestroyed()) {
+          event.sender.send('proxy:progress', { takeId: opts.takeId, status: 'done', proxyPath });
+        }
+      }).catch((err: unknown) => {
+        if (!event.sender.isDestroyed()) {
+          const message = err instanceof Error ? err.message : String(err);
+          event.sender.send('proxy:progress', { takeId: opts.takeId, status: 'error', error: message });
+        }
+      });
+
+      return proxyPath;
+    },
+  );
 }

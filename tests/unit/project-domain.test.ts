@@ -194,6 +194,21 @@ describe('shared/domain/project', () => {
     expect(sections[2].imagePath).toBeNull();
   });
 
+  test('normalizeProjectData resolves take proxyPath to absolute and defaults to null', () => {
+    const project = normalizeProjectData(
+      {
+        takes: [
+          { id: 'take-1', screenPath: 'screen.webm', cameraPath: null, proxyPath: 'screen-proxy.mp4', duration: 10, sections: [] },
+          { id: 'take-2', screenPath: 'screen2.webm', cameraPath: null, duration: 5, sections: [] },
+        ],
+      },
+      '/tmp/my-project',
+    );
+
+    expect(project.takes[0].proxyPath).toBe('/tmp/my-project/screen-proxy.mp4');
+    expect(project.takes[1].proxyPath).toBeNull();
+  });
+
   test('normalizeProjectData converts section imagePath to absolute path', () => {
     const project = normalizeProjectData(
       {
