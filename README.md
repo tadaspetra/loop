@@ -1,6 +1,15 @@
-# loop (formerly Flow)
+# loop
 
 loop is a desktop app for recording screen-based videos, transcribing speech in real time, cutting dead space from the transcript, and turning raw takes into a clean edited MP4.
+
+<p align="center">
+  <img src="docs/images/readme/recording-view.png" alt="loop recording view with live transcript, source controls, and camera preview" width="49%" />
+  <img src="docs/images/readme/timeline-view.png" alt="loop timeline editor with transcript-driven sections and picture-in-picture camera preview" width="49%" />
+</p>
+
+<p align="center">
+  <em>Recording view on the left, transcript-driven timeline editing on the right.</em>
+</p>
 
 The goal: I want to focus 100% of my time on the the video content and have AI take care of the rest.
 
