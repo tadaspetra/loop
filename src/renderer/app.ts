@@ -6000,6 +6000,19 @@ type AppMediaRecorder = MediaRecorder & { blobPromise: Promise<{ blob: Blob; pat
     initScrubDrag(editorOverlaySizeScrub ?? null, editorOverlaySizeValue, editorOverlaySizeInput);
     initScrubDrag(editorAutoTrackSmoothScrub ?? null, editorAutoTrackSmoothValue ?? null, editorAutoTrackSmoothInput);
 
+    // Click on "Size" label centers the selected overlay (click = < 3px movement)
+    if (editorOverlaySizeScrub) {
+      let sizeClickStartX = 0;
+      editorOverlaySizeScrub.addEventListener('mousedown', (e: MouseEvent) => {
+        sizeClickStartX = e.clientX;
+      });
+      editorOverlaySizeScrub.addEventListener('mouseup', (e: MouseEvent) => {
+        if (Math.abs(e.clientX - sizeClickStartX) < 3) {
+          centerSelectedOverlay();
+        }
+      });
+    }
+
     // Auto-track toggle
     if (editorAutoTrackToggle) {
       editorAutoTrackToggle.addEventListener('click', () => {
@@ -6036,6 +6049,19 @@ type AppMediaRecorder = MediaRecorder & { blobPromise: Promise<{ blob: Blob; pat
       editorAutoTrackSmoothInput.addEventListener('change', commitAutoTrackSmooth);
       editorAutoTrackSmoothInput.addEventListener('pointerup', commitAutoTrackSmooth);
       editorAutoTrackSmoothInput.addEventListener('blur', commitAutoTrackSmooth);
+    }
+
+    function centerSelectedOverlay(): void {
+      if (!editorState || editorState.rendering || !editorState.selectedOverlayId) return;
+      const overlay = editorState.overlays.find(o => o.id === editorState!.selectedOverlayId);
+      if (!overlay) return;
+      pushUndo();
+      const mode: 'reel' | 'landscape' = editorState.outputMode === 'reel' ? 'reel' : 'landscape';
+      const pos = overlay[mode];
+      const canvasW = mode === 'reel' ? REEL_CANVAS_W : CANVAS_W;
+      pos.x = Math.round((canvasW - pos.width) / 2);
+      pos.y = Math.round((CANVAS_H - pos.height) / 2);
+      scheduleProjectSave();
     }
 
     // Overlay size input handler
