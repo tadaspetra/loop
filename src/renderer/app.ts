@@ -37,6 +37,7 @@ import {
   shouldRenderPreviewFrame,
   createCameraRecordingStream
 } from './features/recording/recorder-utils';
+import { cleanupAllMedia } from './features/media-cleanup';
 
     const projectHomeView = document.getElementById('projectHomeView');
     const workspaceHeader = document.getElementById('workspaceHeader');
@@ -136,6 +137,7 @@ import {
     let saveDebounceTimer = null;
     let persistQueue = Promise.resolve();
     let mediaInitialized = false;
+    let mediaIdleTimer = null;
     let scribeWs = null;
     let scribeWorkletNode = null;
     let speechSegments = [];
@@ -144,6 +146,61 @@ import {
     let scribeLastFailureReason = null;
     let scribeManualClose = false;
     let micSourceNode = null;
+    const MEDIA_IDLE_TIMEOUT_MS = 30000;
+
+    function clearMediaIdleTimer() {
+      if (!mediaIdleTimer) return;
+      clearTimeout(mediaIdleTimer);
+      mediaIdleTimer = null;
+    }
+
+    function resetMediaRefsAfterCleanup() {
+      recording = false;
+      screenStream = null;
+      cameraStream = null;
+      audioStream = null;
+      recorders = [];
+      screenRecInterval = null;
+      timerInterval = null;
+      audioContext = null;
+      analyser = null;
+      meterRAF = null;
+      drawRAF = null;
+      lastCompositeDrawAt = 0;
+      scribeWs = null;
+      scribeWorkletNode = null;
+      audioChunkBuffer = [];
+      audioSendInterval = null;
+      micSourceNode = null;
+      mediaInitialized = false;
+      screenVideo.srcObject = null;
+      cameraVideo.srcObject = null;
+    }
+
+    function cleanupRendererMediaResources() {
+      cleanupAllMedia({
+        recording,
+        screenStream,
+        cameraStream,
+        audioStream,
+        recorders,
+        screenRecInterval,
+        audioSendInterval,
+        timerInterval,
+        audioContext,
+        scribeWorkletNode,
+        scribeWs,
+        drawRAF,
+        meterRAF,
+        cancelEditorDrawLoop,
+        stopAudioMeter
+      });
+      resetMediaRefsAfterCleanup();
+    }
+
+    function hasActiveRecorders() {
+      return recorders.some((recorder) => recorder?.state && recorder.state !== 'inactive');
+    }
 
     function handleRenderProgress(update) {
       if (!editorState || !editorState.rendering) return;
@@ -568,11 +625,21 @@ import {
       processingView.classList.toggle('hidden', !showProcessing);
 
       if (showRecording) {
+        clearMediaIdleTimer();
+        if (!mediaInitialized) void ensureMediaInitialized();
         updatePreview();
       } else if (drawRAF) {
         cancelAnimationFrame(drawRAF);
         drawRAF = null;
         lastCompositeDrawAt = 0;
+      }
+
+      if (!showRecording && mediaInitialized && !recording && !mediaIdleTimer) {
+        mediaIdleTimer = setTimeout(() => {
+          mediaIdleTimer = null;
+          if (hasActiveRecorders()) return;
+          cleanupRendererMediaResources();
+        }, MEDIA_IDLE_TIMEOUT_MS);
       }
 
       if (showTimeline && editorState && !hasPendingEditorDraw()) {
@@ -881,8 +948,6 @@ import {
         setWorkspaceView('recording');
       }
 
-      await ensureMediaInitialized();
-      if (activeWorkspaceView === 'recording') updatePreview();
       await window.electronAPI.projectSetLast(projectPath);
       updateWorkspaceHeader();
 
@@ -912,6 +977,7 @@ import {
       try { await updateScreenStream(); } catch (error) { console.warn('Screen source init failed:', error); }
       try { await updateCameraStream(); } catch (error) { console.warn('Camera source init failed:', error); }
       try { await updateAudioStream(); } catch (error) { console.warn('Audio source init failed:', error); }
+      if (activeWorkspaceView === 'recording') updatePreview();
     }
 
     async function syncContentProtection() {
@@ -4195,6 +4261,10 @@ import {
     refreshRecentProjects();
 
     window.addEventListener('beforeunload', () => {
+      clearMediaIdleTimer();
+      if (!recording && !hasActiveRecorders()) {
+        cleanupRendererMediaResources();
+      }
       flushScheduledProjectSave().catch((error) => {
         console.warn('Failed to flush project save on exit:', error);
       });

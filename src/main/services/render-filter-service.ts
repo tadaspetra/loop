@@ -4,6 +4,11 @@ export const TRANSITION_DURATION = 0.3;
 const AUTHORING_CANVAS_W = 1920;
 const AUTHORING_CANVAS_H = 1080;
 
+function easeExpr(timeVar: string, start: number): string {
+  const progress = `(${timeVar}-${start.toFixed(3)})/${TRANSITION_DURATION.toFixed(3)}`;
+  return `if(lt(${progress},0.5),2*${progress}*${progress},1-pow(-2*${progress}+2,2)/2)`;
+}
+
 interface KeyframeProp extends Keyframe {
   backgroundFocusX?: number;
   backgroundFocusY?: number;
@@ -76,7 +81,8 @@ export function buildNumericExpr(
     const diff = currVal - prevVal;
 
     if (Math.abs(diff) > 0.0001) {
-      expr = `if(gte(${timeVar},${time.toFixed(3)}),${currVal.toFixed(precision)},if(gte(${timeVar},${start.toFixed(3)}),${prevVal.toFixed(precision)}+${diff.toFixed(precision)}*(${timeVar}-${start.toFixed(3)})/${TRANSITION_DURATION.toFixed(3)},${expr}))`;
+      const eased = easeExpr(timeVar, start);
+      expr = `if(gte(${timeVar},${time.toFixed(3)}),${currVal.toFixed(precision)},if(gte(${timeVar},${start.toFixed(3)}),${prevVal.toFixed(precision)}+${diff.toFixed(precision)}*${eased},${expr}))`;
     } else {
       expr = `if(gte(${timeVar},${time.toFixed(3)}),${currVal.toFixed(precision)},${expr})`;
     }
@@ -136,7 +142,8 @@ export function buildPosExpr(keyframes: Keyframe[], prop: 'pipX' | 'pipY'): stri
     } else if (prevVal !== currVal && !prevFull && !currFull) {
       const start = time - TRANSITION_DURATION;
       const diff = currVal - prevVal;
-      expr = `if(gte(t,${time.toFixed(3)}),${currVal},if(gte(t,${start.toFixed(3)}),${prevVal}+${diff}*(t-${start.toFixed(3)})/${TRANSITION_DURATION.toFixed(3)},${expr}))`;
+      const eased = easeExpr('t', start);
+      expr = `if(gte(t,${time.toFixed(3)}),${currVal},if(gte(t,${start.toFixed(3)}),${prevVal}+${diff}*${eased},${expr}))`;
     } else {
       expr = `if(gte(t,${time.toFixed(3)}),${currVal},${expr})`;
     }
@@ -159,10 +166,11 @@ export function buildAlphaExpr(keyframes: Keyframe[]): string {
 
     if (prev.pipVisible !== curr.pipVisible) {
       const start = time - TRANSITION_DURATION;
+      const eased = easeExpr('T', start);
       if (curr.pipVisible) {
-        expr = `if(gte(T,${time.toFixed(3)}),1,if(gte(T,${start.toFixed(3)}),(T-${start.toFixed(3)})/${TRANSITION_DURATION.toFixed(3)},${expr}))`;
+        expr = `if(gte(T,${time.toFixed(3)}),1,if(gte(T,${start.toFixed(3)}),${eased},${expr}))`;
       } else {
-        expr = `if(gte(T,${time.toFixed(3)}),0,if(gte(T,${start.toFixed(3)}),(${time.toFixed(3)}-T)/${TRANSITION_DURATION.toFixed(3)},${expr}))`;
+        expr = `if(gte(T,${time.toFixed(3)}),0,if(gte(T,${start.toFixed(3)}),1-${eased},${expr}))`;
       }
     } else {
       expr = `if(gte(T,${time.toFixed(3)}),${curr.pipVisible ? '1' : '0'},${expr})`;
@@ -191,10 +199,11 @@ export function buildCamFullAlphaExpr(keyframes: Keyframe[]): string {
     const currFull = isFullVisible(curr);
 
     if (prevFull !== currFull) {
+      const eased = easeExpr('T', start);
       if (currFull) {
-        expr = `if(gte(T,${time.toFixed(3)}),1,if(gte(T,${start.toFixed(3)}),(T-${start.toFixed(3)})/${TRANSITION_DURATION.toFixed(3)},${expr}))`;
+        expr = `if(gte(T,${time.toFixed(3)}),1,if(gte(T,${start.toFixed(3)}),${eased},${expr}))`;
       } else {
-        expr = `if(gte(T,${time.toFixed(3)}),0,if(gte(T,${start.toFixed(3)}),(${time.toFixed(3)}-T)/${TRANSITION_DURATION.toFixed(3)},${expr}))`;
+        expr = `if(gte(T,${time.toFixed(3)}),0,if(gte(T,${start.toFixed(3)}),1-${eased},${expr}))`;
       }
     } else {
       expr = `if(gte(T,${time.toFixed(3)}),${currFull ? '1' : '0'},${expr})`;

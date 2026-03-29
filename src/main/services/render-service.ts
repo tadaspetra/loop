@@ -308,6 +308,8 @@ function buildOutputArgs(
     config.crf,
     '-preset',
     config.preset,
+    '-g',
+    String(targetFps * 2),
     '-pix_fmt',
     config.pixelFormat,
     '-c:a',

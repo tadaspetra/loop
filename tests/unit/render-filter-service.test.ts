@@ -23,6 +23,7 @@ describe('main/services/render-filter-service', () => {
     expect(expr).toContain('if(gte(t,1.000)');
     expect(expr).toContain('if(gte(t,0.700)');
     expect(expr).toContain('200');
+    expect(expr).toContain('pow(');
   });
 
   test('buildAlphaExpr transitions before the keyframe time', () => {
@@ -35,6 +36,7 @@ describe('main/services/render-filter-service', () => {
     // At T=2.0 fully invisible, transition starts at T=1.7
     expect(expr).toContain('if(gte(T,2.000),0');
     expect(expr).toContain('if(gte(T,1.700)');
+    expect(expr).toContain('pow(');
   });
 
   test('buildCamFullAlphaExpr transitions before the keyframe time', () => {
@@ -47,6 +49,7 @@ describe('main/services/render-filter-service', () => {
     // At T=1.0 fully visible fullscreen, transition starts at T=0.7
     expect(expr).toContain('if(gte(T,1.000),1');
     expect(expr).toContain('if(gte(T,0.700)');
+    expect(expr).toContain('pow(');
   });
 
   test('buildPosExpr snaps position at transition start for fullscreen→pip', () => {
@@ -85,7 +88,8 @@ describe('main/services/render-filter-service', () => {
       'it'
     );
     expect(expr).toContain('if(gte(it,2.000),2.000');
-    expect(expr).toContain('if(gte(it,1.700),1.000+1.000*(it-1.700)/0.300');
+    expect(expr).toContain('if(gte(it,1.700),1.000+1.000*');
+    expect(expr).toContain('pow(');
   });
 
   test('panToFocusCoord converts section pan into focus position', () => {
