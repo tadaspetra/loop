@@ -19,14 +19,14 @@ npm install @elevenlabs/client @elevenlabs/elevenlabs-js
 Client-side streaming requires a single-use token to protect your API key. Generate tokens on your backend:
 
 ```typescript
-import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
+import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
 const elevenlabs = new ElevenLabsClient({
-  apiKey: process.env.ELEVENLABS_API_KEY,
+  apiKey: process.env.ELEVENLABS_API_KEY
 });
 
-app.get("/scribe-token", yourAuthMiddleware, async (req, res) => {
-  const token = await elevenlabs.tokens.singleUse.create("realtime_scribe");
+app.get('/scribe-token', yourAuthMiddleware, async (req, res) => {
+  const token = await elevenlabs.tokens.singleUse.create('realtime_scribe');
   res.json(token);
 });
 ```
@@ -85,33 +85,33 @@ function TranscriptionComponent() {
 ## JavaScript Implementation
 
 ```typescript
-import { Scribe, RealtimeEvents } from "@elevenlabs/client";
+import { Scribe, RealtimeEvents } from '@elevenlabs/client';
 
 async function startTranscription() {
-  const tokenResponse = await fetch("/scribe-token");
+  const tokenResponse = await fetch('/scribe-token');
   const { token } = await tokenResponse.json();
 
   const connection = Scribe.connect({
     token,
-    modelId: "scribe_v2_realtime",
+    modelId: 'scribe_v2_realtime',
     includeTimestamps: true,
     microphone: {
       echoCancellation: true,
       noiseSuppression: true,
-      autoGainControl: true,
-    },
+      autoGainControl: true
+    }
   });
 
   connection.on(RealtimeEvents.OPEN, () => {
-    console.log("Connected");
+    console.log('Connected');
   });
 
   connection.on(RealtimeEvents.PARTIAL_TRANSCRIPT, (data) => {
-    console.log("Partial:", data.text);
+    console.log('Partial:', data.text);
   });
 
   connection.on(RealtimeEvents.COMMITTED_TRANSCRIPT, (data) => {
-    console.log("Committed:", data.text);
+    console.log('Committed:', data.text);
   });
 
   connection.on(RealtimeEvents.COMMITTED_TRANSCRIPT_WITH_TIMESTAMPS, (data) => {
@@ -121,11 +121,11 @@ async function startTranscription() {
   });
 
   connection.on(RealtimeEvents.ERROR, (error) => {
-    console.error("Error:", error);
+    console.error('Error:', error);
   });
 
   connection.on(RealtimeEvents.CLOSE, () => {
-    console.log("Disconnected");
+    console.log('Disconnected');
   });
 
   return connection;
@@ -156,11 +156,11 @@ scribe.commit();
 
 ## Microphone Options
 
-| Option | Description |
-|--------|-------------|
+| Option             | Description               |
+| ------------------ | ------------------------- |
 | `echoCancellation` | Remove echo from speakers |
-| `noiseSuppression` | Filter background noise |
-| `autoGainControl` | Normalize volume levels |
+| `noiseSuppression` | Filter background noise   |
+| `autoGainControl`  | Normalize volume levels   |
 
 ## Security
 

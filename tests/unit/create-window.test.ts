@@ -2,10 +2,7 @@ import path from 'node:path';
 
 import { describe, expect, test, vi } from 'vitest';
 
-import {
-  createWindow,
-  type BrowserWindowConstructor
-} from '../../src/main/app/create-window';
+import { createWindow, type BrowserWindowConstructor } from '../../src/main/app/create-window';
 
 describe('main/app/create-window', () => {
   test('uses the provided app root for preload and html paths', () => {

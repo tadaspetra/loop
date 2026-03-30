@@ -25,7 +25,7 @@ registerIpcHandlers({
   renderComposite,
   computeSections,
   getScribeToken,
-  proxyService,
+  proxyService
 });
 
 function createMainWindow(): void {
@@ -33,7 +33,7 @@ function createMainWindow(): void {
     BrowserWindow,
     onConsoleMessage: ({ level, message, line, sourceId }) => {
       console.log(`[renderer:${level}] ${message} (${sourceId}:${line})`);
-    },
+    }
   });
   win.on('closed', () => {
     win = null;

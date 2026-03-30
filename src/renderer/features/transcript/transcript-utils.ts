@@ -13,7 +13,9 @@ export interface TranscriptToken {
  * Normalizes transcript text by collapsing whitespace and trimming.
  */
 export function normalizeTranscriptText(value: unknown): string {
-  return String(value || '').replace(/\s+/g, ' ').trim();
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 /**
@@ -33,9 +35,7 @@ export function stripNonSpeechAnnotations(text: string): string {
 /**
  * Extracts spoken word tokens from Scribe token array, excluding annotations.
  */
-export function extractSpokenWordTokens(
-  tokens: TranscriptToken[],
-): TranscriptToken[] {
+export function extractSpokenWordTokens(tokens: TranscriptToken[]): TranscriptToken[] {
   const spoken: TranscriptToken[] = [];
   let parenDepth = 0;
   let bracketDepth = 0;
@@ -45,8 +45,7 @@ export function extractSpokenWordTokens(
     const text = rawText.trim();
     if (!text) continue;
 
-    const isInsideAnnotation =
-      parenDepth > 0 || bracketDepth > 0 || /[()[\]]/.test(rawText);
+    const isInsideAnnotation = parenDepth > 0 || bracketDepth > 0 || /[()[\]]/.test(rawText);
 
     if (token.type === 'word' && !isInsideAnnotation) {
       spoken.push(token);

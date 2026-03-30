@@ -77,31 +77,31 @@ if __name__ == "__main__":
 ### JavaScript
 
 ```javascript
-import "dotenv/config";
-import { ElevenLabsClient, RealtimeEvents } from "@elevenlabs/elevenlabs-js";
+import 'dotenv/config';
+import { ElevenLabsClient, RealtimeEvents } from '@elevenlabs/elevenlabs-js';
 
 const elevenlabs = new ElevenLabsClient();
 
 const connection = await elevenlabs.speechToText.realtime.connect({
-  modelId: "scribe_v2_realtime",
-  url: "https://npr-ice.streamguys1.com/live.mp3",
-  includeTimestamps: true,
+  modelId: 'scribe_v2_realtime',
+  url: 'https://npr-ice.streamguys1.com/live.mp3',
+  includeTimestamps: true
 });
 
 connection.on(RealtimeEvents.PARTIAL_TRANSCRIPT, (transcript) => {
-  console.log("Partial transcript", transcript);
+  console.log('Partial transcript', transcript);
 });
 
 connection.on(RealtimeEvents.COMMITTED_TRANSCRIPT, (transcript) => {
-  console.log("Committed transcript", transcript);
+  console.log('Committed transcript', transcript);
 });
 
 connection.on(RealtimeEvents.ERROR, (error) => {
-  console.log("Error", error);
+  console.log('Error', error);
 });
 
 connection.on(RealtimeEvents.CLOSE, () => {
-  console.log("Connection closed");
+  console.log('Connection closed');
 });
 ```
 
@@ -307,11 +307,11 @@ wss://api.elevenlabs.io/v1/speech-to-text/realtime?model_id=scribe_v2_realtime
 
 ## Audio Requirements
 
-| Parameter | Value |
-|-----------|-------|
-| Format | PCM 16-bit |
-| Sample Rate | 16000 Hz (recommended) |
-| Channels | Mono |
-| Chunk Size | 32,000 bytes = 1 second |
+| Parameter   | Value                   |
+| ----------- | ----------------------- |
+| Format      | PCM 16-bit              |
+| Sample Rate | 16000 Hz (recommended)  |
+| Channels    | Mono                    |
+| Chunk Size  | 32,000 bytes = 1 second |
 
 Supported sample rates: 8kHz to 48kHz

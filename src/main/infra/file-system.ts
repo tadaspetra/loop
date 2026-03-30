@@ -38,11 +38,14 @@ export function writeJsonFile(filePath: string, data: unknown): void {
 export function atomicWriteFileSync(
   filePath: string,
   data: string | Buffer,
-  encoding?: BufferEncoding,
+  encoding?: BufferEncoding
 ): void {
   const dir = path.dirname(filePath);
   ensureDirectory(dir);
-  const tmpPath = path.join(dir, `.tmp-${crypto.randomBytes(6).toString('hex')}${path.extname(filePath)}`);
+  const tmpPath = path.join(
+    dir,
+    `.tmp-${crypto.randomBytes(6).toString('hex')}${path.extname(filePath)}`
+  );
   try {
     if (encoding) {
       fs.writeFileSync(tmpPath, data, encoding);
@@ -52,7 +55,11 @@ export function atomicWriteFileSync(
     fs.renameSync(tmpPath, filePath);
   } catch (error) {
     // Clean up temp file on failure
-    try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {
+      /* ignore */
+    }
     throw error;
   }
 }

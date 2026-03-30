@@ -3,7 +3,11 @@ name: speech-to-text
 description: Transcribe audio to text using ElevenLabs Scribe v2. Use when converting audio/video to text, generating subtitles, transcribing meetings, or processing spoken content.
 license: MIT
 compatibility: Requires internet access and an ElevenLabs API key (ELEVENLABS_API_KEY).
-metadata: {"openclaw": {"requires": {"env": ["ELEVENLABS_API_KEY"]}, "primaryEnv": "ELEVENLABS_API_KEY"}}
+metadata:
+  {
+    'openclaw':
+      { 'requires': { 'env': ['ELEVENLABS_API_KEY'] }, 'primaryEnv': 'ELEVENLABS_API_KEY' }
+  }
 ---
 
 # ElevenLabs Speech-to-Text
@@ -30,13 +34,13 @@ print(result.text)
 ### JavaScript
 
 ```javascript
-import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
-import { createReadStream } from "fs";
+import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
+import { createReadStream } from 'fs';
 
 const client = new ElevenLabsClient();
 const result = await client.speechToText.convert({
-  file: createReadStream("audio.mp3"),
-  modelId: "scribe_v2",
+  file: createReadStream('audio.mp3'),
+  modelId: 'scribe_v2'
 });
 console.log(result.text);
 ```
@@ -50,10 +54,10 @@ curl -X POST "https://api.elevenlabs.io/v1/speech-to-text" \
 
 ## Models
 
-| Model ID | Description | Best For |
-|----------|-------------|----------|
-| `scribe_v2` | State-of-the-art accuracy, 90+ languages | Batch transcription, subtitles, long-form audio |
-| `scribe_v2_realtime` | Low latency (~150ms) | Live transcription, voice agents |
+| Model ID             | Description                              | Best For                                        |
+| -------------------- | ---------------------------------------- | ----------------------------------------------- |
+| `scribe_v2`          | State-of-the-art accuracy, 90+ languages | Batch transcription, subtitles, long-form audio |
+| `scribe_v2_realtime` | Low latency (~150ms)                     | Live transcription, voice agents                |
 
 ## Transcription with Timestamps
 
@@ -125,13 +129,14 @@ print(f"Detected: {result.language_code} ({result.language_probability:.0%})")
   "language_code": "eng",
   "language_probability": 0.98,
   "words": [
-    {"text": "The", "start": 0.0, "end": 0.15, "type": "word", "speaker_id": "speaker_0"},
-    {"text": " ", "start": 0.15, "end": 0.16, "type": "spacing", "speaker_id": "speaker_0"}
+    { "text": "The", "start": 0.0, "end": 0.15, "type": "word", "speaker_id": "speaker_0" },
+    { "text": " ", "start": 0.15, "end": 0.16, "type": "spacing", "speaker_id": "speaker_0" }
   ]
 }
 ```
 
 **Word types:**
+
 - `word` - An actual spoken word
 - `spacing` - Whitespace between words (useful for precise timing)
 - `audio_event` - Non-speech sounds the model detected (laughter, applause, music, etc.)
@@ -146,6 +151,7 @@ except Exception as e:
 ```
 
 Common errors:
+
 - **401**: Invalid API key
 - **422**: Invalid parameters
 - **429**: Rate limit exceeded
@@ -223,30 +229,30 @@ function TranscriptionComponent() {
 
 ### Commit Strategies
 
-| Strategy | Description |
-|----------|-------------|
+| Strategy   | Description                                                                                     |
+| ---------- | ----------------------------------------------------------------------------------------------- |
 | **Manual** | You call `commit()` when ready - use for file processing or when you control the audio segments |
-| **VAD** | Voice Activity Detection auto-commits when silence is detected - use for live microphone input |
+| **VAD**    | Voice Activity Detection auto-commits when silence is detected - use for live microphone input  |
 
 ```javascript
 // VAD configuration
 const connection = await client.speechToText.realtime.connect({
-  modelId: "scribe_v2_realtime",
+  modelId: 'scribe_v2_realtime',
   vad: {
     silenceThresholdSecs: 1.5,
-    threshold: 0.4,
-  },
+    threshold: 0.4
+  }
 });
 ```
 
 ### Event Types
 
-| Event | Description |
-|-------|-------------|
-| `partial_transcript` | Live interim results |
-| `committed_transcript` | Final results after commit |
-| `committed_transcript_with_timestamps` | Final with word timing |
-| `error` | Error occurred |
+| Event                                  | Description                |
+| -------------------------------------- | -------------------------- |
+| `partial_transcript`                   | Live interim results       |
+| `committed_transcript`                 | Final results after commit |
+| `committed_transcript_with_timestamps` | Final with word timing     |
+| `error`                                | Error occurred             |
 
 See real-time references for complete documentation.
 

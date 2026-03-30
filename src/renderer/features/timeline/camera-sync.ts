@@ -17,7 +17,7 @@ export function normalizeCameraSyncOffsetMs(value: unknown): number {
 
 export function resolveCameraPlaybackTargetTime(
   screenTime: unknown,
-  cameraSyncOffsetMs = 0,
+  cameraSyncOffsetMs = 0
 ): number {
   const baseTime = Number(screenTime);
   if (!Number.isFinite(baseTime)) return 0;
@@ -29,12 +29,12 @@ export function computePlaybackSeekPlan(
   currentCameraTime: unknown,
   targetSourceTime: unknown,
   cameraSyncOffsetMs = 0,
-  seekThreshold = 0.01,
+  seekThreshold = 0.01
 ): PlaybackSeekPlan {
   const safeTargetSourceTime = Number(targetSourceTime);
   const targetCameraTime = resolveCameraPlaybackTargetTime(
     safeTargetSourceTime,
-    cameraSyncOffsetMs,
+    cameraSyncOffsetMs
   );
   const screenTime = Number(currentScreenTime);
   const cameraTime = Number(currentCameraTime);
@@ -43,25 +43,23 @@ export function computePlaybackSeekPlan(
     : 0.01;
 
   const screenNeedsSeek =
-    !Number.isFinite(screenTime) ||
-    Math.abs(screenTime - safeTargetSourceTime) > safeSeekThreshold;
+    !Number.isFinite(screenTime) || Math.abs(screenTime - safeTargetSourceTime) > safeSeekThreshold;
   const cameraNeedsSeek =
-    !Number.isFinite(cameraTime) ||
-    Math.abs(cameraTime - targetCameraTime) > safeSeekThreshold;
+    !Number.isFinite(cameraTime) || Math.abs(cameraTime - targetCameraTime) > safeSeekThreshold;
 
   return {
     targetSourceTime: safeTargetSourceTime,
     targetCameraTime,
     screenNeedsSeek,
     cameraNeedsSeek,
-    needsSeek: screenNeedsSeek || cameraNeedsSeek,
+    needsSeek: screenNeedsSeek || cameraNeedsSeek
   };
 }
 
 export function computeCameraPlaybackDrift(
   screenTime: unknown,
   cameraTime: unknown,
-  cameraSyncOffsetMs = 0,
+  cameraSyncOffsetMs = 0
 ): number {
   const targetTime = resolveCameraPlaybackTargetTime(screenTime, cameraSyncOffsetMs);
   const actualTime = Number(cameraTime);

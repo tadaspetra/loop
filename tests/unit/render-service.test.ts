@@ -31,10 +31,24 @@ function createRunFfmpegStub(
 describe('main/services/render-service', () => {
   test('normalizeSectionInput filters invalid sections', () => {
     const sections = normalizeSectionInput([
-      { takeId: 'a', sourceStart: 0, sourceEnd: 1, backgroundZoom: 1.75, backgroundPanX: 0.5, backgroundPanY: -0.3 },
+      {
+        takeId: 'a',
+        sourceStart: 0,
+        sourceEnd: 1,
+        backgroundZoom: 1.75,
+        backgroundPanX: 0.5,
+        backgroundPanY: -0.3
+      },
       { takeId: 'b', sourceStart: 2, sourceEnd: 1 },
       { takeId: 'c', sourceStart: 'x', sourceEnd: 3 },
-      { takeId: 'd', sourceStart: 0, sourceEnd: 2, backgroundZoom: 10, backgroundPanX: -9, backgroundPanY: 8 }
+      {
+        takeId: 'd',
+        sourceStart: 0,
+        sourceEnd: 2,
+        backgroundZoom: 10,
+        backgroundPanX: -9,
+        backgroundPanY: 8
+      }
     ]);
 
     expect(sections).toHaveLength(2);
@@ -51,7 +65,7 @@ describe('main/services/render-service', () => {
     const sections = normalizeSectionInput([
       { takeId: 'a', sourceStart: 0, sourceEnd: 1, imagePath: '/tmp/photo.png' },
       { takeId: 'b', sourceStart: 2, sourceEnd: 4 },
-      { takeId: 'c', sourceStart: 5, sourceEnd: 7, imagePath: '' },
+      { takeId: 'c', sourceStart: 5, sourceEnd: 7, imagePath: '' }
     ]);
 
     expect(sections).toHaveLength(3);
@@ -110,7 +124,9 @@ describe('main/services/render-service', () => {
         outputFolder: outputDir,
         takes: [{ id: 'take-1', screenPath, cameraPath: null }],
         sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.25 }],
-        keyframes: [{ time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }] as Keyframe[],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }
+        ] as Keyframe[],
         pipSize: 300,
         sourceWidth: 1920,
         sourceHeight: 1080,
@@ -143,6 +159,8 @@ describe('main/services/render-service', () => {
         '8',
         '-preset',
         'slow',
+        '-g',
+        '60',
         '-pix_fmt',
         'yuv420p',
         '-c:a',
@@ -167,7 +185,9 @@ describe('main/services/render-service', () => {
         outputFolder: outputDir,
         takes: [{ id: 'take-1', screenPath, cameraPath }],
         sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.0 }],
-        keyframes: [{ time: 0, pipX: 1478, pipY: 638, pipVisible: true, cameraFullscreen: false }] as Keyframe[],
+        keyframes: [
+          { time: 0, pipX: 1478, pipY: 638, pipVisible: true, cameraFullscreen: false }
+        ] as Keyframe[],
         pipSize: 422,
         sourceWidth: 3840,
         sourceHeight: 2160,
@@ -192,6 +212,8 @@ describe('main/services/render-service', () => {
         '24',
         '-preset',
         'veryfast',
+        '-g',
+        '60',
         '-pix_fmt',
         'yuv420p',
         '-b:a',
@@ -200,7 +222,9 @@ describe('main/services/render-service', () => {
     );
 
     const argString = execCalls[0].args.join(' ');
-    expect(argString).toContain('scale=1280:720:flags=lanczos:force_original_aspect_ratio=increase,crop=1280:720[screen]');
+    expect(argString).toContain(
+      'scale=1280:720:flags=lanczos:force_original_aspect_ratio=increase,crop=1280:720[screen]'
+    );
     expect(argString).toContain('scale=280:280');
     expect(argString).toContain("overlay=x='985':y='425'");
   });
@@ -217,7 +241,9 @@ describe('main/services/render-service', () => {
         outputFolder: outputDir,
         takes: [{ id: 'take-1', screenPath, cameraPath: null }],
         sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.25 }],
-        keyframes: [{ time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }] as Keyframe[],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }
+        ] as Keyframe[],
         pipSize: 300,
         sourceWidth: 1920,
         sourceHeight: 1080,
@@ -253,7 +279,9 @@ describe('main/services/render-service', () => {
         outputFolder: outputDir,
         takes: [{ id: 'take-1', screenPath, cameraPath: null }],
         sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.25 }],
-        keyframes: [{ time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }] as Keyframe[],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }
+        ] as Keyframe[],
         pipSize: 300,
         sourceWidth: 1920,
         sourceHeight: 1080,
@@ -290,7 +318,18 @@ describe('main/services/render-service', () => {
         outputFolder: outputDir,
         takes: [{ id: 'take-1', screenPath, cameraPath }],
         sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.0, backgroundZoom: 2 }],
-        keyframes: [{ time: 0, pipX: 10, pipY: 10, pipVisible: true, cameraFullscreen: false, backgroundZoom: 2, backgroundPanX: 0, backgroundPanY: 0 }] as Keyframe[],
+        keyframes: [
+          {
+            time: 0,
+            pipX: 10,
+            pipY: 10,
+            pipVisible: true,
+            cameraFullscreen: false,
+            backgroundZoom: 2,
+            backgroundPanX: 0,
+            backgroundPanY: 0
+          }
+        ] as Keyframe[],
         pipSize: 300,
         sourceWidth: 1920,
         sourceHeight: 1080,
@@ -307,7 +346,9 @@ describe('main/services/render-service', () => {
     );
 
     const argString = execCalls[0].args.join(' ');
-    expect(argString).toContain("[screen_raw]scale=1920:1080:flags=lanczos:force_original_aspect_ratio=increase,crop=1920:1080[screen_base];[screen_base]zoompan=z='2.000'");
+    expect(argString).toContain(
+      "[screen_raw]scale=1920:1080:flags=lanczos:force_original_aspect_ratio=increase,crop=1920:1080[screen_base];[screen_base]zoompan=z='2.000'"
+    );
     expect(argString).toContain('[1:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS[cv0]');
     expect(argString).not.toContain('scale=3840:2160,crop=1920:1080:960:540[cv0]');
   });
@@ -326,7 +367,9 @@ describe('main/services/render-service', () => {
         outputFolder: outputDir,
         takes: [{ id: 'take-1', screenPath, cameraPath }],
         sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.0 }],
-        keyframes: [{ time: 0, pipX: 1478, pipY: 638, pipVisible: true, cameraFullscreen: false }] as Keyframe[],
+        keyframes: [
+          { time: 0, pipX: 1478, pipY: 638, pipVisible: true, cameraFullscreen: false }
+        ] as Keyframe[],
         pipSize: 422,
         sourceWidth: 3840,
         sourceHeight: 2160,
@@ -343,7 +386,9 @@ describe('main/services/render-service', () => {
     );
 
     const argString = execCalls[0].args.join(' ');
-    expect(argString).toContain('scale=2560:1440:flags=lanczos:force_original_aspect_ratio=increase,crop=2560:1440[screen]');
+    expect(argString).toContain(
+      'scale=2560:1440:flags=lanczos:force_original_aspect_ratio=increase,crop=2560:1440[screen]'
+    );
     expect(argString).toContain('scale=562:562');
     expect(argString).toContain("overlay=x='1971':y='851'");
   });
@@ -360,7 +405,9 @@ describe('main/services/render-service', () => {
         outputFolder: outputDir,
         takes: [{ id: 'take-1', screenPath, cameraPath: null }],
         sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.0 }],
-        keyframes: [{ time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }] as Keyframe[],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }
+        ] as Keyframe[],
         pipSize: 300,
         sourceWidth: 1510,
         sourceHeight: 982,
@@ -377,7 +424,9 @@ describe('main/services/render-service', () => {
     );
 
     const argString = execCalls[0].args.join(' ');
-    expect(argString).toContain('scale=1920:1080:flags=lanczos:force_original_aspect_ratio=increase,crop=1920:1080[out]');
+    expect(argString).toContain(
+      'scale=1920:1080:flags=lanczos:force_original_aspect_ratio=increase,crop=1920:1080[out]'
+    );
     expect(argString).not.toContain('scale=1510:982');
   });
 
@@ -395,7 +444,9 @@ describe('main/services/render-service', () => {
         outputFolder: outputDir,
         takes: [{ id: 'take-1', screenPath, cameraPath }],
         sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.0 }],
-        keyframes: [{ time: 0, pipX: 10, pipY: 10, pipVisible: true, cameraFullscreen: false }] as Keyframe[],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: true, cameraFullscreen: false }
+        ] as Keyframe[],
         pipSize: 300,
         sourceWidth: 1920,
         sourceHeight: 1080,
@@ -413,7 +464,9 @@ describe('main/services/render-service', () => {
     );
 
     const argString = execCalls[0].args.join(' ');
-    expect(argString).toContain('[1:v]trim=start=0.120:end=1.120,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.120,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]');
+    expect(argString).toContain(
+      '[1:v]trim=start=0.120:end=1.120,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.120,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]'
+    );
   });
 
   test('renderComposite applies clamped section pan to background crop', async () => {
@@ -437,7 +490,18 @@ describe('main/services/render-service', () => {
             backgroundPanY: -1
           }
         ],
-        keyframes: [{ time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false, backgroundZoom: 2, backgroundPanX: 1, backgroundPanY: -1 }] as Keyframe[],
+        keyframes: [
+          {
+            time: 0,
+            pipX: 10,
+            pipY: 10,
+            pipVisible: false,
+            cameraFullscreen: false,
+            backgroundZoom: 2,
+            backgroundPanX: 1,
+            backgroundPanY: -1
+          }
+        ] as Keyframe[],
         pipSize: 300,
         sourceWidth: 1920,
         sourceHeight: 1080,
@@ -454,7 +518,9 @@ describe('main/services/render-service', () => {
     );
 
     const argString = execCalls[0].args.join(' ');
-    expect(argString).toContain("zoompan=z='2.000':x='max(0,min(iw-iw/zoom,iw*(0.750000)-iw/zoom/2))':y='max(0,min(ih-ih/zoom,ih*(0.250000)-ih/zoom/2))'");
+    expect(argString).toContain(
+      "zoompan=z='2.000':x='max(0,min(iw-iw/zoom,iw*(0.750000)-iw/zoom/2))':y='max(0,min(ih-ih/zoom,ih*(0.250000)-ih/zoom/2))'"
+    );
   });
 
   test('renderComposite animates background zoom and pan through section boundaries', async () => {
@@ -469,12 +535,44 @@ describe('main/services/render-service', () => {
         outputFolder: outputDir,
         takes: [{ id: 'take-1', screenPath, cameraPath: null }],
         sections: [
-          { takeId: 'take-1', sourceStart: 0, sourceEnd: 1.0, backgroundZoom: 1, backgroundPanX: 0, backgroundPanY: 0 },
-          { takeId: 'take-1', sourceStart: 1.0, sourceEnd: 2.0, backgroundZoom: 2, backgroundPanX: 1, backgroundPanY: -1 }
+          {
+            takeId: 'take-1',
+            sourceStart: 0,
+            sourceEnd: 1.0,
+            backgroundZoom: 1,
+            backgroundPanX: 0,
+            backgroundPanY: 0
+          },
+          {
+            takeId: 'take-1',
+            sourceStart: 1.0,
+            sourceEnd: 2.0,
+            backgroundZoom: 2,
+            backgroundPanX: 1,
+            backgroundPanY: -1
+          }
         ],
         keyframes: [
-          { time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false, backgroundZoom: 1, backgroundPanX: 0, backgroundPanY: 0 },
-          { time: 1, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false, backgroundZoom: 2, backgroundPanX: 1, backgroundPanY: -1 }
+          {
+            time: 0,
+            pipX: 10,
+            pipY: 10,
+            pipVisible: false,
+            cameraFullscreen: false,
+            backgroundZoom: 1,
+            backgroundPanX: 0,
+            backgroundPanY: 0
+          },
+          {
+            time: 1,
+            pipX: 10,
+            pipY: 10,
+            pipVisible: false,
+            cameraFullscreen: false,
+            backgroundZoom: 2,
+            backgroundPanX: 1,
+            backgroundPanY: -1
+          }
         ] as Keyframe[],
         pipSize: 300,
         sourceWidth: 1920,
@@ -493,7 +591,8 @@ describe('main/services/render-service', () => {
 
     const argString = execCalls[0].args.join(' ');
     expect(argString).toContain('if(gte(it,1.000),2.000');
-    expect(argString).toContain('if(gte(it,0.700),1.000+1.000*(it-0.700)/0.300');
+    expect(argString).toContain('if(gte(it,0.700),1.000+1.000*if(lt(');
+    expect(argString).toContain('pow(');
   });
 
   test('renderComposite reuses ffmpeg inputs for repeated sections from the same take', async () => {
@@ -513,7 +612,9 @@ describe('main/services/render-service', () => {
           { takeId: 'take-1', sourceStart: 0, sourceEnd: 1.0 },
           { takeId: 'take-1', sourceStart: 1.0, sourceEnd: 2.0 }
         ],
-        keyframes: [{ time: 0, pipX: 10, pipY: 10, pipVisible: true, cameraFullscreen: false }] as Keyframe[],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: true, cameraFullscreen: false }
+        ] as Keyframe[],
         pipSize: 300,
         sourceWidth: 1920,
         sourceHeight: 1080,
@@ -535,8 +636,12 @@ describe('main/services/render-service', () => {
     expect(args.filter((value) => value === cameraPath)).toHaveLength(1);
 
     const argString = args.join(' ');
-    expect(argString).toContain('[0:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,setsar=1[sv0]');
-    expect(argString).toContain('[0:v]trim=start=1.000:end=2.000,setpts=PTS-STARTPTS,setsar=1[sv1]');
+    expect(argString).toContain(
+      '[0:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,setsar=1[sv0]'
+    );
+    expect(argString).toContain(
+      '[0:v]trim=start=1.000:end=2.000,setpts=PTS-STARTPTS,setsar=1[sv1]'
+    );
     expect(argString).toContain('[1:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS[cv0]');
     expect(argString).toContain('[1:v]trim=start=1.000:end=2.000,setpts=PTS-STARTPTS[cv1]');
   });
@@ -566,7 +671,9 @@ describe('main/services/render-service', () => {
           { takeId: 'take-b', sourceStart: 1.0, sourceEnd: 2.0 },
           { takeId: 'take-a', sourceStart: 2.0, sourceEnd: 3.0 }
         ],
-        keyframes: [{ time: 0, pipX: 10, pipY: 10, pipVisible: true, cameraFullscreen: false }] as Keyframe[],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: true, cameraFullscreen: false }
+        ] as Keyframe[],
         pipSize: 300,
         sourceWidth: 1920,
         sourceHeight: 1080,
@@ -584,9 +691,15 @@ describe('main/services/render-service', () => {
 
     const argString = execCalls[0].args.join(' ');
     expect(execCalls[0].args.filter((value) => value === '-i')).toHaveLength(4);
-    expect(argString).toContain('[0:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,setsar=1[sv0]');
-    expect(argString).toContain('[2:v]trim=start=1.000:end=2.000,setpts=PTS-STARTPTS,setsar=1[sv1]');
-    expect(argString).toContain('[0:v]trim=start=2.000:end=3.000,setpts=PTS-STARTPTS,setsar=1[sv2]');
+    expect(argString).toContain(
+      '[0:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,setsar=1[sv0]'
+    );
+    expect(argString).toContain(
+      '[2:v]trim=start=1.000:end=2.000,setpts=PTS-STARTPTS,setsar=1[sv1]'
+    );
+    expect(argString).toContain(
+      '[0:v]trim=start=2.000:end=3.000,setpts=PTS-STARTPTS,setsar=1[sv2]'
+    );
     expect(argString).toContain('[1:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS[cv0]');
     expect(argString).toContain('[3:v]trim=start=1.000:end=2.000,setpts=PTS-STARTPTS[cv1]');
     expect(argString).toContain('[1:v]trim=start=2.000:end=3.000,setpts=PTS-STARTPTS[cv2]');
@@ -608,7 +721,9 @@ describe('main/services/render-service', () => {
           { takeId: 'take-1', sourceStart: 90.017, sourceEnd: 143.531 },
           { takeId: 'take-1', sourceStart: 200.201, sourceEnd: 271.889 }
         ],
-        keyframes: [{ time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }] as Keyframe[],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }
+        ] as Keyframe[],
         pipSize: 300,
         sourceWidth: 1920,
         sourceHeight: 1080,
@@ -625,9 +740,15 @@ describe('main/services/render-service', () => {
     );
 
     const argString = execCalls[0].args.join(' ');
-    expect(argString).toContain('[0:v]trim=start=0.000:end=61.113,setpts=PTS-STARTPTS,setsar=1[sv0]');
-    expect(argString).toContain('[0:v]trim=start=90.017:end=143.531,setpts=PTS-STARTPTS,setsar=1[sv1]');
-    expect(argString).toContain('[0:v]trim=start=200.201:end=271.889,setpts=PTS-STARTPTS,setsar=1[sv2]');
+    expect(argString).toContain(
+      '[0:v]trim=start=0.000:end=61.113,setpts=PTS-STARTPTS,setsar=1[sv0]'
+    );
+    expect(argString).toContain(
+      '[0:v]trim=start=90.017:end=143.531,setpts=PTS-STARTPTS,setsar=1[sv1]'
+    );
+    expect(argString).toContain(
+      '[0:v]trim=start=200.201:end=271.889,setpts=PTS-STARTPTS,setsar=1[sv2]'
+    );
     expect(argString).toContain('[out]fps=fps=30:round=near[out_cfr]');
     expect(argString).not.toContain('setpts=PTS-STARTPTS,fps=fps=30,setsar=1[sv');
   });
@@ -644,7 +765,9 @@ describe('main/services/render-service', () => {
         outputFolder: outputDir,
         takes: [{ id: 'take-1', screenPath, cameraPath: null }],
         sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 4.0 }],
-        keyframes: [{ time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }] as Keyframe[],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }
+        ] as Keyframe[],
         pipSize: 300,
         sourceWidth: 1920,
         sourceHeight: 1080,
@@ -656,7 +779,14 @@ describe('main/services/render-service', () => {
         probeVideoFpsWithFfmpeg: async () => 30,
         onProgress: (update) => updates.push(update),
         runFfmpeg: createRunFfmpegStub(({ onProgress }) => {
-          onProgress!({ status: 'continue', outTimeSec: 2, frame: 48, speed: 1.1, fps: null, raw: {} });
+          onProgress!({
+            status: 'continue',
+            outTimeSec: 2,
+            frame: 48,
+            speed: 1.1,
+            fps: null,
+            raw: {}
+          });
           onProgress!({ status: 'end', outTimeSec: 4, frame: 96, speed: 0.9, fps: null, raw: {} });
         })
       }

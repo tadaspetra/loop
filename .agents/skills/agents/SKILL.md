@@ -3,7 +3,11 @@ name: agents
 description: Build voice AI agents with ElevenLabs. Use when creating voice assistants, customer service bots, interactive voice characters, or any real-time voice conversation experience.
 license: MIT
 compatibility: Requires internet access and an ElevenLabs API key (ELEVENLABS_API_KEY).
-metadata: {"openclaw": {"requires": {"env": ["ELEVENLABS_API_KEY"]}, "primaryEnv": "ELEVENLABS_API_KEY"}}
+metadata:
+  {
+    'openclaw':
+      { 'requires': { 'env': ['ELEVENLABS_API_KEY'] }, 'primaryEnv': 'ELEVENLABS_API_KEY' }
+  }
 ---
 
 # ElevenLabs Agents Platform
@@ -58,22 +62,22 @@ agent = client.conversational_ai.agents.create(
 ### JavaScript
 
 ```javascript
-import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
+import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 const client = new ElevenLabsClient();
 
 const agent = await client.conversationalAi.agents.create({
-  name: "My Assistant",
+  name: 'My Assistant',
   conversationConfig: {
     agent: {
-      firstMessage: "Hello! How can I help?",
-      language: "en",
+      firstMessage: 'Hello! How can I help?',
+      language: 'en',
       prompt: {
-        prompt: "You are a helpful assistant.",
-        llm: "gemini-2.0-flash",
+        prompt: 'You are a helpful assistant.',
+        llm: 'gemini-2.0-flash',
         temperature: 0.7
       }
     },
-    tts: { voiceId: "JBFqnCBsd6RMkjVDRZzb" }
+    tts: { voiceId: 'JBFqnCBsd6RMkjVDRZzb' }
   }
 });
 ```
@@ -89,25 +93,28 @@ curl -X POST "https://api.elevenlabs.io/v1/convai/agents/create" \
 ## Starting Conversations
 
 **Server-side (Python):** Get signed URL for client connection:
+
 ```python
 signed_url = client.conversational_ai.conversations.get_signed_url(agent_id="your-agent-id")
 ```
 
 **Client-side (JavaScript):**
+
 ```javascript
-import { Conversation } from "@elevenlabs/client";
+import { Conversation } from '@elevenlabs/client';
 
 const conversation = await Conversation.startSession({
-  agentId: "your-agent-id",
-  onMessage: (msg) => console.log("Agent:", msg.message),
-  onUserTranscript: (t) => console.log("User:", t.message),
+  agentId: 'your-agent-id',
+  onMessage: (msg) => console.log('Agent:', msg.message),
+  onUserTranscript: (t) => console.log('User:', t.message),
   onError: (e) => console.error(e)
 });
 ```
 
 **React Hook:**
+
 ```typescript
-import { useConversation } from "@elevenlabs/react";
+import { useConversation } from '@elevenlabs/react';
 
 const conversation = useConversation({ onMessage: (msg) => console.log(msg) });
 // Get signed URL from backend, then:
@@ -116,13 +123,13 @@ await conversation.startSession({ signedUrl: token });
 
 ## Configuration
 
-| Provider | Models |
-|----------|--------|
-| OpenAI | `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`, `gpt-4o`, `gpt-4o-mini`, `gpt-4-turbo` |
-| Anthropic | `claude-sonnet-4-5`, `claude-sonnet-4`, `claude-haiku-4-5`, `claude-3-7-sonnet`, `claude-3-5-sonnet`, `claude-3-haiku` |
-| Google | `gemini-3-pro-preview`, `gemini-3-flash-preview`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.0-flash`, `gemini-2.0-flash-lite` |
-| ElevenLabs | `glm-45-air-fp8`, `qwen3-30b-a3b`, `gpt-oss-120b` |
-| Custom | `custom-llm` (bring your own endpoint) |
+| Provider   | Models                                                                                                                                     |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| OpenAI     | `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`, `gpt-4o`, `gpt-4o-mini`, `gpt-4-turbo`                     |
+| Anthropic  | `claude-sonnet-4-5`, `claude-sonnet-4`, `claude-haiku-4-5`, `claude-3-7-sonnet`, `claude-3-5-sonnet`, `claude-3-haiku`                     |
+| Google     | `gemini-3-pro-preview`, `gemini-3-flash-preview`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.0-flash`, `gemini-2.0-flash-lite` |
+| ElevenLabs | `glm-45-air-fp8`, `qwen3-30b-a3b`, `gpt-oss-120b`                                                                                          |
+| Custom     | `custom-llm` (bring your own endpoint)                                                                                                     |
 
 **Popular voices:** `JBFqnCBsd6RMkjVDRZzb` (George), `EXAVITQu4vr4xnSDxMaL` (Sarah), `onwK4e9ZLuTAKqWW03F9` (Daniel), `XB0fDUnXU5powFXDhCwa` (Charlotte)
 
@@ -155,12 +162,13 @@ Extend agents with webhook, client, or built-in system tools. Tools are defined 
 ```
 
 **Client tools** run in browser:
+
 ```javascript
 clientTools: {
   show_product: async ({ productId }) => {
-    document.getElementById("product").src = `/products/${productId}`;
+    document.getElementById('product').src = `/products/${productId}`;
     return { success: true };
-  }
+  };
 }
 ```
 
@@ -170,7 +178,11 @@ See [Client Tools Reference](references/client-tools.md) for complete documentat
 
 ```html
 <elevenlabs-convai agent-id="your-agent-id"></elevenlabs-convai>
-<script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
+<script
+  src="https://unpkg.com/@elevenlabs/convai-widget-embed"
+  async
+  type="text/javascript"
+></script>
 ```
 
 Customize with attributes: `avatar-image-url`, `action-text`, `start-call-text`, `end-call-text`.
@@ -196,9 +208,9 @@ print(f"Call initiated: {response.conversation_id}")
 
 ```javascript
 const response = await client.conversationalAi.twilio.outboundCall({
-  agentId: "your-agent-id",
-  agentPhoneNumberId: "your-phone-number-id",
-  toNumber: "+1234567890",
+  agentId: 'your-agent-id',
+  agentPhoneNumberId: 'your-phone-number-id',
+  toNumber: '+1234567890'
 });
 ```
 

@@ -1,7 +1,7 @@
 export const RECORDER_MIME_CANDIDATES = [
   'video/webm; codecs=vp8',
   'video/webm',
-  'video/webm; codecs=vp9',
+  'video/webm; codecs=vp9'
 ] as const;
 
 export const RECORDER_TIMESLICE_MS = 1000;
@@ -24,25 +24,20 @@ export interface FinalizedRecordingResult {
 }
 
 export function getSupportedRecorderMimeType(
-  mediaRecorderCtor: MediaRecorderCtorLike | undefined = globalThis.MediaRecorder,
+  mediaRecorderCtor: MediaRecorderCtorLike | undefined = globalThis.MediaRecorder
 ): string {
-  if (
-    !mediaRecorderCtor ||
-    typeof mediaRecorderCtor.isTypeSupported !== 'function'
-  ) {
+  if (!mediaRecorderCtor || typeof mediaRecorderCtor.isTypeSupported !== 'function') {
     return '';
   }
 
   return (
-    RECORDER_MIME_CANDIDATES.find((mimeType) =>
-      mediaRecorderCtor.isTypeSupported?.(mimeType),
-    ) || ''
+    RECORDER_MIME_CANDIDATES.find((mimeType) => mediaRecorderCtor.isTypeSupported?.(mimeType)) || ''
   );
 }
 
 export function getRecorderOptions(
   { suffix, hasAudio = true }: { suffix?: string; hasAudio?: boolean } = {},
-  mediaRecorderCtor: MediaRecorderCtorLike | undefined = globalThis.MediaRecorder,
+  mediaRecorderCtor: MediaRecorderCtorLike | undefined = globalThis.MediaRecorder
 ): MediaRecorderOptions {
   const mimeType = getSupportedRecorderMimeType(mediaRecorderCtor);
   const options: MediaRecorderOptions = mimeType ? { mimeType } : {};
@@ -69,7 +64,7 @@ export function getRecorderFinalizeTimeoutMs(): number {
 export function shouldRenderPreviewFrame(
   now: number,
   lastFrameAt: number,
-  isRecording: boolean,
+  isRecording: boolean
 ): boolean {
   const targetFps = isRecording ? PREVIEW_FPS_RECORDING : PREVIEW_FPS_IDLE;
   const minFrameIntervalMs = 1000 / targetFps;
@@ -78,7 +73,7 @@ export function shouldRenderPreviewFrame(
 
 export function createCameraRecordingStream(
   cameraStream: MediaStream | null | undefined,
-  MediaStreamCtor: MediaStreamCtorLike = globalThis.MediaStream,
+  MediaStreamCtor: MediaStreamCtorLike = globalThis.MediaStream
 ): MediaStream | null {
   if (!cameraStream || typeof cameraStream.getVideoTracks !== 'function') {
     return null;
@@ -95,14 +90,14 @@ export async function finalizeRecordingChunks({
   saveVideo,
   suffix,
   BlobCtor = globalThis.Blob,
-  mimeType = 'video/webm',
+  mimeType = 'video/webm'
 }: {
   chunks: BlobPart[];
   saveFolder: string;
   saveVideo: (
     buffer: ArrayBuffer,
     saveFolder: string,
-    suffix: string,
+    suffix: string
   ) => Promise<string | null | undefined>;
   suffix: string;
   BlobCtor?: BlobCtorLike;
@@ -114,7 +109,7 @@ export async function finalizeRecordingChunks({
       blob,
       error: `${suffix} recording produced no data`,
       path: null,
-      suffix,
+      suffix
     };
   }
 
@@ -129,14 +124,14 @@ export async function finalizeRecordingChunks({
       blob,
       error: null,
       path: savedPath,
-      suffix,
+      suffix
     };
   } catch (error) {
     return {
       blob,
       error: error instanceof Error ? error.message : String(error),
       path: null,
-      suffix,
+      suffix
     };
   }
 }

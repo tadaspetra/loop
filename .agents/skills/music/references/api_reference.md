@@ -13,16 +13,16 @@ Generate music from a text prompt. Returns an audio stream.
 
 ### Parameters
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `prompt` | string | Yes* | Description of desired music |
-| `composition_plan` | object | Yes* | Pre-defined composition plan (alternative to prompt) |
-| `music_length_ms` | integer | No | Duration in milliseconds (3,000–600,000) when using `prompt`; if omitted, the model chooses |
-| `model_id` | string | No | Defaults to `music_v1` |
-| `force_instrumental` | boolean | No | Guarantee an instrumental output (prompt mode only) |
-| `respect_sections_durations` | boolean | No | Enforce exact `duration_ms` in each composition plan section |
+| Parameter                    | Type    | Required | Description                                                                                 |
+| ---------------------------- | ------- | -------- | ------------------------------------------------------------------------------------------- |
+| `prompt`                     | string  | Yes\*    | Description of desired music                                                                |
+| `composition_plan`           | object  | Yes\*    | Pre-defined composition plan (alternative to prompt)                                        |
+| `music_length_ms`            | integer | No       | Duration in milliseconds (3,000–600,000) when using `prompt`; if omitted, the model chooses |
+| `model_id`                   | string  | No       | Defaults to `music_v1`                                                                      |
+| `force_instrumental`         | boolean | No       | Guarantee an instrumental output (prompt mode only)                                         |
+| `respect_sections_durations` | boolean | No       | Enforce exact `duration_ms` in each composition plan section                                |
 
-*Provide either `prompt` or `composition_plan`, not both.
+\*Provide either `prompt` or `composition_plan`, not both.
 
 ### Python
 
@@ -41,11 +41,11 @@ with open("output.mp3", "wb") as f:
 
 ```javascript
 const audio = await client.music.compose({
-  prompt: "An upbeat electronic track with synth leads",
-  musicLengthMs: 30000,
+  prompt: 'An upbeat electronic track with synth leads',
+  musicLengthMs: 30000
 });
 
-const writeStream = createWriteStream("output.mp3");
+const writeStream = createWriteStream('output.mp3');
 audio.pipe(writeStream);
 ```
 
@@ -70,10 +70,10 @@ Generate a structured composition plan from a prompt for granular control before
 
 ### Parameters
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `prompt` | string | Yes | Music description |
-| `music_length_ms` | integer | Yes | Duration in milliseconds |
+| Parameter         | Type    | Required | Description              |
+| ----------------- | ------- | -------- | ------------------------ |
+| `prompt`          | string  | Yes      | Music description        |
+| `music_length_ms` | integer | Yes      | Duration in milliseconds |
 
 ### Response Structure
 
@@ -86,9 +86,7 @@ Generate a structured composition plan from a prompt for granular control before
       "name": "Intro",
       "localStyles": ["soft", "building"],
       "duration_ms": 15000,
-      "lines": [
-        { "text": "Instrumental intro", "type": "instrumental" }
-      ]
+      "lines": [{ "text": "Instrumental intro", "type": "instrumental" }]
     }
   ]
 }
@@ -114,11 +112,11 @@ Generate music while returning both the composition plan and metadata alongside 
 
 ### Returns
 
-| Field | Description |
-|-------|-------------|
-| `json` | Composition plan + song metadata (includes lyrics if applicable) |
-| `filename` | Output file identifier |
-| `audio` | Audio bytes |
+| Field      | Description                                                      |
+| ---------- | ---------------------------------------------------------------- |
+| `json`     | Composition plan + song metadata (includes lyrics if applicable) |
+| `filename` | Output file identifier                                           |
+| `audio`    | Audio bytes                                                      |
 
 ### Python
 
@@ -158,8 +156,8 @@ Returned when a composition plan contains copyrighted styles. The error includes
 
 ### Common HTTP Errors
 
-| Code | Meaning |
-|------|---------|
-| 401 | Invalid API key |
-| 422 | Invalid parameters |
-| 429 | Rate limit exceeded |
+| Code | Meaning             |
+| ---- | ------------------- |
+| 401  | Invalid API key     |
+| 422  | Invalid parameters  |
+| 429  | Rate limit exceeded |

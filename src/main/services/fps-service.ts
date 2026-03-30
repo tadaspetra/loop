@@ -11,11 +11,7 @@ export function parseFpsToken(token: unknown): number | null {
     const [numRaw, denRaw] = value.split('/');
     const numerator = Number(numRaw);
     const denominator = Number(denRaw);
-    if (
-      !Number.isFinite(numerator) ||
-      !Number.isFinite(denominator) ||
-      denominator === 0
-    ) {
+    if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator === 0) {
       return null;
     }
 
@@ -31,7 +27,7 @@ export function parseVideoFpsFromProbeOutput(output: unknown): number | null {
 
   const patterns = [
     /,\s*([0-9]+(?:\.[0-9]+)?(?:\/[0-9]+(?:\.[0-9]+)?)?)\s*fps\b/i,
-    /,\s*([0-9]+(?:\.[0-9]+)?(?:\/[0-9]+(?:\.[0-9]+)?)?)\s*tbr\b/i,
+    /,\s*([0-9]+(?:\.[0-9]+)?(?:\/[0-9]+(?:\.[0-9]+)?)?)\s*tbr\b/i
   ];
 
   for (const pattern of patterns) {
@@ -47,7 +43,7 @@ export function parseVideoFpsFromProbeOutput(output: unknown): number | null {
 
 export function probeVideoFpsWithFfmpeg(
   ffmpegPath: string,
-  filePath: string,
+  filePath: string
 ): Promise<number | null> {
   return new Promise((resolve) => {
     execFile(
@@ -58,13 +54,10 @@ export function probeVideoFpsWithFfmpeg(
         const output = `${stdout || ''}\n${stderr || ''}`;
         const fps = parseVideoFpsFromProbeOutput(output);
         if (error && !fps) {
-          console.warn(
-            `[render-composite] FPS probe failed for ${filePath}:`,
-            error.message,
-          );
+          console.warn(`[render-composite] FPS probe failed for ${filePath}:`, error.message);
         }
         resolve(fps);
-      },
+      }
     );
   });
 }

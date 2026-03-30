@@ -80,7 +80,16 @@ describe('shared/domain/project', () => {
         name: '  demo<>name ',
         timeline: {
           sections: [{ start: 0, end: 2 }],
-          keyframes: [{ time: 0, pipX: 10, pipY: 20, backgroundZoom: 1.8, backgroundPanX: 0.25, backgroundPanY: -0.5 }]
+          keyframes: [
+            {
+              time: 0,
+              pipX: 10,
+              pipY: 20,
+              backgroundZoom: 1.8,
+              backgroundPanX: 0.25,
+              backgroundPanY: -0.5
+            }
+          ]
         }
       },
       '/tmp/my-project'
@@ -185,7 +194,7 @@ describe('shared/domain/project', () => {
     const sections = normalizeSections([
       { start: 0, end: 2, imagePath: '/tmp/photo.png' },
       { start: 3, end: 5 },
-      { start: 6, end: 8, imagePath: '' },
+      { start: 6, end: 8, imagePath: '' }
     ]);
 
     expect(sections).toHaveLength(3);
@@ -198,11 +207,18 @@ describe('shared/domain/project', () => {
     const project = normalizeProjectData(
       {
         takes: [
-          { id: 'take-1', screenPath: 'screen.webm', cameraPath: null, proxyPath: 'screen-proxy.mp4', duration: 10, sections: [] },
-          { id: 'take-2', screenPath: 'screen2.webm', cameraPath: null, duration: 5, sections: [] },
-        ],
+          {
+            id: 'take-1',
+            screenPath: 'screen.webm',
+            cameraPath: null,
+            proxyPath: 'screen-proxy.mp4',
+            duration: 10,
+            sections: []
+          },
+          { id: 'take-2', screenPath: 'screen2.webm', cameraPath: null, duration: 5, sections: [] }
+        ]
       },
-      '/tmp/my-project',
+      '/tmp/my-project'
     );
 
     expect(project.takes[0].proxyPath).toBe('/tmp/my-project/screen-proxy.mp4');
@@ -215,11 +231,11 @@ describe('shared/domain/project', () => {
         timeline: {
           sections: [
             { start: 0, end: 2, imagePath: 'image-123-photo.png' },
-            { start: 3, end: 5 },
-          ],
-        },
+            { start: 3, end: 5 }
+          ]
+        }
       },
-      '/tmp/my-project',
+      '/tmp/my-project'
     );
 
     expect(project.timeline.sections[0].imagePath).toBe('/tmp/my-project/image-123-photo.png');

@@ -5,6 +5,7 @@ coverage
 dist-smoke
 .env
 .cursor/hooks/state/
+src/renderer/styles/main.css
 
 .claude/worktrees/*
 pnpm-lock.yaml

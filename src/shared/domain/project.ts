@@ -138,18 +138,12 @@ export function sanitizeProjectName(name: unknown): string {
   return cleaned || fallback;
 }
 
-export function toProjectAbsolutePath(
-  projectFolder: string,
-  value: unknown,
-): string | null {
+export function toProjectAbsolutePath(projectFolder: string, value: unknown): string | null {
   if (typeof value !== 'string' || !value.trim()) return null;
   return path.isAbsolute(value) ? value : path.join(projectFolder, value);
 }
 
-export function toProjectRelativePath(
-  projectFolder: string,
-  value: unknown,
-): string | null {
+export function toProjectRelativePath(projectFolder: string, value: unknown): string | null {
   if (typeof value !== 'string' || !value.trim()) return null;
   if (!path.isAbsolute(value)) return value;
 
@@ -181,43 +175,26 @@ export function normalizeSections(rawSections: unknown = []): Section[] {
           ? section.transcript
           : typeof section.text === 'string'
             ? section.text
-            : '',
+            : ''
       )
         .replace(/\s+/g, ' ')
         .trim();
 
       return {
-        id:
-          typeof section.id === 'string' && section.id
-            ? section.id
-            : `section-${index + 1}`,
-        index: Number.isFinite(Number(section.index))
-          ? Number(section.index)
-          : index,
-        label:
-          typeof section.label === 'string'
-            ? section.label
-            : `Section ${index + 1}`,
+        id: typeof section.id === 'string' && section.id ? section.id : `section-${index + 1}`,
+        index: Number.isFinite(Number(section.index)) ? Number(section.index) : index,
+        label: typeof section.label === 'string' ? section.label : `Section ${index + 1}`,
         start: Number.isFinite(start) ? start : 0,
         end: Number.isFinite(end) ? end : 0,
         duration: Number.isFinite(Number(section.duration))
           ? Number(section.duration)
-          : Math.max(
-              0,
-              (Number.isFinite(end) ? end : 0) -
-                (Number.isFinite(start) ? start : 0),
-            ),
+          : Math.max(0, (Number.isFinite(end) ? end : 0) - (Number.isFinite(start) ? start : 0)),
         sourceStart: Number.isFinite(sourceStart) ? sourceStart : 0,
         sourceEnd: Number.isFinite(sourceEnd) ? sourceEnd : 0,
-        takeId:
-          typeof section.takeId === 'string' && section.takeId
-            ? section.takeId
-            : null,
+        takeId: typeof section.takeId === 'string' && section.takeId ? section.takeId : null,
         transcript,
         imagePath:
-          typeof section.imagePath === 'string' && section.imagePath
-            ? section.imagePath
-            : null,
+          typeof section.imagePath === 'string' && section.imagePath ? section.imagePath : null
       };
     })
     .filter((section) => section.end - section.start > 0.0001)
@@ -246,20 +223,15 @@ export function normalizeKeyframes(rawKeyframes: unknown = []): Keyframe[] {
 
       return {
         time: Number.isFinite(Number(keyframe.time)) ? Number(keyframe.time) : 0,
-        pipX: Number.isFinite(Number(keyframe.pipX))
-          ? Number(keyframe.pipX)
-          : 0,
-        pipY: Number.isFinite(Number(keyframe.pipY))
-          ? Number(keyframe.pipY)
-          : 0,
+        pipX: Number.isFinite(Number(keyframe.pipX)) ? Number(keyframe.pipX) : 0,
+        pipY: Number.isFinite(Number(keyframe.pipY)) ? Number(keyframe.pipY) : 0,
         pipVisible: keyframe.pipVisible !== false,
         cameraFullscreen: Boolean(keyframe.cameraFullscreen),
         backgroundZoom: normalizeBackgroundZoom(keyframe.backgroundZoom),
         backgroundPanX: normalizeBackgroundPan(keyframe.backgroundPanX),
         backgroundPanY: normalizeBackgroundPan(keyframe.backgroundPanY),
-        sectionId:
-          typeof keyframe.sectionId === 'string' ? keyframe.sectionId : null,
-        autoSection: Boolean(keyframe.autoSection),
+        sectionId: typeof keyframe.sectionId === 'string' ? keyframe.sectionId : null,
+        autoSection: Boolean(keyframe.autoSection)
       };
     })
     .sort((left, right) => left.time - right.time);
@@ -280,10 +252,7 @@ export function normalizeExportVideoPreset(value: unknown): ExportVideoPreset {
 export function normalizeCameraSyncOffsetMs(value: unknown): number {
   const offset = Math.round(Number(value));
   if (!Number.isFinite(offset)) return 0;
-  return Math.max(
-    MIN_CAMERA_SYNC_OFFSET_MS,
-    Math.min(MAX_CAMERA_SYNC_OFFSET_MS, offset),
-  );
+  return Math.max(MIN_CAMERA_SYNC_OFFSET_MS, Math.min(MAX_CAMERA_SYNC_OFFSET_MS, offset));
 }
 
 export function createDefaultProject(name: unknown = 'Untitled Project'): ProjectData {
@@ -298,7 +267,7 @@ export function createDefaultProject(name: unknown = 'Untitled Project'): Projec
       hideFromRecording: true,
       exportAudioPreset: EXPORT_AUDIO_PRESET_COMPRESSED,
       exportVideoPreset: EXPORT_VIDEO_PRESET_QUALITY,
-      cameraSyncOffsetMs: 0,
+      cameraSyncOffsetMs: 0
     },
     takes: [],
     timeline: {
@@ -308,15 +277,12 @@ export function createDefaultProject(name: unknown = 'Untitled Project'): Projec
       selectedSectionId: null,
       hasCamera: false,
       sourceWidth: null,
-      sourceHeight: null,
-    },
+      sourceHeight: null
+    }
   };
 }
 
-export function normalizeProjectData(
-  rawProject: unknown,
-  projectFolder?: string,
-): ProjectData {
+export function normalizeProjectData(rawProject: unknown, projectFolder?: string): ProjectData {
   const project = isRecord(rawProject)
     ? (rawProject as PartialProjectInput)
     : ({} as PartialProjectInput);
@@ -336,38 +302,22 @@ export function normalizeProjectData(
       typeof project.name === 'string' && project.name.trim()
         ? sanitizeProjectName(project.name)
         : base.name,
-    createdAt:
-      typeof project.createdAt === 'string' ? project.createdAt : now,
-    updatedAt:
-      typeof project.updatedAt === 'string' ? project.updatedAt : now,
+    createdAt: typeof project.createdAt === 'string' ? project.createdAt : now,
+    updatedAt: typeof project.updatedAt === 'string' ? project.updatedAt : now,
     settings: {
       screenFitMode: rawSettings.screenFitMode === 'fit' ? 'fit' : 'fill',
       hideFromRecording: rawSettings.hideFromRecording !== false,
-      exportAudioPreset: normalizeExportAudioPreset(
-        rawSettings.exportAudioPreset,
-      ),
-      exportVideoPreset: normalizeExportVideoPreset(
-        rawSettings.exportVideoPreset,
-      ),
-      cameraSyncOffsetMs: normalizeCameraSyncOffsetMs(
-        rawSettings.cameraSyncOffsetMs,
-      ),
+      exportAudioPreset: normalizeExportAudioPreset(rawSettings.exportAudioPreset),
+      exportVideoPreset: normalizeExportVideoPreset(rawSettings.exportVideoPreset),
+      cameraSyncOffsetMs: normalizeCameraSyncOffsetMs(rawSettings.cameraSyncOffsetMs)
     },
     takes: rawTakes.map((rawTake, index) => {
-      const take = isRecord(rawTake)
-        ? (rawTake as PartialTakeInput)
-        : ({} as PartialTakeInput);
+      const take = isRecord(rawTake) ? (rawTake as PartialTakeInput) : ({} as PartialTakeInput);
 
       return {
-        id:
-          typeof take.id === 'string' && take.id
-            ? take.id
-            : `take-${index + 1}-${Date.now()}`,
-        createdAt:
-          typeof take.createdAt === 'string' ? take.createdAt : now,
-        duration: Number.isFinite(Number(take.duration))
-          ? Number(take.duration)
-          : 0,
+        id: typeof take.id === 'string' && take.id ? take.id : `take-${index + 1}-${Date.now()}`,
+        createdAt: typeof take.createdAt === 'string' ? take.createdAt : now,
+        duration: Number.isFinite(Number(take.duration)) ? Number(take.duration) : 0,
         screenPath: projectFolder
           ? toProjectAbsolutePath(projectFolder, take.screenPath)
           : typeof take.screenPath === 'string'
@@ -383,31 +333,27 @@ export function normalizeProjectData(
           : typeof take.proxyPath === 'string'
             ? take.proxyPath
             : null,
-        sections: normalizeSections(take.sections),
+        sections: normalizeSections(take.sections)
       };
     }),
     timeline: {
-      duration: Number.isFinite(Number(rawTimeline.duration))
-        ? Number(rawTimeline.duration)
-        : 0,
+      duration: Number.isFinite(Number(rawTimeline.duration)) ? Number(rawTimeline.duration) : 0,
       sections: normalizeSections(rawTimeline.sections).map((section) => ({
         ...section,
         imagePath: projectFolder
           ? toProjectAbsolutePath(projectFolder, section.imagePath)
-          : section.imagePath,
+          : section.imagePath
       })),
       keyframes: normalizeKeyframes(rawTimeline.keyframes),
       selectedSectionId:
-        typeof rawTimeline.selectedSectionId === 'string'
-          ? rawTimeline.selectedSectionId
-          : null,
+        typeof rawTimeline.selectedSectionId === 'string' ? rawTimeline.selectedSectionId : null,
       hasCamera: Boolean(rawTimeline.hasCamera),
       sourceWidth: Number.isFinite(Number(rawTimeline.sourceWidth))
         ? Number(rawTimeline.sourceWidth)
         : null,
       sourceHeight: Number.isFinite(Number(rawTimeline.sourceHeight))
         ? Number(rawTimeline.sourceHeight)
-        : null,
-    },
+        : null
+    }
   };
 }

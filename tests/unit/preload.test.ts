@@ -32,7 +32,10 @@ describe('preload', () => {
     const listener = vi.fn();
     const unsubscribe = electronAPI.onRenderProgress(listener);
 
-    expect(mockIpcRenderer.on).toHaveBeenCalledWith('render-composite-progress', expect.any(Function));
+    expect(mockIpcRenderer.on).toHaveBeenCalledWith(
+      'render-composite-progress',
+      expect.any(Function)
+    );
 
     const handler = mockIpcRenderer.on.mock.calls[0][1] as (
       _event: unknown,
@@ -44,6 +47,9 @@ describe('preload', () => {
 
     unsubscribe();
 
-    expect(mockIpcRenderer.removeListener).toHaveBeenCalledWith('render-composite-progress', handler);
+    expect(mockIpcRenderer.removeListener).toHaveBeenCalledWith(
+      'render-composite-progress',
+      handler
+    );
   });
 });

@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'vitest';
 
-import { chooseRenderFps, parseFpsToken, parseVideoFpsFromProbeOutput } from '../../src/main/services/fps-service';
+import {
+  chooseRenderFps,
+  parseFpsToken,
+  parseVideoFpsFromProbeOutput
+} from '../../src/main/services/fps-service';
 
 describe('main/services/fps-service', () => {
   test('parseFpsToken parses numeric and ratio tokens', () => {

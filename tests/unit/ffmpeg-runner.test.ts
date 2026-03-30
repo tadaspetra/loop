@@ -51,7 +51,10 @@ describe('main/services/ffmpeg-runner', () => {
       onProgress: (update: FfmpegProgress) => updates.push(update)
     });
 
-    child.stdout.emit('data', Buffer.from('frame=1\nout_time=00:00:01.000000\nprogress=continue\n'));
+    child.stdout.emit(
+      'data',
+      Buffer.from('frame=1\nout_time=00:00:01.000000\nprogress=continue\n')
+    );
     child.stdout.emit('data', Buffer.from('frame=2\nout_time=00:00:02.000000\nprogress=end\n'));
     child.stderr.emit('data', Buffer.from('encoding...\n'));
     child.emit('close', 0);

@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 
 import * as packagerModule from '@electron/packager';
 
+import { createPackagerOptions } from './package-smoke-options.mjs';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, '..');
@@ -14,23 +16,7 @@ async function run() {
 
   await fs.rm(outDir, { recursive: true, force: true });
 
-  await packager({
-    dir: projectRoot,
-    out: outDir,
-    overwrite: true,
-    platform: process.platform,
-    arch: process.arch,
-    prune: true,
-    quiet: true,
-    ignore: [
-      /^\/tests($|\/)/,
-      /^\/docs($|\/)/,
-      /^\/coverage($|\/)/,
-      /^\/\.github($|\/)/,
-      /^\/tmp($|\/)/,
-      /^\/dist-smoke($|\/)/
-    ]
-  });
+  await packager(createPackagerOptions({ projectRoot, outDir }));
 
   await fs.rm(outDir, { recursive: true, force: true });
   console.log('Packaging smoke succeeded');

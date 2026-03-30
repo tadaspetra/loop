@@ -14,12 +14,12 @@ See the [main agents skill](../SKILL.md#outbound-calls) for basic Python, JavaSc
 
 ## Request Parameters
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `agent_id` | string | Yes | The ID of your ElevenLabs agent |
-| `agent_phone_number_id` | string | Yes | The ID of the Twilio phone number linked to your agent |
-| `to_number` | string | Yes | The destination phone number (E.164 format) |
-| `conversation_initiation_client_data` | object | No | Override conversation settings for this call |
+| Parameter                             | Type   | Required | Description                                            |
+| ------------------------------------- | ------ | -------- | ------------------------------------------------------ |
+| `agent_id`                            | string | Yes      | The ID of your ElevenLabs agent                        |
+| `agent_phone_number_id`               | string | Yes      | The ID of the Twilio phone number linked to your agent |
+| `to_number`                           | string | Yes      | The destination phone number (E.164 format)            |
+| `conversation_initiation_client_data` | object | No       | Override conversation settings for this call           |
 
 ## Response
 
@@ -32,12 +32,12 @@ See the [main agents skill](../SKILL.md#outbound-calls) for basic Python, JavaSc
 }
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `success` | boolean | Whether the call was initiated successfully |
-| `message` | string | Status message |
-| `conversation_id` | string | ElevenLabs conversation ID for tracking |
-| `callSid` | string | Twilio Call SID for reference |
+| Field             | Type    | Description                                 |
+| ----------------- | ------- | ------------------------------------------- |
+| `success`         | boolean | Whether the call was initiated successfully |
+| `message`         | string  | Status message                              |
+| `conversation_id` | string  | ElevenLabs conversation ID for tracking     |
+| `callSid`         | string  | Twilio Call SID for reference               |
 
 ## Customizing the Call
 
@@ -72,24 +72,24 @@ response = client.conversational_ai.twilio.outbound_call(
 
 ```javascript
 const response = await client.conversationalAi.twilio.outboundCall({
-  agentId: "your-agent-id",
-  agentPhoneNumberId: "your-phone-number-id",
-  toNumber: "+1234567890",
+  agentId: 'your-agent-id',
+  agentPhoneNumberId: 'your-phone-number-id',
+  toNumber: '+1234567890',
   conversationInitiationClientData: {
     conversationConfigOverride: {
       agent: {
-        firstMessage: "Hello! This is a reminder about your appointment tomorrow.",
-        language: "en",
+        firstMessage: 'Hello! This is a reminder about your appointment tomorrow.',
+        language: 'en'
       },
       tts: {
-        voiceId: "JBFqnCBsd6RMkjVDRZzb",
-      },
+        voiceId: 'JBFqnCBsd6RMkjVDRZzb'
+      }
     },
     dynamicVariables: {
-      customer_name: "John",
-      appointment_time: "2:00 PM",
-    },
-  },
+      customer_name: 'John',
+      appointment_time: '2:00 PM'
+    }
+  }
 });
 ```
 
@@ -97,20 +97,20 @@ const response = await client.conversationalAi.twilio.outboundCall({
 
 ### Agent Settings
 
-| Option | Type | Description |
-|--------|------|-------------|
-| `first_message` | string | Custom greeting for this call |
-| `language` | string | Language code (e.g., "en", "es", "fr") |
-| `prompt` | object | Override agent prompt and LLM settings |
+| Option          | Type   | Description                            |
+| --------------- | ------ | -------------------------------------- |
+| `first_message` | string | Custom greeting for this call          |
+| `language`      | string | Language code (e.g., "en", "es", "fr") |
+| `prompt`        | object | Override agent prompt and LLM settings |
 
 ### TTS Settings
 
-| Option | Type | Description |
-|--------|------|-------------|
-| `voice_id` | string | Voice ID to use for this call |
-| `stability` | number | Voice stability (0.0-1.0) |
+| Option             | Type   | Description                      |
+| ------------------ | ------ | -------------------------------- |
+| `voice_id`         | string | Voice ID to use for this call    |
+| `stability`        | number | Voice stability (0.0-1.0)        |
 | `similarity_boost` | number | Voice similarity boost (0.0-1.0) |
-| `speed` | number | Speech speed multiplier |
+| `speed`            | number | Speech speed multiplier          |
 
 ### Dynamic Variables
 

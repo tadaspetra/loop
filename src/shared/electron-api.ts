@@ -53,10 +53,17 @@ export interface ElectronApi {
   pickProjectLocation: (opts?: { name?: string }) => Promise<string | null>;
   pathToFileUrl: (filePath: string) => string;
   openFolder: (folder: string) => Promise<void>;
-  projectCreate: (opts?: { name?: string; parentFolder?: string; projectPath?: string }) => Promise<ProjectEnvelope>;
+  projectCreate: (opts?: {
+    name?: string;
+    parentFolder?: string;
+    projectPath?: string;
+  }) => Promise<ProjectEnvelope>;
   projectOpen: (projectFolder: string) => Promise<OpenProjectEnvelope>;
   projectSave: (payload: { projectPath: string; project: ProjectData }) => Promise<ProjectEnvelope>;
-  projectSetRecoveryTake: (payload: { projectPath: string; take: RecoveryTake }) => Promise<{ projectPath: string; recoveryTake: RecoveryTake }>;
+  projectSetRecoveryTake: (payload: {
+    projectPath: string;
+    take: RecoveryTake;
+  }) => Promise<{ projectPath: string; recoveryTake: RecoveryTake }>;
   projectClearRecoveryTake: (projectFolder: string) => Promise<boolean>;
   projectCompleteRecoveryTake: (projectFolder: string) => Promise<boolean>;
   projectListRecent: (limit?: number) => Promise<RecentProjectsEnvelope>;
