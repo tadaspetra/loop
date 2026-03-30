@@ -4,11 +4,11 @@ Stream audio chunks as they're generated for lower latency.
 
 ## Model Selection for Streaming
 
-| Model | Latency | Use Case |
-|-------|---------|----------|
-| `eleven_flash_v2_5` | ~75ms | Lowest latency, 32 languages |
-| `eleven_flash_v2` | ~75ms | Lowest latency, English only |
-| `eleven_turbo_v2_5` | Low | Balanced quality/speed |
+| Model               | Latency | Use Case                     |
+| ------------------- | ------- | ---------------------------- |
+| `eleven_flash_v2_5` | ~75ms   | Lowest latency, 32 languages |
+| `eleven_flash_v2`   | ~75ms   | Lowest latency, English only |
+| `eleven_turbo_v2_5` | Low     | Balanced quality/speed       |
 
 ## Python Streaming
 
@@ -54,18 +54,18 @@ play_stream(audio_stream)
 ## JavaScript Streaming
 
 ```javascript
-import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
-import { createWriteStream } from "fs";
+import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
+import { createWriteStream } from 'fs';
 
 const client = new ElevenLabsClient();
 
-const audioStream = await client.textToSpeech.convert("JBFqnCBsd6RMkjVDRZzb", {
-  text: "Streaming audio in JavaScript.",
-  modelId: "eleven_flash_v2_5",
+const audioStream = await client.textToSpeech.convert('JBFqnCBsd6RMkjVDRZzb', {
+  text: 'Streaming audio in JavaScript.',
+  modelId: 'eleven_flash_v2_5'
 });
 
 // Write to file
-const writeStream = createWriteStream("output.mp3");
+const writeStream = createWriteStream('output.mp3');
 audioStream.pipe(writeStream);
 
 // Or process chunks
@@ -159,9 +159,9 @@ if __name__ == "__main__":
 ### JavaScript WebSocket
 
 ```javascript
-import "dotenv/config";
-import WebSocket from "ws";
-import * as fs from "node:fs";
+import 'dotenv/config';
+import WebSocket from 'ws';
+import * as fs from 'node:fs';
 
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
 
@@ -170,54 +170,51 @@ async function textToSpeechWsStreaming(voiceId, modelId) {
 
   return new Promise((resolve, reject) => {
     const websocket = new WebSocket(uri, {
-      headers: { "xi-api-key": ELEVENLABS_API_KEY },
+      headers: { 'xi-api-key': ELEVENLABS_API_KEY }
     });
 
     const audioChunks = [];
 
-    websocket.on("open", () => {
+    websocket.on('open', () => {
       // Initialize connection
       websocket.send(
         JSON.stringify({
-          text: " ",
+          text: ' ',
           voice_settings: {
             stability: 0.5,
-            similarity_boost: 0.8,
+            similarity_boost: 0.8
           },
           generation_config: {
-            chunk_length_schedule: [120, 160, 250, 290],
-          },
+            chunk_length_schedule: [120, 160, 250, 290]
+          }
         })
       );
 
       // Send text chunks
-      websocket.send(JSON.stringify({ text: "Hello, " }));
-      websocket.send(JSON.stringify({ text: "this is streaming text " }));
-      websocket.send(JSON.stringify({ text: "from a WebSocket connection." }));
+      websocket.send(JSON.stringify({ text: 'Hello, ' }));
+      websocket.send(JSON.stringify({ text: 'this is streaming text ' }));
+      websocket.send(JSON.stringify({ text: 'from a WebSocket connection.' }));
 
       // Close stream
-      websocket.send(JSON.stringify({ text: "" }));
+      websocket.send(JSON.stringify({ text: '' }));
     });
 
-    websocket.on("message", (event) => {
+    websocket.on('message', (event) => {
       const data = JSON.parse(event.toString());
       if (data.audio) {
-        audioChunks.push(Buffer.from(data.audio, "base64"));
+        audioChunks.push(Buffer.from(data.audio, 'base64'));
       } else if (data.isFinal) {
         websocket.close();
         resolve(Buffer.concat(audioChunks));
       }
     });
 
-    websocket.on("error", reject);
+    websocket.on('error', reject);
   });
 }
 
-const audio = await textToSpeechWsStreaming(
-  "JBFqnCBsd6RMkjVDRZzb",
-  "eleven_flash_v2_5"
-);
-fs.writeFileSync("output.mp3", audio);
+const audio = await textToSpeechWsStreaming('JBFqnCBsd6RMkjVDRZzb', 'eleven_flash_v2_5');
+fs.writeFileSync('output.mp3', audio);
 ```
 
 ### Input Messages
@@ -277,11 +274,11 @@ fs.writeFileSync("output.mp3", audio);
 
 ### Key Parameters
 
-| Parameter | Description |
-|-----------|-------------|
+| Parameter               | Description                                                                                                                                                                                                                                                                                                                            |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `chunk_length_schedule` | Array of character counts that trigger audio generation. The model waits until it has this many characters before generating audio, which improves quality but adds latency. Lower values = faster response, higher values = better prosody. Example: `[120, 160, 250, 290]` means generate after 120 chars, then after 160 more, etc. |
-| `flush` | Set `true` to force immediate audio generation without waiting for the character threshold. Use at the end of sentences or when you need audio NOW. |
-| `voice_settings` | Adjustable per-message: `stability`, `similarity_boost`, `use_speaker_boost` |
+| `flush`                 | Set `true` to force immediate audio generation without waiting for the character threshold. Use at the end of sentences or when you need audio NOW.                                                                                                                                                                                    |
+| `voice_settings`        | Adjustable per-message: `stability`, `similarity_boost`, `use_speaker_boost`                                                                                                                                                                                                                                                           |
 
 ### Important Notes
 

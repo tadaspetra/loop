@@ -4,11 +4,11 @@ Extend your agent with custom capabilities. Tools let the agent take actions bey
 
 ## Tool Types
 
-| Type | Execution | Use Case |
-|------|-----------|----------|
-| **Webhook** | Server-side via HTTP | Database queries, API calls, secure operations |
-| **Client** | Browser-side JavaScript | UI updates, local storage, navigation |
-| **System** | Built-in ElevenLabs | End call, transfer, standard actions |
+| Type        | Execution               | Use Case                                       |
+| ----------- | ----------------------- | ---------------------------------------------- |
+| **Webhook** | Server-side via HTTP    | Database queries, API calls, secure operations |
+| **Client**  | Browser-side JavaScript | UI updates, local storage, navigation          |
+| **System**  | Built-in ElevenLabs     | End call, transfer, standard actions           |
 
 ## Where Tools Live
 
@@ -145,29 +145,29 @@ Or for structured data:
 
 ### Webhook Tool Options
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `response_timeout_secs` | int | `20` | Timeout in seconds (5-120) |
-| `disable_interruptions` | bool | `false` | Prevent user interruptions during tool execution |
-| `execution_mode` | string | `"immediate"` | `immediate`, `post_tool_speech`, or `async` |
-| `tool_call_sound` | string | - | Sound during execution: `typing`, `elevator1`-`elevator4` |
-| `force_pre_tool_speech` | bool | `false` | Force agent to speak before executing tool |
-| `tool_error_handling_mode` | string | `"auto"` | `auto`, `summarized`, `passthrough`, or `hide` |
+| Field                      | Type   | Default       | Description                                               |
+| -------------------------- | ------ | ------------- | --------------------------------------------------------- |
+| `response_timeout_secs`    | int    | `20`          | Timeout in seconds (5-120)                                |
+| `disable_interruptions`    | bool   | `false`       | Prevent user interruptions during tool execution          |
+| `execution_mode`           | string | `"immediate"` | `immediate`, `post_tool_speech`, or `async`               |
+| `tool_call_sound`          | string | -             | Sound during execution: `typing`, `elevator1`-`elevator4` |
+| `force_pre_tool_speech`    | bool   | `false`       | Force agent to speak before executing tool                |
+| `tool_error_handling_mode` | string | `"auto"`      | `auto`, `summarized`, `passthrough`, or `hide`            |
 
 **Note:** The default `api_schema.method` is `GET`. Always set `"method": "POST"` explicitly for webhook tools that send request bodies.
 
 ### Server Implementation (Node.js)
 
 ```javascript
-app.post("/webhook/get_weather", async (req, res) => {
+app.post('/webhook/get_weather', async (req, res) => {
   const { parameters, conversation_id } = req.body;
-  const { city, units = "fahrenheit" } = parameters;
+  const { city, units = 'fahrenheit' } = parameters;
 
   // Fetch weather from your data source
   const weather = await weatherService.get(city, units);
 
   res.json({
-    result: `It's ${weather.temp}°${units === "celsius" ? "C" : "F"} and ${weather.condition} in ${city}.`,
+    result: `It's ${weather.temp}°${units === 'celsius' ? 'C' : 'F'} and ${weather.condition} in ${city}.`
   });
 });
 ```
@@ -198,17 +198,17 @@ Execute JavaScript in the user's browser. Useful for UI updates, navigation, or 
 Client tools are registered when starting a conversation:
 
 ```javascript
-import { Conversation } from "@elevenlabs/client";
+import { Conversation } from '@elevenlabs/client';
 
 const conversation = await Conversation.startSession({
-  agentId: "your-agent-id",
+  agentId: 'your-agent-id',
   clientTools: {
     show_product: async ({ productId }) => {
       // Update UI to show product
-      const modal = document.getElementById("product-modal");
+      const modal = document.getElementById('product-modal');
       modal.innerHTML = await fetchProductCard(productId);
       modal.showModal();
-      return { success: true, message: "Showing product" };
+      return { success: true, message: 'Showing product' };
     },
 
     navigate_to: async ({ page }) => {
@@ -221,8 +221,8 @@ const conversation = await Conversation.startSession({
       // Store in localStorage
       localStorage.setItem(key, value);
       return { saved: true };
-    },
-  },
+    }
+  }
 });
 ```
 
@@ -282,8 +282,8 @@ When users want to go somewhere, use navigate_to.""",
 
 ### Client Tool Options
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
+| Field              | Type | Default | Description                                |
+| ------------------ | ---- | ------- | ------------------------------------------ |
 | `expects_response` | bool | `false` | Whether the tool returns data to the agent |
 
 ### Client Tool Return Values
@@ -293,11 +293,11 @@ Return data that the agent can use in conversation:
 ```javascript
 clientTools: {
   check_cart: async () => {
-    const cart = JSON.parse(localStorage.getItem("cart") || "[]");
+    const cart = JSON.parse(localStorage.getItem('cart') || '[]');
     return {
       itemCount: cart.length,
       total: cart.reduce((sum, item) => sum + item.price, 0),
-      items: cart.map((item) => item.name),
+      items: cart.map((item) => item.name)
     };
   };
 }
@@ -404,7 +404,7 @@ Return helpful error messages:
 
 ```javascript
 // Server webhook
-app.post("/webhook/lookup_order", async (req, res) => {
+app.post('/webhook/lookup_order', async (req, res) => {
   const { order_id } = req.body.parameters;
 
   const order = await db.orders.find(order_id);
@@ -413,8 +413,8 @@ app.post("/webhook/lookup_order", async (req, res) => {
     return res.json({
       result: {
         error: true,
-        message: `Order ${order_id} not found. Please verify the order ID.`,
-      },
+        message: `Order ${order_id} not found. Please verify the order ID.`
+      }
     });
   }
 

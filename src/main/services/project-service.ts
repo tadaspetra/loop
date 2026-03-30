@@ -9,7 +9,7 @@ import {
   isDirectoryEmpty,
   readJsonFile,
   safeUnlink,
-  writeJsonFile,
+  writeJsonFile
 } from '../infra/file-system';
 import {
   createDefaultProject,
@@ -20,7 +20,7 @@ import {
   toProjectRelativePath,
   type ProjectData,
   type RecoveryTake,
-  type RecoveryTrimSegment,
+  type RecoveryTrimSegment
 } from '../../shared/domain/project';
 
 export const PROJECT_FILE_NAME = 'project.json';
@@ -70,10 +70,7 @@ export function createProjectService({ app }: { app: Pick<App, 'getPath'> }) {
     return path.join(app.getPath('userData'), PROJECT_META_FILE_NAME);
   }
 
-  function normalizeRecoveryTake(
-    rawTake: unknown,
-    projectFolder: string,
-  ): RecoveryTake | null {
+  function normalizeRecoveryTake(rawTake: unknown, projectFolder: string): RecoveryTake | null {
     if (!isRecord(rawTake)) return null;
 
     const take = rawTake as RecoveryTakeInput;
@@ -102,10 +99,7 @@ export function createProjectService({ app }: { app: Pick<App, 'getPath'> }) {
             return {
               start,
               end,
-              text:
-                typeof rawSegment.text === 'string'
-                  ? rawSegment.text.trim()
-                  : '',
+              text: typeof rawSegment.text === 'string' ? rawSegment.text.trim() : ''
             };
           })
           .filter((segment): segment is RecoveryTrimSegment => Boolean(segment))
@@ -115,19 +109,13 @@ export function createProjectService({ app }: { app: Pick<App, 'getPath'> }) {
     if (cameraPath && !fs.existsSync(cameraPath)) return null;
 
     return {
-      id:
-        typeof take.id === 'string' && take.id
-          ? take.id
-          : `recovery-${Date.now()}`,
-      createdAt:
-        typeof take.createdAt === 'string'
-          ? take.createdAt
-          : new Date().toISOString(),
+      id: typeof take.id === 'string' && take.id ? take.id : `recovery-${Date.now()}`,
+      createdAt: typeof take.createdAt === 'string' ? take.createdAt : new Date().toISOString(),
       screenPath,
       cameraPath,
       recordedDuration: Number.isFinite(recordedDuration) ? recordedDuration : 0,
       sections,
-      trimSegments,
+      trimSegments
     };
   }
 
@@ -141,17 +129,14 @@ export function createProjectService({ app }: { app: Pick<App, 'getPath'> }) {
     return null;
   }
 
-  function writeRecoveryTake(
-    projectFolder: string,
-    rawTake: unknown,
-  ): RecoveryTake {
+  function writeRecoveryTake(projectFolder: string, rawTake: unknown): RecoveryTake {
     const normalized = normalizeRecoveryTake(rawTake, projectFolder);
     if (!normalized) throw new Error('Invalid recovery recording');
 
     const serializable = {
       ...normalized,
       screenPath: toProjectRelativePath(projectFolder, normalized.screenPath),
-      cameraPath: toProjectRelativePath(projectFolder, normalized.cameraPath),
+      cameraPath: toProjectRelativePath(projectFolder, normalized.cameraPath)
     };
     writeJsonFile(getProjectRecoveryFilePath(projectFolder), serializable);
     return normalized;
@@ -173,10 +158,7 @@ export function createProjectService({ app }: { app: Pick<App, 'getPath'> }) {
       throw new Error('Project location must be a folder');
     }
 
-    if (
-      isDirectoryEmpty(resolvedTarget) &&
-      !fs.existsSync(getProjectFilePath(resolvedTarget))
-    ) {
+    if (isDirectoryEmpty(resolvedTarget) && !fs.existsSync(getProjectFilePath(resolvedTarget))) {
       return resolvedTarget;
     }
 
@@ -191,10 +173,7 @@ export function createProjectService({ app }: { app: Pick<App, 'getPath'> }) {
     return candidate;
   }
 
-  function saveProjectToDisk(
-    projectFolder: string,
-    rawProject: unknown,
-  ): ProjectData {
+  function saveProjectToDisk(projectFolder: string, rawProject: unknown): ProjectData {
     const normalized = normalizeProjectData(rawProject, projectFolder);
     normalized.updatedAt = new Date().toISOString();
 
@@ -203,11 +182,11 @@ export function createProjectService({ app }: { app: Pick<App, 'getPath'> }) {
       ...take,
       screenPath: toProjectRelativePath(projectFolder, take.screenPath),
       cameraPath: toProjectRelativePath(projectFolder, take.cameraPath),
-      proxyPath: toProjectRelativePath(projectFolder, take.proxyPath),
+      proxyPath: toProjectRelativePath(projectFolder, take.proxyPath)
     }));
     serializable.timeline.sections = serializable.timeline.sections.map((section) => ({
       ...section,
-      imagePath: toProjectRelativePath(projectFolder, section.imagePath),
+      imagePath: toProjectRelativePath(projectFolder, section.imagePath)
     }));
 
     writeJsonFile(getProjectFilePath(projectFolder), serializable);
@@ -216,10 +195,7 @@ export function createProjectService({ app }: { app: Pick<App, 'getPath'> }) {
 
   function loadProjectFromDisk(projectFolder: string): ProjectData {
     const resolvedFolder = path.resolve(projectFolder);
-    const rawProject = readJsonFile<unknown | null>(
-      getProjectFilePath(resolvedFolder),
-      null,
-    );
+    const rawProject = readJsonFile<unknown | null>(getProjectFilePath(resolvedFolder), null);
     if (!rawProject) {
       throw new Error(`Project file missing at ${getProjectFilePath(resolvedFolder)}`);
     }
@@ -232,17 +208,13 @@ export function createProjectService({ app }: { app: Pick<App, 'getPath'> }) {
     const recentProjectPaths = Array.isArray(raw?.recentProjectPaths)
       ? raw.recentProjectPaths.filter(
           (projectPath): projectPath is string =>
-            typeof projectPath === 'string' && projectPath.trim().length > 0,
+            typeof projectPath === 'string' && projectPath.trim().length > 0
         )
       : [];
 
     return {
-      lastProjectPath:
-        typeof raw?.lastProjectPath === 'string' ? raw.lastProjectPath : null,
-      recentProjectPaths: [...new Set(recentProjectPaths)].slice(
-        0,
-        MAX_RECENT_PROJECTS,
-      ),
+      lastProjectPath: typeof raw?.lastProjectPath === 'string' ? raw.lastProjectPath : null,
+      recentProjectPaths: [...new Set(recentProjectPaths)].slice(0, MAX_RECENT_PROJECTS)
     };
   }
 
@@ -255,13 +227,9 @@ export function createProjectService({ app }: { app: Pick<App, 'getPath'> }) {
     const meta = readProjectMeta();
     const remaining = meta.recentProjectPaths.filter(
       (savedProjectPath) =>
-        savedProjectPath !== resolvedFolder &&
-        fs.existsSync(getProjectFilePath(savedProjectPath)),
+        savedProjectPath !== resolvedFolder && fs.existsSync(getProjectFilePath(savedProjectPath))
     );
-    meta.recentProjectPaths = [resolvedFolder, ...remaining].slice(
-      0,
-      MAX_RECENT_PROJECTS,
-    );
+    meta.recentProjectPaths = [resolvedFolder, ...remaining].slice(0, MAX_RECENT_PROJECTS);
     meta.lastProjectPath = resolvedFolder;
     writeProjectMeta(meta);
   }
@@ -286,7 +254,7 @@ export function createProjectService({ app }: { app: Pick<App, 'getPath'> }) {
           id: project.id,
           name: project.name,
           createdAt: project.createdAt,
-          updatedAt: project.updatedAt,
+          updatedAt: project.updatedAt
         });
         if (projects.length >= maxItems) break;
       } catch (error) {
@@ -305,8 +273,7 @@ export function createProjectService({ app }: { app: Pick<App, 'getPath'> }) {
 
   function createProject(opts: CreateProjectOptions = {}) {
     const baseName = sanitizeProjectName(opts.name || 'Untitled Project');
-    const explicitProjectPath =
-      typeof opts.projectPath === 'string' ? opts.projectPath.trim() : '';
+    const explicitProjectPath = typeof opts.projectPath === 'string' ? opts.projectPath.trim() : '';
 
     let targetFolder: string;
     if (explicitProjectPath) {
@@ -315,14 +282,11 @@ export function createProjectService({ app }: { app: Pick<App, 'getPath'> }) {
       ensureDirectory(parentFolder);
       targetFolder = resolveAvailableProjectFolder(targetFolder);
     } else {
-      const parentFolder =
-        typeof opts.parentFolder === 'string' ? opts.parentFolder : '';
+      const parentFolder = typeof opts.parentFolder === 'string' ? opts.parentFolder : '';
       if (!parentFolder) throw new Error('Missing parent folder');
       const resolvedParent = path.resolve(parentFolder);
       ensureDirectory(resolvedParent);
-      targetFolder = resolveAvailableProjectFolder(
-        path.join(resolvedParent, baseName),
-      );
+      targetFolder = resolveAvailableProjectFolder(path.join(resolvedParent, baseName));
     }
 
     if (fs.existsSync(targetFolder) && !fs.statSync(targetFolder).isDirectory()) {
@@ -332,7 +296,7 @@ export function createProjectService({ app }: { app: Pick<App, 'getPath'> }) {
     ensureDirectory(targetFolder);
     const project = saveProjectToDisk(
       targetFolder,
-      createDefaultProject(path.basename(targetFolder)),
+      createDefaultProject(path.basename(targetFolder))
     );
     touchRecentProject(targetFolder);
     return { projectPath: targetFolder, project };
@@ -351,8 +315,7 @@ export function createProjectService({ app }: { app: Pick<App, 'getPath'> }) {
   }
 
   function saveProject(payload: ProjectPayload = {}) {
-    const projectPath =
-      typeof payload.projectPath === 'string' ? payload.projectPath : '';
+    const projectPath = typeof payload.projectPath === 'string' ? payload.projectPath : '';
     if (!projectPath) throw new Error('Missing project path');
 
     const resolvedFolder = path.resolve(projectPath);
@@ -363,8 +326,7 @@ export function createProjectService({ app }: { app: Pick<App, 'getPath'> }) {
   }
 
   function setRecoveryTake(payload: RecoveryPayload = {}) {
-    const projectPath =
-      typeof payload.projectPath === 'string' ? payload.projectPath : '';
+    const projectPath = typeof payload.projectPath === 'string' ? payload.projectPath : '';
     if (!projectPath) throw new Error('Missing project path');
 
     const resolvedFolder = path.resolve(projectPath);
@@ -410,11 +372,7 @@ export function createProjectService({ app }: { app: Pick<App, 'getPath'> }) {
     return true;
   }
 
-  function saveVideo(
-    buffer: ArrayBuffer | Uint8Array,
-    folder: string,
-    suffix?: string,
-  ): string {
+  function saveVideo(buffer: ArrayBuffer | Uint8Array, folder: string, suffix?: string): string {
     const filename = `recording-${Date.now()}${suffix ? `-${suffix}` : ''}.webm`;
     ensureDirectory(folder);
     const filePath = path.join(folder, filename);
@@ -428,7 +386,7 @@ export function createProjectService({ app }: { app: Pick<App, 'getPath'> }) {
     const stat = fs.statSync(filePath);
     if (stat.size !== data.length) {
       throw new Error(
-        `Recording file verification failed: expected ${data.length} bytes, got ${stat.size}`,
+        `Recording file verification failed: expected ${data.length} bytes, got ${stat.size}`
       );
     }
 
@@ -460,6 +418,6 @@ export function createProjectService({ app }: { app: Pick<App, 'getPath'> }) {
     completeRecoveryByProject,
     loadLastProject,
     setLastProject,
-    saveVideo,
+    saveVideo
   };
 }

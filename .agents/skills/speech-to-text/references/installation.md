@@ -9,14 +9,14 @@ npm install @elevenlabs/elevenlabs-js
 > **Important:** Always use `@elevenlabs/elevenlabs-js`. The old `elevenlabs` npm package (v1.x) is deprecated and should not be used.
 
 ```javascript
-import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
+import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
 // Option 1: Environment variable (recommended)
 // Set ELEVENLABS_API_KEY in your environment
 const client = new ElevenLabsClient();
 
 // Option 2: Pass directly
-const client = new ElevenLabsClient({ apiKey: "your-api-key" });
+const client = new ElevenLabsClient({ apiKey: 'your-api-key' });
 ```
 
 ### Migrating from deprecated packages
@@ -36,10 +36,11 @@ npm install @elevenlabs/react   # React hooks
 ```
 
 **Import changes:**
+
 ```javascript
-import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
-import { Scribe } from "@elevenlabs/client";
-import { useScribe } from "@elevenlabs/react";
+import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
+import { Scribe } from '@elevenlabs/client';
+import { useScribe } from '@elevenlabs/react';
 ```
 
 ## Python
@@ -87,6 +88,6 @@ Or use the `setup-api-key` skill for guided setup.
 
 ## Environment Variables
 
-| Variable | Description |
-|----------|-------------|
+| Variable             | Description                        |
+| -------------------- | ---------------------------------- |
 | `ELEVENLABS_API_KEY` | Your ElevenLabs API key (required) |

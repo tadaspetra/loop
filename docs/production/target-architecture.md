@@ -1,6 +1,7 @@
 # Target Architecture
 
 ## Goals
+
 - Separate concerns between Electron runtime, domain rules, renderer UI, and infrastructure.
 - Keep feature behavior stable while making each layer independently testable.
 - Make new features appendable without touching unrelated modules.

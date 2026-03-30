@@ -23,7 +23,7 @@ function createProxyServiceStub() {
     deriveProxyPath: vi.fn((screenPath: string) => screenPath.replace(/\.webm$/, '-proxy.mp4')),
     generateProxy: vi.fn().mockResolvedValue(undefined),
     _getQueueState: vi.fn(),
-    _resetQueue: vi.fn(),
+    _resetQueue: vi.fn()
   };
 }
 
@@ -34,10 +34,12 @@ function registerWithHandlers() {
       handlers.set(channel, handler);
     }
   };
-  const renderComposite = vi.fn(async (_opts: unknown, deps: { onProgress: (u: unknown) => void }) => {
-    deps.onProgress({ phase: 'rendering', percent: 0.5, status: 'Rendering 50%' });
-    return '/tmp/output.mp4';
-  });
+  const renderComposite = vi.fn(
+    async (_opts: unknown, deps: { onProgress: (u: unknown) => void }) => {
+      deps.onProgress({ phase: 'rendering', percent: 0.5, status: 'Rendering 50%' });
+      return '/tmp/output.mp4';
+    }
+  );
   const proxyService = createProxyServiceStub();
 
   registerIpcHandlers({
@@ -51,7 +53,7 @@ function registerWithHandlers() {
     renderComposite,
     computeSections: vi.fn(),
     getScribeToken: vi.fn(),
-    proxyService,
+    proxyService
   } as unknown as Parameters<typeof registerIpcHandlers>[0]);
 
   return { handlers, renderComposite, proxyService };
@@ -84,18 +86,27 @@ describe('main/ipc/register-handlers', () => {
 
     const result = handlers.get('proxy:generate')!(
       { sender },
-      { takeId: 'take-1', screenPath: '/project/screen.webm', projectFolder: '/project', durationSec: 10 },
+      {
+        takeId: 'take-1',
+        screenPath: '/project/screen.webm',
+        projectFolder: '/project',
+        durationSec: 10
+      }
     );
 
     expect(result).toBe('/project/screen-proxy.mp4');
-    expect(sender.send).toHaveBeenCalledWith('proxy:progress', { takeId: 'take-1', status: 'started', percent: 0 });
+    expect(sender.send).toHaveBeenCalledWith('proxy:progress', {
+      takeId: 'take-1',
+      status: 'started',
+      percent: 0
+    });
 
     // Wait for the background generation to complete
     await vi.waitFor(() => {
       expect(sender.send).toHaveBeenCalledWith('proxy:progress', {
         takeId: 'take-1',
         status: 'done',
-        proxyPath: '/project/screen-proxy.mp4',
+        proxyPath: '/project/screen-proxy.mp4'
       });
     });
   });
@@ -107,14 +118,14 @@ describe('main/ipc/register-handlers', () => {
 
     handlers.get('proxy:generate')!(
       { sender },
-      { takeId: 'take-1', screenPath: '/project/screen.webm', projectFolder: '/project' },
+      { takeId: 'take-1', screenPath: '/project/screen.webm', projectFolder: '/project' }
     );
 
     await vi.waitFor(() => {
       expect(sender.send).toHaveBeenCalledWith('proxy:progress', {
         takeId: 'take-1',
         status: 'error',
-        error: 'encode failed',
+        error: 'encode failed'
       });
     });
   });
@@ -126,7 +137,7 @@ describe('main/ipc/register-handlers', () => {
 
     handlers.get('proxy:generate')!(
       { sender },
-      { takeId: 'take-1', screenPath: '/project/screen.webm', projectFolder: '/project' },
+      { takeId: 'take-1', screenPath: '/project/screen.webm', projectFolder: '/project' }
     );
 
     // Wait for the promise to settle
@@ -134,7 +145,7 @@ describe('main/ipc/register-handlers', () => {
 
     // Only the initial 'started' is sent before isDestroyed check in the .then()
     const doneCalls = sender.send.mock.calls.filter(
-      (c: unknown[]) => c[0] === 'proxy:progress' && (c[1] as { status: string }).status === 'done',
+      (c: unknown[]) => c[0] === 'proxy:progress' && (c[1] as { status: string }).status === 'done'
     );
     expect(doneCalls).toHaveLength(0);
   });
@@ -145,7 +156,7 @@ describe('main/ipc/register-handlers', () => {
 
     const result = handlers.get('proxy:generate')!(
       { sender },
-      { takeId: 'take-1', screenPath: '', projectFolder: '/project' },
+      { takeId: 'take-1', screenPath: '', projectFolder: '/project' }
     );
 
     expect(result).toBeNull();

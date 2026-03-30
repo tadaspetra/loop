@@ -6,7 +6,11 @@ Add a voice AI agent to any website with the ElevenLabs conversation widget.
 
 ```html
 <elevenlabs-convai agent-id="your-agent-id"></elevenlabs-convai>
-<script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
+<script
+  src="https://unpkg.com/@elevenlabs/convai-widget-embed"
+  async
+  type="text/javascript"
+></script>
 ```
 
 This creates a floating button that users can click to start a voice conversation.
@@ -17,39 +21,39 @@ This creates a floating button that users can click to start a voice conversatio
 
 ### Required
 
-| Attribute | Description |
-|-----------|-------------|
-| `agent-id` | Your ElevenLabs agent ID |
+| Attribute    | Description                                      |
+| ------------ | ------------------------------------------------ |
+| `agent-id`   | Your ElevenLabs agent ID                         |
 | `signed-url` | Alternative to `agent-id` when using signed URLs |
 
 ### Appearance
 
-| Attribute | Description | Default |
-|-----------|-------------|---------|
-| `avatar-image-url` | URL for agent avatar image | ElevenLabs logo |
-| `avatar-orb-color-1` | Primary orb gradient color | `#2792dc` |
-| `avatar-orb-color-2` | Secondary orb gradient color | `#9ce6e6` |
+| Attribute            | Description                  | Default         |
+| -------------------- | ---------------------------- | --------------- |
+| `avatar-image-url`   | URL for agent avatar image   | ElevenLabs logo |
+| `avatar-orb-color-1` | Primary orb gradient color   | `#2792dc`       |
+| `avatar-orb-color-2` | Secondary orb gradient color | `#9ce6e6`       |
 
 ### Text Labels
 
-| Attribute | Description | Default |
-|-----------|-------------|---------|
-| `action-text` | Tooltip when hovering | "Talk to AI" |
-| `start-call-text` | Button to start call | "Start call" |
-| `end-call-text` | Button to end call | "End call" |
-| `expand-text` | Expand chat button | "Open" |
-| `collapse-text` | Collapse chat button | "Close" |
-| `listening-text` | Listening state label | "Listening..." |
-| `speaking-text` | Speaking state label | "Assistant speaking" |
+| Attribute         | Description           | Default              |
+| ----------------- | --------------------- | -------------------- |
+| `action-text`     | Tooltip when hovering | "Talk to AI"         |
+| `start-call-text` | Button to start call  | "Start call"         |
+| `end-call-text`   | Button to end call    | "End call"           |
+| `expand-text`     | Expand chat button    | "Open"               |
+| `collapse-text`   | Collapse chat button  | "Close"              |
+| `listening-text`  | Listening state label | "Listening..."       |
+| `speaking-text`   | Speaking state label  | "Assistant speaking" |
 
 ### Behavior
 
-| Attribute | Description | Default |
-|-----------|-------------|---------|
-| `variant` | Widget style: `compact` or `expanded` | `compact` |
-| `server-location` | Server region (`us`, `eu-residency`, `in-residency`, `global`) | `us` |
-| `dismissible` | Allow the user to minimize the widget | `false` |
-| `disable-banner` | Hide "Powered by ElevenLabs" | `false` |
+| Attribute         | Description                                                    | Default   |
+| ----------------- | -------------------------------------------------------------- | --------- |
+| `variant`         | Widget style: `compact` or `expanded`                          | `compact` |
+| `server-location` | Server region (`us`, `eu-residency`, `in-residency`, `global`) | `us`      |
+| `dismissible`     | Allow the user to minimize the widget                          | `false`   |
+| `disable-banner`  | Hide "Powered by ElevenLabs"                                   | `false`   |
 
 ## Examples
 
@@ -86,10 +90,7 @@ This creates a floating button that users can click to start a voice conversatio
 ### Expanded Variant
 
 ```html
-<elevenlabs-convai
-  agent-id="your-agent-id"
-  variant="expanded"
-></elevenlabs-convai>
+<elevenlabs-convai agent-id="your-agent-id" variant="expanded"></elevenlabs-convai>
 ```
 
 ### Full Customization
@@ -150,7 +151,7 @@ Access the widget element to control it programmatically:
 <elevenlabs-convai id="my-widget" agent-id="your-agent-id"></elevenlabs-convai>
 
 <script>
-  const widget = document.getElementById("my-widget");
+  const widget = document.getElementById('my-widget');
 
   // Start a conversation
   widget.startConversation();
@@ -159,12 +160,12 @@ Access the widget element to control it programmatically:
   widget.endConversation();
 
   // Listen for events
-  widget.addEventListener("conversationStarted", () => {
-    console.log("Conversation started");
+  widget.addEventListener('conversationStarted', () => {
+    console.log('Conversation started');
   });
 
-  widget.addEventListener("conversationEnded", () => {
-    console.log("Conversation ended");
+  widget.addEventListener('conversationEnded', () => {
+    console.log('Conversation ended');
   });
 </script>
 ```
@@ -180,9 +181,7 @@ Hide the default widget and use your own button:
   }
 </style>
 
-<button onclick="document.getElementById('widget').startConversation()">
-  Talk to AI
-</button>
+<button onclick="document.getElementById('widget').startConversation()">Talk to AI</button>
 
 <elevenlabs-convai id="widget" agent-id="your-agent-id"></elevenlabs-convai>
 ```
@@ -197,11 +196,11 @@ For agents with authentication enabled, pass a signed URL:
 <script>
   async function startAuthenticatedConversation() {
     // Get signed URL from your backend
-    const response = await fetch("/api/get-signed-url");
+    const response = await fetch('/api/get-signed-url');
     const { signedUrl } = await response.json();
 
-    const widget = document.getElementById("widget");
-    widget.setAttribute("signed-url", signedUrl);
+    const widget = document.getElementById('widget');
+    widget.setAttribute('signed-url', signedUrl);
     widget.startConversation();
   }
 </script>
@@ -281,8 +280,8 @@ You can have multiple widgets for different agents:
 function App() {
   useEffect(() => {
     // Load widget script
-    const script = document.createElement("script");
-    script.src = "https://unpkg.com/@elevenlabs/convai-widget-embed";
+    const script = document.createElement('script');
+    script.src = 'https://unpkg.com/@elevenlabs/convai-widget-embed';
     script.async = true;
     document.body.appendChild(script);
 
@@ -307,11 +306,11 @@ function App() {
 </template>
 
 <script setup>
-import { onMounted } from "vue";
+import { onMounted } from 'vue';
 
 onMounted(() => {
-  const script = document.createElement("script");
-  script.src = "https://unpkg.com/@elevenlabs/convai-widget-embed";
+  const script = document.createElement('script');
+  script.src = 'https://unpkg.com/@elevenlabs/convai-widget-embed';
   script.async = true;
   document.body.appendChild(script);
 });
@@ -321,15 +320,12 @@ onMounted(() => {
 ### Next.js
 
 ```jsx
-import Script from "next/script";
+import Script from 'next/script';
 
 export default function Page() {
   return (
     <>
-      <Script
-        src="https://unpkg.com/@elevenlabs/convai-widget-embed"
-        strategy="lazyOnload"
-      />
+      <Script src="https://unpkg.com/@elevenlabs/convai-widget-embed" strategy="lazyOnload" />
       <elevenlabs-convai agent-id="your-agent-id"></elevenlabs-convai>
     </>
   );

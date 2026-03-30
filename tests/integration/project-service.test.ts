@@ -107,9 +107,7 @@ describe('main/services/project-service integration', () => {
 
     expect(saved.project.takes[0].screenPath).toBe(screenPath);
 
-    const raw = JSON.parse(
-      fs.readFileSync(path.join(created.projectPath, 'project.json'), 'utf8')
-    );
+    const raw = JSON.parse(fs.readFileSync(path.join(created.projectPath, 'project.json'), 'utf8'));
     expect(raw.takes[0].screenPath).toBe('screen.webm');
     expect(raw.takes[0].cameraPath).toBe('camera.webm');
     expect(raw.timeline.keyframes[0].backgroundZoom).toBe(2.2);
@@ -149,16 +147,14 @@ describe('main/services/project-service integration', () => {
             screenPath,
             cameraPath: null,
             proxyPath,
-            sections: [],
-          },
-        ],
-      },
+            sections: []
+          }
+        ]
+      }
     });
 
     // Verify on-disk format uses relative path
-    const raw = JSON.parse(
-      fs.readFileSync(path.join(created.projectPath, 'project.json'), 'utf8'),
-    );
+    const raw = JSON.parse(fs.readFileSync(path.join(created.projectPath, 'project.json'), 'utf8'));
     expect(raw.takes[0].proxyPath).toBe('screen-proxy.mp4');
 
     // Verify open resolves back to absolute
@@ -183,10 +179,10 @@ describe('main/services/project-service integration', () => {
             screenPath,
             cameraPath: null,
             proxyPath: null,
-            sections: [],
-          },
-        ],
-      },
+            sections: []
+          }
+        ]
+      }
     });
 
     const opened = service.openProject(created.projectPath);
@@ -233,7 +229,7 @@ describe('main/services/project-service integration', () => {
     expect(Buffer.compare(written, data)).toBe(0);
 
     // No leftover temp files in the project folder
-    const files = fs.readdirSync(created.projectPath).filter(f => f.startsWith('.tmp-'));
+    const files = fs.readdirSync(created.projectPath).filter((f) => f.startsWith('.tmp-'));
     expect(files).toHaveLength(0);
   });
 

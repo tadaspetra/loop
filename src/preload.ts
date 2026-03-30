@@ -17,8 +17,7 @@ function toFileUrl(filePath: string | null | undefined): string {
 }
 
 const electronApi: ElectronApi = {
-  saveVideo: (buffer, folder, suffix) =>
-    ipcRenderer.invoke('save-video', buffer, folder, suffix),
+  saveVideo: (buffer, folder, suffix) => ipcRenderer.invoke('save-video', buffer, folder, suffix),
   pickFolder: (opts) => ipcRenderer.invoke('pick-folder', opts),
   pickProjectLocation: (opts) => ipcRenderer.invoke('pick-project-location', opts),
   pathToFileUrl: (filePath) => toFileUrl(filePath),
@@ -26,8 +25,7 @@ const electronApi: ElectronApi = {
   projectCreate: (opts) => ipcRenderer.invoke('project-create', opts),
   projectOpen: (projectFolder) => ipcRenderer.invoke('project-open', projectFolder),
   projectSave: (payload) => ipcRenderer.invoke('project-save', payload),
-  projectSetRecoveryTake: (payload) =>
-    ipcRenderer.invoke('project-set-recovery-take', payload),
+  projectSetRecoveryTake: (payload) => ipcRenderer.invoke('project-set-recovery-take', payload),
   projectClearRecoveryTake: (projectFolder) =>
     ipcRenderer.invoke('project-clear-recovery-take', projectFolder),
   projectCompleteRecoveryTake: (projectFolder) =>
@@ -55,7 +53,7 @@ const electronApi: ElectronApi = {
     const handler = (_event: unknown, payload: ProxyProgressUpdate) => listener(payload);
     ipcRenderer.on('proxy:progress', handler);
     return () => ipcRenderer.removeListener('proxy:progress', handler);
-  },
+  }
 };
 
 contextBridge.exposeInMainWorld('electronAPI', electronApi);

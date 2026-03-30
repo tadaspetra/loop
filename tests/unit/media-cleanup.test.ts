@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 import {
   cleanupAllMedia,
   stopStream,
-  type MediaRefs,
+  type MediaRefs
 } from '../../src/renderer/features/media-cleanup';
 
 function makeFakeStream(trackCount = 1) {
@@ -55,7 +55,7 @@ function makeFullRefs(): FakeMediaRefs {
     drawRAF: 1,
     meterRAF: 2,
     cancelEditorDrawLoop: vi.fn(),
-    stopAudioMeter: vi.fn(),
+    stopAudioMeter: vi.fn()
   } as FakeMediaRefs;
 }
 
@@ -80,7 +80,13 @@ describe('stopStream', () => {
 
   test('does not throw when track.stop() throws', () => {
     const stream = {
-      getTracks: () => [{ stop: () => { throw new Error('already stopped'); } }],
+      getTracks: () => [
+        {
+          stop: () => {
+            throw new Error('already stopped');
+          }
+        }
+      ]
     };
     expect(() => stopStream(stream as unknown as MediaStream)).not.toThrow();
   });
@@ -111,7 +117,7 @@ describe('cleanupAllMedia', () => {
       drawRAF: null,
       meterRAF: null,
       cancelEditorDrawLoop: null,
-      stopAudioMeter: null,
+      stopAudioMeter: null
     } as FakeMediaRefs;
     expect(() => cleanupAllMedia(refs)).not.toThrow();
   });

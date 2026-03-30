@@ -9,7 +9,7 @@ import type {
   IpcMain,
   IpcMainInvokeEvent,
   OpenDialogOptions,
-  Shell,
+  Shell
 } from 'electron';
 
 import type { createProjectService } from '../services/project-service';
@@ -40,7 +40,7 @@ export function registerIpcHandlers({
   renderComposite,
   computeSections,
   getScribeToken,
-  proxyService,
+  proxyService
 }: {
   ipcMain: IpcMain;
   app: App;
@@ -70,7 +70,7 @@ export function registerIpcHandlers({
     try {
       const sources = await desktopCapturer.getSources({
         types: ['screen', 'window'],
-        thumbnailSize: { width: 0, height: 0 },
+        thumbnailSize: { width: 0, height: 0 }
       });
       return sources.map((source) => ({ id: source.id, name: source.name }));
     } catch (error) {
@@ -83,45 +83,38 @@ export function registerIpcHandlers({
     const { canceled, filePaths } = await showOpenDialog({
       title: typeof opts.title === 'string' && opts.title ? opts.title : 'Choose Folder',
       buttonLabel:
-        typeof opts.buttonLabel === 'string' && opts.buttonLabel
-          ? opts.buttonLabel
-          : 'Use Folder',
+        typeof opts.buttonLabel === 'string' && opts.buttonLabel ? opts.buttonLabel : 'Use Folder',
       defaultPath: app.getPath('documents') || app.getPath('home'),
-      properties: ['openDirectory', 'createDirectory'],
+      properties: ['openDirectory', 'createDirectory']
     });
     if (canceled || !filePaths.length) return null;
     return filePaths[0];
   });
 
-  ipcMain.handle(
-    'pick-project-location',
-    async (_event, opts: PickFolderOptions = {}) => {
-      const projectName = projectService.sanitizeProjectName(
-        opts.name || 'Untitled Project',
-      );
-      const defaultBasePath = app.getPath('documents') || app.getPath('home');
+  ipcMain.handle('pick-project-location', async (_event, opts: PickFolderOptions = {}) => {
+    const projectName = projectService.sanitizeProjectName(opts.name || 'Untitled Project');
+    const defaultBasePath = app.getPath('documents') || app.getPath('home');
 
-      if (process.platform === 'win32') {
-        const { canceled, filePaths } = await showOpenDialog({
-          title: `Choose where to create "${projectName}"`,
-          buttonLabel: 'Create Project Here',
-          defaultPath: defaultBasePath,
-          properties: ['openDirectory'],
-        });
-        if (canceled || !filePaths.length) return null;
-        return path.join(filePaths[0], projectName);
-      }
-
+    if (process.platform === 'win32') {
       const { canceled, filePaths } = await showOpenDialog({
         title: `Choose where to create "${projectName}"`,
         buttonLabel: 'Create Project Here',
         defaultPath: defaultBasePath,
-        properties: ['openDirectory', 'createDirectory'],
+        properties: ['openDirectory']
       });
       if (canceled || !filePaths.length) return null;
       return path.join(filePaths[0], projectName);
-    },
-  );
+    }
+
+    const { canceled, filePaths } = await showOpenDialog({
+      title: `Choose where to create "${projectName}"`,
+      buttonLabel: 'Create Project Here',
+      defaultPath: defaultBasePath,
+      properties: ['openDirectory', 'createDirectory']
+    });
+    if (canceled || !filePaths.length) return null;
+    return path.join(filePaths[0], projectName);
+  });
 
   ipcMain.handle('open-folder', async (_event, folder: string) => {
     shell.openPath(folder);
@@ -143,19 +136,13 @@ export function registerIpcHandlers({
     return projectService.setRecoveryTake(payload);
   });
 
-  ipcMain.handle(
-    'project-clear-recovery-take',
-    async (_event, projectFolder: string) => {
-      return projectService.clearRecoveryByProject(projectFolder);
-    },
-  );
+  ipcMain.handle('project-clear-recovery-take', async (_event, projectFolder: string) => {
+    return projectService.clearRecoveryByProject(projectFolder);
+  });
 
-  ipcMain.handle(
-    'project-complete-recovery-take',
-    async (_event, projectFolder: string) => {
-      return projectService.completeRecoveryByProject(projectFolder);
-    },
-  );
+  ipcMain.handle('project-complete-recovery-take', async (_event, projectFolder: string) => {
+    return projectService.completeRecoveryByProject(projectFolder);
+  });
 
   ipcMain.handle('project-list-recent', async (_event, limit = 10) => {
     return projectService.listRecentProjects(limit);
@@ -173,35 +160,27 @@ export function registerIpcHandlers({
     'save-video',
     async (_event, buffer: ArrayBuffer, folder: string, suffix?: string) => {
       return projectService.saveVideo(buffer, folder, suffix);
-    },
+    }
   );
 
-  ipcMain.handle(
-    'render-composite',
-    async (event: IpcMainInvokeEvent, opts: unknown) => {
-      return renderComposite(opts as Parameters<RenderComposite>[0], {
-        onProgress: (progress) => {
-          event.sender.send('render-composite-progress', progress);
-        },
-      });
-    },
-  );
+  ipcMain.handle('render-composite', async (event: IpcMainInvokeEvent, opts: unknown) => {
+    return renderComposite(opts as Parameters<RenderComposite>[0], {
+      onProgress: (progress) => {
+        event.sender.send('render-composite-progress', progress);
+      }
+    });
+  });
 
-  ipcMain.handle(
-    'import-file',
-    async (_event, sourcePath: string, projectFolder: string) => {
-      if (!sourcePath || !projectFolder) throw new Error('Missing source path or project folder');
-      return copyFile(path.resolve(sourcePath), path.resolve(projectFolder), 'image');
-    },
-  );
+  ipcMain.handle('import-file', async (_event, sourcePath: string, projectFolder: string) => {
+    if (!sourcePath || !projectFolder) throw new Error('Missing source path or project folder');
+    return copyFile(path.resolve(sourcePath), path.resolve(projectFolder), 'image');
+  });
 
   ipcMain.handle('pick-image-file', async () => {
     const { canceled, filePaths } = await showOpenDialog({
       title: 'Select Image',
-      filters: [
-        { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] },
-      ],
-      properties: ['openFile'],
+      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }],
+      properties: ['openFile']
     });
     if (canceled || !filePaths.length) return null;
     return filePaths[0];
@@ -222,38 +201,54 @@ export function registerIpcHandlers({
 
   ipcMain.handle(
     'proxy:generate',
-    (event: IpcMainInvokeEvent, opts: { takeId: string; screenPath: string; projectFolder: string; durationSec?: number }) => {
+    (
+      event: IpcMainInvokeEvent,
+      opts: { takeId: string; screenPath: string; projectFolder: string; durationSec?: number }
+    ) => {
       if (!proxyService || !opts.screenPath || !opts.projectFolder) return null;
       const proxyPath = proxyService.deriveProxyPath(opts.screenPath);
-      const totalDuration = Number.isFinite(opts.durationSec) && (opts.durationSec as number) > 0
-        ? (opts.durationSec as number)
-        : 0;
+      const totalDuration =
+        Number.isFinite(opts.durationSec) && (opts.durationSec as number) > 0
+          ? (opts.durationSec as number)
+          : 0;
 
       event.sender.send('proxy:progress', { takeId: opts.takeId, status: 'started', percent: 0 });
 
-      const onProgress = totalDuration > 0
-        ? (progress: { outTimeSec: number | null }) => {
-            if (event.sender.isDestroyed()) return;
-            const outSec = progress.outTimeSec;
-            if (Number.isFinite(outSec) && outSec !== null && outSec >= 0) {
-              const percent = Math.max(0, Math.min(1, outSec / totalDuration));
-              event.sender.send('proxy:progress', { takeId: opts.takeId, status: 'progress', percent });
+      const onProgress =
+        totalDuration > 0
+          ? (progress: { outTimeSec: number | null }) => {
+              if (event.sender.isDestroyed()) return;
+              const outSec = progress.outTimeSec;
+              if (Number.isFinite(outSec) && outSec !== null && outSec >= 0) {
+                const percent = Math.max(0, Math.min(1, outSec / totalDuration));
+                event.sender.send('proxy:progress', {
+                  takeId: opts.takeId,
+                  status: 'progress',
+                  percent
+                });
+              }
             }
-          }
-        : undefined;
+          : undefined;
 
-      proxyService.generateProxy({ screenPath: opts.screenPath, proxyPath, onProgress }).then(() => {
-        if (!event.sender.isDestroyed()) {
-          event.sender.send('proxy:progress', { takeId: opts.takeId, status: 'done', proxyPath });
-        }
-      }).catch((err: unknown) => {
-        if (!event.sender.isDestroyed()) {
-          const message = err instanceof Error ? err.message : String(err);
-          event.sender.send('proxy:progress', { takeId: opts.takeId, status: 'error', error: message });
-        }
-      });
+      proxyService
+        .generateProxy({ screenPath: opts.screenPath, proxyPath, onProgress })
+        .then(() => {
+          if (!event.sender.isDestroyed()) {
+            event.sender.send('proxy:progress', { takeId: opts.takeId, status: 'done', proxyPath });
+          }
+        })
+        .catch((err: unknown) => {
+          if (!event.sender.isDestroyed()) {
+            const message = err instanceof Error ? err.message : String(err);
+            event.sender.send('proxy:progress', {
+              takeId: opts.takeId,
+              status: 'error',
+              error: message
+            });
+          }
+        });
 
       return proxyPath;
-    },
+    }
   );
 }

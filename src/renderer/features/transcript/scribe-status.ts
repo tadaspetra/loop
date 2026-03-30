@@ -37,7 +37,7 @@ function normalizeReason(value: unknown): string {
 }
 
 export function getScribeFailureReason(
-  message: ScribeMessageLike | null | undefined,
+  message: ScribeMessageLike | null | undefined
 ): string | null {
   const messageType = normalizeReason(message?.message_type);
   const error = normalizeReason(message?.error);
@@ -47,9 +47,7 @@ export function getScribeFailureReason(
   }
 
   if (SCRIBE_ERROR_TYPES.has(messageType)) {
-    return error && error !== messageType
-      ? `${messageType}: ${error}`
-      : messageType;
+    return error && error !== messageType ? `${messageType}: ${error}` : messageType;
   }
 
   if (!messageType && error) {
@@ -60,7 +58,7 @@ export function getScribeFailureReason(
 }
 
 export function getScribeStatusFromMessage(
-  message: ScribeMessageLike | null | undefined,
+  message: ScribeMessageLike | null | undefined
 ): TranscriptStatus | null {
   const messageType = normalizeReason(message?.message_type);
 
@@ -85,7 +83,7 @@ export function getScribeStatusFromMessage(
 
 export function getScribeStatusFromCloseEvent(
   event: ScribeCloseLike | null | undefined,
-  lastFailureReason?: string | null,
+  lastFailureReason?: string | null
 ): TranscriptStatus {
   const previousReason = normalizeReason(lastFailureReason);
   if (previousReason) {

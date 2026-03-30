@@ -4,7 +4,7 @@ import {
   deriveProxyPath,
   generateProxy,
   _getQueueState,
-  _resetQueue,
+  _resetQueue
 } from '../../src/main/services/proxy-service';
 
 describe('main/services/proxy-service', () => {
@@ -13,13 +13,13 @@ describe('main/services/proxy-service', () => {
   });
 
   test('deriveProxyPath replaces extension with -proxy.mp4', () => {
-    expect(deriveProxyPath('/project/recording-123-screen.webm'))
-      .toBe('/project/recording-123-screen-proxy.mp4');
+    expect(deriveProxyPath('/project/recording-123-screen.webm')).toBe(
+      '/project/recording-123-screen-proxy.mp4'
+    );
   });
 
   test('deriveProxyPath handles paths without extension', () => {
-    expect(deriveProxyPath('/project/recording'))
-      .toBe('/project/recording-proxy.mp4');
+    expect(deriveProxyPath('/project/recording')).toBe('/project/recording-proxy.mp4');
   });
 
   test('generateProxy calls runFfmpeg with correct args and renames on success', async () => {
@@ -27,12 +27,12 @@ describe('main/services/proxy-service', () => {
     const fsStub = {
       existsSync: vi.fn().mockReturnValue(false),
       unlinkSync: vi.fn(),
-      renameSync: vi.fn(),
+      renameSync: vi.fn()
     };
 
     await generateProxy(
       { screenPath: '/project/screen.webm', proxyPath: '/project/screen-proxy.mp4' },
-      { runFfmpeg, fs: fsStub, ffmpegPath: '/usr/bin/ffmpeg' },
+      { runFfmpeg, fs: fsStub, ffmpegPath: '/usr/bin/ffmpeg' }
     );
 
     expect(runFfmpeg).toHaveBeenCalledOnce();
@@ -46,7 +46,7 @@ describe('main/services/proxy-service', () => {
 
     expect(fsStub.renameSync).toHaveBeenCalledWith(
       '/project/screen-proxy.mp4.tmp',
-      '/project/screen-proxy.mp4',
+      '/project/screen-proxy.mp4'
     );
   });
 
@@ -56,12 +56,12 @@ describe('main/services/proxy-service', () => {
     const fsStub = {
       existsSync: vi.fn().mockReturnValue(false),
       unlinkSync: vi.fn(),
-      renameSync: vi.fn(),
+      renameSync: vi.fn()
     };
 
     await generateProxy(
       { screenPath: '/project/screen.webm', proxyPath: '/project/screen-proxy.mp4', onProgress },
-      { runFfmpeg, fs: fsStub, ffmpegPath: '/usr/bin/ffmpeg' },
+      { runFfmpeg, fs: fsStub, ffmpegPath: '/usr/bin/ffmpeg' }
     );
 
     expect(runFfmpeg.mock.calls[0][0].onProgress).toBe(onProgress);
@@ -72,14 +72,14 @@ describe('main/services/proxy-service', () => {
     const fsStub = {
       existsSync: vi.fn().mockReturnValue(true),
       unlinkSync: vi.fn(),
-      renameSync: vi.fn(),
+      renameSync: vi.fn()
     };
 
     await expect(
       generateProxy(
         { screenPath: '/project/screen.webm', proxyPath: '/project/screen-proxy.mp4' },
-        { runFfmpeg, fs: fsStub, ffmpegPath: '/usr/bin/ffmpeg' },
-      ),
+        { runFfmpeg, fs: fsStub, ffmpegPath: '/usr/bin/ffmpeg' }
+      )
     ).rejects.toThrow('ffmpeg failed');
 
     expect(fsStub.unlinkSync).toHaveBeenCalledWith('/project/screen-proxy.mp4.tmp');
@@ -91,12 +91,12 @@ describe('main/services/proxy-service', () => {
     const fsStub = {
       existsSync: vi.fn().mockReturnValue(true),
       unlinkSync: vi.fn(),
-      renameSync: vi.fn(),
+      renameSync: vi.fn()
     };
 
     await generateProxy(
       { screenPath: '/project/screen.webm', proxyPath: '/project/screen-proxy.mp4' },
-      { runFfmpeg, fs: fsStub, ffmpegPath: '/usr/bin/ffmpeg' },
+      { runFfmpeg, fs: fsStub, ffmpegPath: '/usr/bin/ffmpeg' }
     );
 
     // First call to unlinkSync is the stale tmp cleanup
@@ -107,11 +107,18 @@ describe('main/services/proxy-service', () => {
     let resolveA: () => void;
     let resolveB: () => void;
     let resolveC: () => void;
-    const promiseA = new Promise<{ stderr: string }>((r) => { resolveA = () => r({ stderr: '' }); });
-    const promiseB = new Promise<{ stderr: string }>((r) => { resolveB = () => r({ stderr: '' }); });
-    const promiseC = new Promise<{ stderr: string }>((r) => { resolveC = () => r({ stderr: '' }); });
+    const promiseA = new Promise<{ stderr: string }>((r) => {
+      resolveA = () => r({ stderr: '' });
+    });
+    const promiseB = new Promise<{ stderr: string }>((r) => {
+      resolveB = () => r({ stderr: '' });
+    });
+    const promiseC = new Promise<{ stderr: string }>((r) => {
+      resolveC = () => r({ stderr: '' });
+    });
 
-    const runFfmpeg = vi.fn()
+    const runFfmpeg = vi
+      .fn()
       .mockReturnValueOnce(promiseA)
       .mockReturnValueOnce(promiseB)
       .mockReturnValueOnce(promiseC);
@@ -119,7 +126,7 @@ describe('main/services/proxy-service', () => {
     const fsStub = {
       existsSync: vi.fn().mockReturnValue(false),
       unlinkSync: vi.fn(),
-      renameSync: vi.fn(),
+      renameSync: vi.fn()
     };
     const deps = { runFfmpeg, fs: fsStub, ffmpegPath: '/usr/bin/ffmpeg' };
 

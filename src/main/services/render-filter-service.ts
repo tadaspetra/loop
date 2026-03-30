@@ -16,7 +16,7 @@ interface KeyframeProp extends Keyframe {
 
 function collapseConsecutiveKeyframes<T extends Keyframe>(
   keyframes: T[],
-  isSame: (prev: T, curr: T) => boolean,
+  isSame: (prev: T, curr: T) => boolean
 ): T[] {
   if (!Array.isArray(keyframes) || keyframes.length <= 1) return keyframes;
 
@@ -46,20 +46,13 @@ export function buildNumericExpr(
   prop: keyof KeyframeProp,
   precision = 3,
   defaultValue = 0,
-  timeVar = 't',
+  timeVar = 't'
 ): string {
-  const relevantKeyframes = collapseConsecutiveKeyframes(
-    keyframes,
-    (prev, curr) => {
-      const prevVal = Number.isFinite(Number(prev?.[prop]))
-        ? Number(prev[prop])
-        : defaultValue;
-      const currVal = Number.isFinite(Number(curr?.[prop]))
-        ? Number(curr[prop])
-        : defaultValue;
-      return Math.abs(prevVal - currVal) <= 0.0001;
-    },
-  );
+  const relevantKeyframes = collapseConsecutiveKeyframes(keyframes, (prev, curr) => {
+    const prevVal = Number.isFinite(Number(prev?.[prop])) ? Number(prev[prop]) : defaultValue;
+    const currVal = Number.isFinite(Number(curr?.[prop])) ? Number(curr[prop]) : defaultValue;
+    return Math.abs(prevVal - currVal) <= 0.0001;
+  });
 
   const firstValue = Number.isFinite(Number(relevantKeyframes[0]?.[prop]))
     ? Number(relevantKeyframes[0][prop])
@@ -70,12 +63,8 @@ export function buildNumericExpr(
   for (let index = 1; index < relevantKeyframes.length; index += 1) {
     const prev = relevantKeyframes[index - 1];
     const curr = relevantKeyframes[index];
-    const prevVal = Number.isFinite(Number(prev?.[prop]))
-      ? Number(prev[prop])
-      : defaultValue;
-    const currVal = Number.isFinite(Number(curr?.[prop]))
-      ? Number(curr[prop])
-      : defaultValue;
+    const prevVal = Number.isFinite(Number(prev?.[prop])) ? Number(prev[prop]) : defaultValue;
+    const currVal = Number.isFinite(Number(curr?.[prop])) ? Number(curr[prop]) : defaultValue;
     const time = curr.time;
     const start = time - TRANSITION_DURATION;
     const diff = currVal - prevVal;
@@ -90,11 +79,7 @@ export function buildNumericExpr(
   return expr;
 }
 
-export function panToFocusCoord(
-  zoom: unknown,
-  pan: unknown,
-  defaultCoord = 0.5,
-): number {
+export function panToFocusCoord(zoom: unknown, pan: unknown, defaultCoord = 0.5): number {
   const normalizedZoom = Number.isFinite(Number(zoom)) ? Number(zoom) : 1;
   const normalizedPan = Number.isFinite(Number(pan)) ? Number(pan) : 0;
   if (normalizedZoom <= 1.0001) return defaultCoord;
@@ -103,20 +88,15 @@ export function panToFocusCoord(
 }
 
 export function buildPosExpr(keyframes: Keyframe[], prop: 'pipX' | 'pipY'): string {
-  const relevantKeyframes = collapseConsecutiveKeyframes(
-    keyframes,
-    (prev, curr) => {
-      const prevVisible =
-        prev.pipVisible !== undefined ? prev.pipVisible : true;
-      const currVisible =
-        curr.pipVisible !== undefined ? curr.pipVisible : true;
-      return (
-        Math.round(prev[prop]) === Math.round(curr[prop]) &&
-        (prev.cameraFullscreen || false) === (curr.cameraFullscreen || false) &&
-        prevVisible === currVisible
-      );
-    },
-  );
+  const relevantKeyframes = collapseConsecutiveKeyframes(keyframes, (prev, curr) => {
+    const prevVisible = prev.pipVisible !== undefined ? prev.pipVisible : true;
+    const currVisible = curr.pipVisible !== undefined ? curr.pipVisible : true;
+    return (
+      Math.round(prev[prop]) === Math.round(curr[prop]) &&
+      (prev.cameraFullscreen || false) === (curr.cameraFullscreen || false) &&
+      prevVisible === currVisible
+    );
+  });
 
   if (relevantKeyframes.length === 1) {
     return String(Math.round(relevantKeyframes[0][prop]));
@@ -131,10 +111,8 @@ export function buildPosExpr(keyframes: Keyframe[], prop: 'pipX' | 'pipY'): stri
     const time = curr.time;
     const prevFull = prev.cameraFullscreen || false;
     const currFull = curr.cameraFullscreen || false;
-    const prevVisible =
-      prev.pipVisible !== undefined ? prev.pipVisible : true;
-    const currVisible =
-      curr.pipVisible !== undefined ? curr.pipVisible : true;
+    const prevVisible = prev.pipVisible !== undefined ? prev.pipVisible : true;
+    const currVisible = curr.pipVisible !== undefined ? curr.pipVisible : true;
 
     if ((prevFull && !currFull) || (!prevVisible && currVisible)) {
       const start = time - TRANSITION_DURATION;
@@ -154,7 +132,7 @@ export function buildPosExpr(keyframes: Keyframe[], prop: 'pipX' | 'pipY'): stri
 export function buildAlphaExpr(keyframes: Keyframe[]): string {
   const relevantKeyframes = collapseConsecutiveKeyframes(
     keyframes,
-    (prev, curr) => prev.pipVisible === curr.pipVisible,
+    (prev, curr) => prev.pipVisible === curr.pipVisible
   );
   if (relevantKeyframes.length === 1) return relevantKeyframes[0].pipVisible ? '1' : '0';
 
@@ -185,7 +163,7 @@ export function buildCamFullAlphaExpr(keyframes: Keyframe[]): string {
 
   const relevantKeyframes = collapseConsecutiveKeyframes(
     keyframes,
-    (prev, curr) => isFullVisible(prev) === isFullVisible(curr),
+    (prev, curr) => isFullVisible(prev) === isFullVisible(curr)
   );
   if (relevantKeyframes.length === 1) return isFullVisible(relevantKeyframes[0]) ? '1' : '0';
 
@@ -220,37 +198,28 @@ export function buildScreenFilter(
   canvasW: number,
   canvasH: number,
   outputLabel = '[screen]',
-  targetFps = 30,
+  targetFps = 30
 ): string {
   const { outW, outH } = resolveOutputSize(canvasW, canvasH);
-  const normalizedKeyframes = (Array.isArray(keyframes) ? keyframes : []).map(
-    (keyframe) => ({
-      ...keyframe,
-      backgroundZoom: Number.isFinite(Number(keyframe?.backgroundZoom))
-        ? Number(keyframe.backgroundZoom)
-        : 1,
-      backgroundPanX: Number.isFinite(Number(keyframe?.backgroundPanX))
-        ? Number(keyframe.backgroundPanX)
-        : 0,
-      backgroundPanY: Number.isFinite(Number(keyframe?.backgroundPanY))
-        ? Number(keyframe.backgroundPanY)
-        : 0,
-      backgroundFocusX: panToFocusCoord(
-        keyframe?.backgroundZoom,
-        keyframe?.backgroundPanX,
-        0.5,
-      ),
-      backgroundFocusY: panToFocusCoord(
-        keyframe?.backgroundZoom,
-        keyframe?.backgroundPanY,
-        0.5,
-      ),
-    }),
-  );
+  const normalizedKeyframes = (Array.isArray(keyframes) ? keyframes : []).map((keyframe) => ({
+    ...keyframe,
+    backgroundZoom: Number.isFinite(Number(keyframe?.backgroundZoom))
+      ? Number(keyframe.backgroundZoom)
+      : 1,
+    backgroundPanX: Number.isFinite(Number(keyframe?.backgroundPanX))
+      ? Number(keyframe.backgroundPanX)
+      : 0,
+    backgroundPanY: Number.isFinite(Number(keyframe?.backgroundPanY))
+      ? Number(keyframe.backgroundPanY)
+      : 0,
+    backgroundFocusX: panToFocusCoord(keyframe?.backgroundZoom, keyframe?.backgroundPanX, 0.5),
+    backgroundFocusY: panToFocusCoord(keyframe?.backgroundZoom, keyframe?.backgroundPanY, 0.5)
+  }));
 
-  const baseFilter = screenFitMode === 'fill'
-    ? `[0:v]scale=${outW}:${outH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${outW}:${outH}[screen_base]`
-    : `[0:v]scale=${outW}:${outH}:flags=lanczos:force_original_aspect_ratio=decrease,pad=${outW}:${outH}:'(ow-iw)/2':'(oh-ih)/2':color=black[screen_base]`;
+  const baseFilter =
+    screenFitMode === 'fill'
+      ? `[0:v]scale=${outW}:${outH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${outW}:${outH}[screen_base]`
+      : `[0:v]scale=${outW}:${outH}:flags=lanczos:force_original_aspect_ratio=decrease,pad=${outW}:${outH}:'(ow-iw)/2':'(oh-ih)/2':color=black[screen_base]`;
 
   const hasBackgroundAnimation = normalizedKeyframes.some((keyframe) => {
     return (
@@ -264,27 +233,9 @@ export function buildScreenFilter(
     return baseFilter.replace('[screen_base]', outputLabel);
   }
 
-  const zoomExpr = buildNumericExpr(
-    normalizedKeyframes,
-    'backgroundZoom',
-    3,
-    1,
-    'it',
-  );
-  const focusXExpr = buildNumericExpr(
-    normalizedKeyframes,
-    'backgroundFocusX',
-    6,
-    0.5,
-    'it',
-  );
-  const focusYExpr = buildNumericExpr(
-    normalizedKeyframes,
-    'backgroundFocusY',
-    6,
-    0.5,
-    'it',
-  );
+  const zoomExpr = buildNumericExpr(normalizedKeyframes, 'backgroundZoom', 3, 1, 'it');
+  const focusXExpr = buildNumericExpr(normalizedKeyframes, 'backgroundFocusX', 6, 0.5, 'it');
+  const focusYExpr = buildNumericExpr(normalizedKeyframes, 'backgroundFocusY', 6, 0.5, 'it');
   const animatedFilter = `[screen_base]zoompan=z='${zoomExpr}':x='max(0,min(iw-iw/zoom,iw*(${focusXExpr})-iw/zoom/2))':y='max(0,min(ih-ih/zoom,ih*(${focusYExpr})-ih/zoom/2))':d=1:s=${outW}x${outH}:fps=${targetFps},setsar=1${outputLabel}`;
   return `${baseFilter};${animatedFilter}`;
 }
@@ -297,7 +248,7 @@ export function buildFilterComplex(
   sourceHeight: number,
   canvasW: number,
   canvasH: number,
-  targetFps = 30,
+  targetFps = 30
 ): string {
   const { outW, outH } = resolveOutputSize(canvasW, canvasH);
   const scaleX = outW / AUTHORING_CANVAS_W;
@@ -314,7 +265,7 @@ export function buildFilterComplex(
   const scaledKeyframes = keyframes.map((keyframe) => ({
     ...keyframe,
     pipX: Math.round(keyframe.pipX * scaleX),
-    pipY: Math.round(keyframe.pipY * scaleY),
+    pipY: Math.round(keyframe.pipY * scaleY)
   }));
 
   const screenFilter = buildScreenFilter(
@@ -325,7 +276,7 @@ export function buildFilterComplex(
     canvasW,
     canvasH,
     '[screen]',
-    targetFps,
+    targetFps
   );
 
   const hasPip = keyframes.some((keyframe) => keyframe.pipVisible);

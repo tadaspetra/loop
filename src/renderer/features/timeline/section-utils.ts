@@ -22,7 +22,7 @@ export function roundMs(value: number): number {
  * Builds remapped sections from speech segments (padding, merge, timeline mapping).
  */
 export function buildRemappedSectionsFromSegments(
-  segments: Array<{ start: number; end: number; text?: string }>,
+  segments: Array<{ start: number; end: number; text?: string }>
 ): Section[] {
   if (!Array.isArray(segments) || segments.length === 0) return [];
 
@@ -36,10 +36,12 @@ export function buildRemappedSectionsFromSegments(
       return {
         start,
         end,
-        transcript: normalizeTranscriptText(segment.text),
+        transcript: normalizeTranscriptText(segment.text)
       };
     })
-    .filter((segment): segment is { start: number; end: number; transcript: string } => Boolean(segment))
+    .filter((segment): segment is { start: number; end: number; transcript: string } =>
+      Boolean(segment)
+    )
     .sort((left, right) => left.start - right.start);
 
   if (padded.length === 0) return [];
@@ -48,8 +50,8 @@ export function buildRemappedSectionsFromSegments(
     {
       start: padded[0].start,
       end: padded[0].end,
-      transcripts: padded[0].transcript ? [padded[0].transcript] : [],
-    },
+      transcripts: padded[0].transcript ? [padded[0].transcript] : []
+    }
   ];
 
   for (let index = 1; index < padded.length; index += 1) {
@@ -61,7 +63,7 @@ export function buildRemappedSectionsFromSegments(
       merged.push({
         start: padded[index].start,
         end: padded[index].end,
-        transcripts: padded[index].transcript ? [padded[index].transcript] : [],
+        transcripts: padded[index].transcript ? [padded[index].transcript] : []
       });
     }
   }
@@ -86,7 +88,7 @@ export function buildRemappedSectionsFromSegments(
       transcript: normalizeTranscriptText(segment.transcripts.join(' ')),
       label: `Section ${index + 1}`,
       takeId: null,
-      imagePath: null,
+      imagePath: null
     });
     timelineCursor += duration;
   }
@@ -99,7 +101,7 @@ export function buildRemappedSectionsFromSegments(
  */
 export function normalizeSections(
   rawSections: TranscriptSection[] | unknown,
-  duration: number,
+  duration: number
 ): Section[] {
   const safeDuration = Math.max(0, Number(duration) || 0);
   const input = Array.isArray(rawSections) ? rawSections : [];
@@ -122,7 +124,7 @@ export function normalizeSections(
           ? section.transcript
           : typeof section.text === 'string'
             ? section.text
-            : '',
+            : ''
       );
 
       start = Math.max(0, start);
@@ -138,23 +140,16 @@ export function normalizeSections(
         sourceStart: Number.isFinite(Number(section.sourceStart))
           ? Number(section.sourceStart)
           : start,
-        sourceEnd: Number.isFinite(Number(section.sourceEnd))
-          ? Number(section.sourceEnd)
-          : end,
+        sourceEnd: Number.isFinite(Number(section.sourceEnd)) ? Number(section.sourceEnd) : end,
         start: roundMs(start),
         end: roundMs(end),
-        takeId:
-          typeof section.takeId === 'string' && section.takeId
-            ? section.takeId
-            : null,
+        takeId: typeof section.takeId === 'string' && section.takeId ? section.takeId : null,
         transcript,
         index,
         label: `Section ${index + 1}`,
         duration: 0,
         imagePath:
-          typeof section.imagePath === 'string' && section.imagePath
-            ? section.imagePath
-            : null,
+          typeof section.imagePath === 'string' && section.imagePath ? section.imagePath : null
       } satisfies Section;
     })
     .filter((section) => section.end - section.start > 0.0001)
@@ -174,7 +169,7 @@ export function normalizeSections(
     normalized[index].index = index;
     normalized[index].label = `Section ${index + 1}`;
     normalized[index].duration = roundMs(
-      Math.max(0, normalized[index].end - normalized[index].start),
+      Math.max(0, normalized[index].end - normalized[index].start)
     );
   }
 
@@ -199,8 +194,8 @@ export function buildDefaultSectionsForDuration(duration: number): Section[] {
       duration: roundMs(safeDuration),
       transcript: '',
       takeId: null,
-      imagePath: null,
-    },
+      imagePath: null
+    }
   ];
 }
 
@@ -209,7 +204,7 @@ export function buildDefaultSectionsForDuration(duration: number): Section[] {
  */
 export function normalizeTakeSections(
   rawSections: TranscriptSection[] | unknown,
-  duration: number,
+  duration: number
 ): Section[] {
   const normalized = normalizeSections(rawSections, duration);
   if (normalized.length > 0) return normalized;
@@ -221,12 +216,10 @@ export function normalizeTakeSections(
  */
 export function attachSectionTranscripts(
   sections: TranscriptSection[] | unknown,
-  transcriptSections: TranscriptSection[] | unknown,
+  transcriptSections: TranscriptSection[] | unknown
 ): TranscriptSection[] {
   const baseSections = Array.isArray(sections) ? sections : [];
-  const transcriptSource = Array.isArray(transcriptSections)
-    ? transcriptSections
-    : [];
+  const transcriptSource = Array.isArray(transcriptSections) ? transcriptSections : [];
 
   return baseSections.map((section, index) => {
     const existing = normalizeTranscriptText(
@@ -234,16 +227,14 @@ export function attachSectionTranscripts(
         ? section.transcript
         : typeof section.text === 'string'
           ? section.text
-          : '',
+          : ''
     );
     if (existing) {
       return { ...section, transcript: existing };
     }
 
     const byIndex = transcriptSource[index];
-    let transcript = normalizeTranscriptText(
-      byIndex?.transcript || byIndex?.text || '',
-    );
+    let transcript = normalizeTranscriptText(byIndex?.transcript || byIndex?.text || '');
 
     if (!transcript) {
       const sourceStart = Number(section.sourceStart);
@@ -259,9 +250,7 @@ export function attachSectionTranscripts(
             Math.abs(candidateEnd - sourceEnd) <= 0.05
           );
         });
-        transcript = normalizeTranscriptText(
-          bySource?.transcript || bySource?.text || '',
-        );
+        transcript = normalizeTranscriptText(bySource?.transcript || bySource?.text || '');
       }
     }
 

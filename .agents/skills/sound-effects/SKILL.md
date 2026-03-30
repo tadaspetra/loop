@@ -3,7 +3,11 @@ name: sound-effects
 description: Generate sound effects from text descriptions using ElevenLabs. Use when creating sound effects, generating audio textures, producing ambient sounds, cinematic impacts, UI sounds, or any audio that isn't speech. Supports looping, duration control, and prompt influence tuning.
 license: MIT
 compatibility: Requires internet access and an ElevenLabs API key (ELEVENLABS_API_KEY).
-metadata: {"openclaw": {"requires": {"env": ["ELEVENLABS_API_KEY"]}, "primaryEnv": "ELEVENLABS_API_KEY"}}
+metadata:
+  {
+    'openclaw':
+      { 'requires': { 'env': ['ELEVENLABS_API_KEY'] }, 'primaryEnv': 'ELEVENLABS_API_KEY' }
+  }
 ---
 
 # ElevenLabs Sound Effects
@@ -33,14 +37,14 @@ with open("thunder.mp3", "wb") as f:
 ### JavaScript
 
 ```javascript
-import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
-import { createWriteStream } from "fs";
+import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
+import { createWriteStream } from 'fs';
 
 const client = new ElevenLabsClient();
 const audio = await client.textToSoundEffects.convert({
-  text: "Thunder rumbling in the distance with light rain",
+  text: 'Thunder rumbling in the distance with light rain'
 });
-audio.pipe(createWriteStream("thunder.mp3"));
+audio.pipe(createWriteStream('thunder.mp3'));
 ```
 
 ### cURL
@@ -54,13 +58,13 @@ curl -X POST "https://api.elevenlabs.io/v1/sound-generation" \
 
 ## Parameters
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `text` | string (required) | — | Description of the desired sound effect |
-| `model_id` | string | `eleven_text_to_sound_v2` | Model to use |
-| `duration_seconds` | number \| null | null (auto) | Duration 0.5–30s; auto-calculated if null |
-| `prompt_influence` | number \| null | 0.3 | How closely to follow the prompt (0–1) |
-| `loop` | boolean | false | Generate a seamlessly looping sound (v2 model only) |
+| Parameter          | Type              | Default                   | Description                                         |
+| ------------------ | ----------------- | ------------------------- | --------------------------------------------------- |
+| `text`             | string (required) | —                         | Description of the desired sound effect             |
+| `model_id`         | string            | `eleven_text_to_sound_v2` | Model to use                                        |
+| `duration_seconds` | number \| null    | null (auto)               | Duration 0.5–30s; auto-calculated if null           |
+| `prompt_influence` | number \| null    | 0.3                       | How closely to follow the prompt (0–1)              |
+| `loop`             | boolean           | false                     | Generate a seamlessly looping sound (v2 model only) |
 
 ## Examples with Parameters
 
@@ -85,12 +89,12 @@ audio = client.text_to_sound_effects.convert(
 
 Pass `output_format` as a query parameter (cURL) or SDK parameter:
 
-| Format | Description |
-|--------|-------------|
-| `mp3_44100_128` | MP3 44.1kHz 128kbps (default) |
-| `pcm_44100` | Raw uncompressed CD quality |
+| Format           | Description                               |
+| ---------------- | ----------------------------------------- |
+| `mp3_44100_128`  | MP3 44.1kHz 128kbps (default)             |
+| `pcm_44100`      | Raw uncompressed CD quality               |
 | `opus_48000_128` | Opus 48kHz 128kbps — efficient compressed |
-| `ulaw_8000` | μ-law 8kHz — telephony |
+| `ulaw_8000`      | μ-law 8kHz — telephony                    |
 
 Full list: `mp3_22050_32`, `mp3_24000_48`, `mp3_44100_32`, `mp3_44100_64`, `mp3_44100_96`, `mp3_44100_128`, `mp3_44100_192`, `pcm_8000`, `pcm_16000`, `pcm_22050`, `pcm_24000`, `pcm_32000`, `pcm_44100`, `pcm_48000`, `ulaw_8000`, `alaw_8000`, `opus_48000_32`, `opus_48000_64`, `opus_48000_96`, `opus_48000_128`, `opus_48000_192`.
 
@@ -111,6 +115,7 @@ except Exception as e:
 ```
 
 Common errors:
+
 - **401**: Invalid API key
 - **422**: Invalid parameters (check duration range, prompt_influence range)
 - **429**: Rate limit exceeded

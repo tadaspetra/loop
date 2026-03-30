@@ -25,7 +25,7 @@ export function generateSectionId(): string {
  * Mutates the sections in place.
  */
 export function reindexSections(
-  sections: Array<{ id: string; index: number; label: string }>,
+  sections: Array<{ id: string; index: number; label: string }>
 ): void {
   for (let index = 0; index < sections.length; index += 1) {
     sections[index].index = index;
@@ -41,7 +41,7 @@ export function reindexSections(
 export function moveSectionToIndex(
   sections: Array<{ id: string; index: number; label: string }>,
   fromIndex: number,
-  toIndex: number,
+  toIndex: number
 ): boolean {
   if (fromIndex < 0 || fromIndex >= sections.length) return false;
   if (toIndex < 0 || toIndex >= sections.length) return false;
@@ -63,7 +63,7 @@ export function moveSectionToIndex(
 export function moveSectionsToIndex(
   sections: Array<{ id: string; index: number; label: string }>,
   selectedIds: Set<string>,
-  insertBefore: number,
+  insertBefore: number
 ): boolean {
   if (selectedIds.size === 0) return false;
 
@@ -77,11 +77,7 @@ export function moveSectionsToIndex(
   if (selected.length === 0 || remaining.length === 0) return false;
 
   const clamped = Math.max(0, Math.min(insertBefore, remaining.length));
-  const result = [
-    ...remaining.slice(0, clamped),
-    ...selected,
-    ...remaining.slice(clamped),
-  ];
+  const result = [...remaining.slice(0, clamped), ...selected, ...remaining.slice(clamped)];
 
   if (result.every((s, i) => s.id === sections[i].id)) return false;
 
@@ -100,11 +96,9 @@ export function buildSplitAnchorKeyframe(
   parentSectionId: string | null,
   newSectionId: string,
   newSectionStart: number,
-  defaults: KeyframeDefaults,
+  defaults: KeyframeDefaults
 ): Keyframe {
-  const parent = (keyframes || []).find(
-    (keyframe) => keyframe.sectionId === parentSectionId,
-  );
+  const parent = (keyframes || []).find((keyframe) => keyframe.sectionId === parentSectionId);
   const defaultZoom = defaults.backgroundZoom ?? 1;
   return {
     time: newSectionStart,
@@ -116,6 +110,6 @@ export function buildSplitAnchorKeyframe(
     backgroundPanX: parent?.backgroundPanX ?? 0,
     backgroundPanY: parent?.backgroundPanY ?? 0,
     sectionId: newSectionId,
-    autoSection: true,
+    autoSection: true
   };
 }

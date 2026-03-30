@@ -41,7 +41,7 @@ describe('keyframe-ops', () => {
       return Array.from({ length: count }, (_, i) => ({
         id: `s-${i + 1}`,
         index: i,
-        label: `Section ${i + 1}`,
+        label: `Section ${i + 1}`
       }));
     }
 
@@ -49,7 +49,7 @@ describe('keyframe-ops', () => {
       const sections = makeSections(4);
       const result = moveSectionToIndex(sections, 0, 2);
       expect(result).toBe(true);
-      expect(sections.map(s => s.id)).toEqual(['s-2', 's-3', 's-1', 's-4']);
+      expect(sections.map((s) => s.id)).toEqual(['s-2', 's-3', 's-1', 's-4']);
       expect(sections[0].index).toBe(0);
       expect(sections[0].label).toBe('Section 1');
       expect(sections[2].index).toBe(2);
@@ -60,13 +60,13 @@ describe('keyframe-ops', () => {
       const sections = makeSections(4);
       const result = moveSectionToIndex(sections, 3, 1);
       expect(result).toBe(true);
-      expect(sections.map(s => s.id)).toEqual(['s-1', 's-4', 's-2', 's-3']);
+      expect(sections.map((s) => s.id)).toEqual(['s-1', 's-4', 's-2', 's-3']);
     });
 
     test('returns false for same position', () => {
       const sections = makeSections(3);
       expect(moveSectionToIndex(sections, 1, 1)).toBe(false);
-      expect(sections.map(s => s.id)).toEqual(['s-1', 's-2', 's-3']);
+      expect(sections.map((s) => s.id)).toEqual(['s-1', 's-2', 's-3']);
     });
 
     test('returns false for out of bounds indices', () => {
@@ -79,29 +79,29 @@ describe('keyframe-ops', () => {
     test('handles move to first position', () => {
       const sections = makeSections(3);
       moveSectionToIndex(sections, 2, 0);
-      expect(sections.map(s => s.id)).toEqual(['s-3', 's-1', 's-2']);
+      expect(sections.map((s) => s.id)).toEqual(['s-3', 's-1', 's-2']);
       expect(sections[0].label).toBe('Section 1');
     });
 
     test('handles move to last position', () => {
       const sections = makeSections(3);
       moveSectionToIndex(sections, 0, 2);
-      expect(sections.map(s => s.id)).toEqual(['s-2', 's-3', 's-1']);
+      expect(sections.map((s) => s.id)).toEqual(['s-2', 's-3', 's-1']);
       expect(sections[2].label).toBe('Section 3');
     });
 
     test('preserves section IDs', () => {
       const sections = makeSections(4);
-      const originalIds = sections.map(s => s.id);
+      const originalIds = sections.map((s) => s.id);
       moveSectionToIndex(sections, 1, 3);
-      const newIds = sections.map(s => s.id);
+      const newIds = sections.map((s) => s.id);
       expect(newIds.sort()).toEqual(originalIds.sort());
     });
 
     test('works with two sections', () => {
       const sections = makeSections(2);
       moveSectionToIndex(sections, 0, 1);
-      expect(sections.map(s => s.id)).toEqual(['s-2', 's-1']);
+      expect(sections.map((s) => s.id)).toEqual(['s-2', 's-1']);
     });
   });
 
@@ -110,7 +110,7 @@ describe('keyframe-ops', () => {
       return Array.from({ length: count }, (_, i) => ({
         id: `s-${i + 1}`,
         index: i,
-        label: `Section ${i + 1}`,
+        label: `Section ${i + 1}`
       }));
     }
 
@@ -118,21 +118,21 @@ describe('keyframe-ops', () => {
       const sections = makeSections(5);
       const result = moveSectionsToIndex(sections, new Set(['s-3', 's-4']), 0);
       expect(result).toBe(true);
-      expect(sections.map(s => s.id)).toEqual(['s-3', 's-4', 's-1', 's-2', 's-5']);
+      expect(sections.map((s) => s.id)).toEqual(['s-3', 's-4', 's-1', 's-2', 's-5']);
     });
 
     test('moves a group of sections to the end', () => {
       const sections = makeSections(5);
       const result = moveSectionsToIndex(sections, new Set(['s-2', 's-3']), 3);
       expect(result).toBe(true);
-      expect(sections.map(s => s.id)).toEqual(['s-1', 's-4', 's-5', 's-2', 's-3']);
+      expect(sections.map((s) => s.id)).toEqual(['s-1', 's-4', 's-5', 's-2', 's-3']);
     });
 
     test('moves non-contiguous sections preserving their relative order', () => {
       const sections = makeSections(5);
       const result = moveSectionsToIndex(sections, new Set(['s-1', 's-4']), 2);
       expect(result).toBe(true);
-      expect(sections.map(s => s.id)).toEqual(['s-2', 's-3', 's-1', 's-4', 's-5']);
+      expect(sections.map((s) => s.id)).toEqual(['s-2', 's-3', 's-1', 's-4', 's-5']);
     });
 
     test('returns false when order does not change', () => {
@@ -140,7 +140,7 @@ describe('keyframe-ops', () => {
       // s-2, s-3 are already at insert position 1 among remaining [s-1, s-4]
       const result = moveSectionsToIndex(sections, new Set(['s-2', 's-3']), 1);
       expect(result).toBe(false);
-      expect(sections.map(s => s.id)).toEqual(['s-1', 's-2', 's-3', 's-4']);
+      expect(sections.map((s) => s.id)).toEqual(['s-1', 's-2', 's-3', 's-4']);
     });
 
     test('returns false for empty selectedIds', () => {
@@ -156,7 +156,7 @@ describe('keyframe-ops', () => {
     test('clamps insertBefore to valid range', () => {
       const sections = makeSections(4);
       moveSectionsToIndex(sections, new Set(['s-1']), 99);
-      expect(sections.map(s => s.id)).toEqual(['s-2', 's-3', 's-4', 's-1']);
+      expect(sections.map((s) => s.id)).toEqual(['s-2', 's-3', 's-4', 's-1']);
     });
 
     test('reindexes sections after move', () => {
@@ -224,9 +224,33 @@ describe('keyframe-ops', () => {
     test('splitting adds one keyframe without modifying existing ones', () => {
       // 3 sections with custom camera states
       const keyframes = [
-        { time: 0, pipX: 10, pipY: 20, pipVisible: true, cameraFullscreen: false, sectionId: 's-1', autoSection: true },
-        { time: 5, pipX: 30, pipY: 40, pipVisible: false, cameraFullscreen: false, sectionId: 's-2', autoSection: true },
-        { time: 10, pipX: 50, pipY: 60, pipVisible: true, cameraFullscreen: true, sectionId: 's-3', autoSection: true }
+        {
+          time: 0,
+          pipX: 10,
+          pipY: 20,
+          pipVisible: true,
+          cameraFullscreen: false,
+          sectionId: 's-1',
+          autoSection: true
+        },
+        {
+          time: 5,
+          pipX: 30,
+          pipY: 40,
+          pipVisible: false,
+          cameraFullscreen: false,
+          sectionId: 's-2',
+          autoSection: true
+        },
+        {
+          time: 10,
+          pipX: 50,
+          pipY: 60,
+          pipVisible: true,
+          cameraFullscreen: true,
+          sectionId: 's-3',
+          autoSection: true
+        }
       ] as Keyframe[];
       const splitDefaults = { pipX: 100, pipY: 200 };
 
@@ -263,9 +287,33 @@ describe('keyframe-ops', () => {
   describe('delete preserves remaining section keyframes', () => {
     test('removing a section anchor does not affect other anchors', () => {
       const keyframes = [
-        { time: 0, pipX: 10, pipY: 20, pipVisible: true, cameraFullscreen: false, sectionId: 's-1', autoSection: true },
-        { time: 5, pipX: 30, pipY: 40, pipVisible: false, cameraFullscreen: false, sectionId: 's-2', autoSection: true },
-        { time: 10, pipX: 50, pipY: 60, pipVisible: true, cameraFullscreen: true, sectionId: 's-3', autoSection: true }
+        {
+          time: 0,
+          pipX: 10,
+          pipY: 20,
+          pipVisible: true,
+          cameraFullscreen: false,
+          sectionId: 's-1',
+          autoSection: true
+        },
+        {
+          time: 5,
+          pipX: 30,
+          pipY: 40,
+          pipVisible: false,
+          cameraFullscreen: false,
+          sectionId: 's-2',
+          autoSection: true
+        },
+        {
+          time: 10,
+          pipX: 50,
+          pipY: 60,
+          pipVisible: true,
+          cameraFullscreen: true,
+          sectionId: 's-3',
+          autoSection: true
+        }
       ];
 
       // Delete s-2: filter out its anchor, keep others

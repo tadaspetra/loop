@@ -3,7 +3,11 @@ name: music
 description: Generate music using ElevenLabs Music API. Use when creating instrumental tracks, songs with lyrics, background music, jingles, or any AI-generated music composition. Supports prompt-based generation, composition plans for granular control, and detailed output with metadata.
 license: MIT
 compatibility: Requires internet access and an ElevenLabs API key (ELEVENLABS_API_KEY).
-metadata: {"openclaw": {"requires": {"env": ["ELEVENLABS_API_KEY"]}, "primaryEnv": "ELEVENLABS_API_KEY"}}
+metadata:
+  {
+    'openclaw':
+      { 'requires': { 'env': ['ELEVENLABS_API_KEY'] }, 'primaryEnv': 'ELEVENLABS_API_KEY' }
+  }
 ---
 
 # ElevenLabs Music Generation
@@ -34,15 +38,15 @@ with open("output.mp3", "wb") as f:
 ### JavaScript
 
 ```javascript
-import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
-import { createWriteStream } from "fs";
+import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
+import { createWriteStream } from 'fs';
 
 const client = new ElevenLabsClient();
 const audio = await client.music.compose({
-  prompt: "A chill lo-fi hip hop beat with jazzy piano chords",
-  musicLengthMs: 30000,
+  prompt: 'A chill lo-fi hip hop beat with jazzy piano chords',
+  musicLengthMs: 30000
 });
-audio.pipe(createWriteStream("output.mp3"));
+audio.pipe(createWriteStream('output.mp3'));
 ```
 
 ### cURL
@@ -55,11 +59,11 @@ curl -X POST "https://api.elevenlabs.io/v1/music" \
 
 ## Methods
 
-| Method | Description |
-|--------|-------------|
-| `music.compose` | Generate audio from a prompt or composition plan |
+| Method                          | Description                                         |
+| ------------------------------- | --------------------------------------------------- |
+| `music.compose`                 | Generate audio from a prompt or composition plan    |
 | `music.composition_plan.create` | Generate a structured plan for fine-grained control |
-| `music.compose_detailed` | Generate audio + composition plan + metadata |
+| `music.compose_detailed`        | Generate audio + composition plan + metadata        |
 
 See [API Reference](references/api_reference.md) for full parameter details.
 

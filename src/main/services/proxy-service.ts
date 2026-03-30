@@ -19,10 +19,12 @@ function drainQueue(): void {
 function enqueue<T>(fn: () => Promise<T>): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     queue.push(() => {
-      fn().then(resolve, reject).finally(() => {
-        activeCount -= 1;
-        drainQueue();
-      });
+      fn()
+        .then(resolve, reject)
+        .finally(() => {
+          activeCount -= 1;
+          drainQueue();
+        });
     });
     drainQueue();
   });
@@ -49,7 +51,7 @@ export interface GenerateProxyDeps {
 
 export function generateProxy(
   opts: GenerateProxyOpts,
-  deps: GenerateProxyDeps = {},
+  deps: GenerateProxyDeps = {}
 ): Promise<void> {
   const runFfmpegImpl = deps.runFfmpeg ?? runFfmpeg;
   const fsImpl = deps.fs ?? fs;
@@ -59,24 +61,41 @@ export function generateProxy(
     const tmpPath = `${opts.proxyPath}.tmp`;
 
     if (fsImpl.existsSync(tmpPath)) {
-      try { fsImpl.unlinkSync(tmpPath); } catch { /* ignore */ }
+      try {
+        fsImpl.unlinkSync(tmpPath);
+      } catch {
+        /* ignore */
+      }
     }
 
     const args = [
-      '-progress', 'pipe:1', '-nostats',
-      '-i', opts.screenPath,
-      '-vf', 'scale=960:540',
-      '-c:v', 'libx264',
-      '-crf', '23',
-      '-preset', 'ultrafast',
-      '-threads', '2',
-      '-g', '15',
-      '-c:a', 'aac',
-      '-b:a', '64k',
-      '-movflags', '+faststart',
-      '-f', 'mp4',
+      '-progress',
+      'pipe:1',
+      '-nostats',
+      '-i',
+      opts.screenPath,
+      '-vf',
+      'scale=960:540',
+      '-c:v',
+      'libx264',
+      '-crf',
+      '23',
+      '-preset',
+      'ultrafast',
+      '-threads',
+      '2',
+      '-g',
+      '15',
+      '-c:a',
+      'aac',
+      '-b:a',
+      '64k',
+      '-movflags',
+      '+faststart',
+      '-f',
+      'mp4',
       '-y',
-      tmpPath,
+      tmpPath
     ];
 
     try {
@@ -85,7 +104,9 @@ export function generateProxy(
     } catch (err) {
       try {
         if (fsImpl.existsSync(tmpPath)) fsImpl.unlinkSync(tmpPath);
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
       throw err;
     }
   });

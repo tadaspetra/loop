@@ -22,11 +22,7 @@ export function parseTimeToSeconds(value: unknown): number | null {
   const hours = Number(parts[0]);
   const minutes = Number(parts[1]);
   const seconds = Number(parts[2]);
-  if (
-    !Number.isFinite(hours) ||
-    !Number.isFinite(minutes) ||
-    !Number.isFinite(seconds)
-  ) {
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes) || !Number.isFinite(seconds)) {
     return null;
   }
 
@@ -44,7 +40,7 @@ function parseSpeedField(value: unknown): number | null {
 }
 
 export function parseFfmpegProgress(
-  fields: FfmpegProgressFields | null | undefined,
+  fields: FfmpegProgressFields | null | undefined
 ): FfmpegProgress | null {
   if (!fields || typeof fields !== 'object') return null;
   const status = typeof fields.progress === 'string' ? fields.progress : null;
@@ -57,7 +53,7 @@ export function parseFfmpegProgress(
     fps: parseNumericField(fields.fps),
     speed: parseSpeedField(fields.speed),
     outTimeSec,
-    raw: { ...fields },
+    raw: { ...fields }
   };
 }
 
@@ -65,7 +61,7 @@ export function runFfmpeg({
   ffmpegPath,
   args,
   spawnImpl = spawn,
-  onProgress,
+  onProgress
 }: {
   ffmpegPath?: string;
   args?: string[];
@@ -74,7 +70,7 @@ export function runFfmpeg({
 } = {}): Promise<{ stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawnImpl(ffmpegPath as string, Array.isArray(args) ? args : [], {
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['ignore', 'pipe', 'pipe']
     });
 
     let stdoutBuffer = '';

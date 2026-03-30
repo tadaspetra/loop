@@ -4,7 +4,7 @@ export function computeSections(
   opts: {
     segments?: Array<{ start: number; end: number }>;
     paddingSeconds?: number;
-  } = {},
+  } = {}
 ): { sections: Section[]; trimmedDuration: number } {
   const segments = Array.isArray(opts.segments) ? opts.segments : [];
   const paddingSeconds = Number.isFinite(Number(opts.paddingSeconds))
@@ -18,12 +18,9 @@ export function computeSections(
   const padded = segments
     .map((segment) => ({
       start: Math.max(0, Number(segment.start) - paddingSeconds),
-      end: Number(segment.end) + paddingSeconds,
+      end: Number(segment.end) + paddingSeconds
     }))
-    .filter(
-      (segment) =>
-        Number.isFinite(segment.start) && Number.isFinite(segment.end),
-    )
+    .filter((segment) => Number.isFinite(segment.start) && Number.isFinite(segment.end))
     .filter((segment) => segment.end > segment.start)
     .sort((left, right) => left.start - right.start);
 
@@ -61,13 +58,13 @@ export function computeSections(
       label: `Section ${index + 1}`,
       transcript: '',
       takeId: null,
-      imagePath: null,
+      imagePath: null
     });
     timelineCursor += sectionDuration;
   }
 
   return {
     sections: remapped,
-    trimmedDuration: remapped.length > 0 ? remapped[remapped.length - 1].end : 0,
+    trimmedDuration: remapped.length > 0 ? remapped[remapped.length - 1].end : 0
   };
 }

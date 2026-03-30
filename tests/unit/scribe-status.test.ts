@@ -23,17 +23,21 @@ describe('scribe-status', () => {
   });
 
   test('combines explicit error details with the server error type', () => {
-    expect(getScribeFailureReason({
-      message_type: 'session_time_limit_exceeded',
-      error: 'Maximum session time has been reached'
-    })).toBe('session_time_limit_exceeded: Maximum session time has been reached');
+    expect(
+      getScribeFailureReason({
+        message_type: 'session_time_limit_exceeded',
+        error: 'Maximum session time has been reached'
+      })
+    ).toBe('session_time_limit_exceeded: Maximum session time has been reached');
   });
 
   test('uses generic error payloads as the failure reason', () => {
-    expect(getScribeStatusFromMessage({
-      message_type: 'error',
-      error: 'quota_exceeded'
-    })).toEqual({
+    expect(
+      getScribeStatusFromMessage({
+        message_type: 'error',
+        error: 'quota_exceeded'
+      })
+    ).toEqual({
       text: 'Transcription error: quota_exceeded',
       tone: 'error',
       failureReason: 'quota_exceeded'
@@ -41,9 +45,7 @@ describe('scribe-status', () => {
   });
 
   test('prefers the last known server failure when the socket closes', () => {
-    expect(
-      getScribeStatusFromCloseEvent({ code: 1006 }, 'insufficient_audio_activity')
-    ).toEqual({
+    expect(getScribeStatusFromCloseEvent({ code: 1006 }, 'insufficient_audio_activity')).toEqual({
       text: 'Transcription disconnected: insufficient_audio_activity',
       tone: 'warning',
       failureReason: 'insufficient_audio_activity'

@@ -3,7 +3,11 @@ name: text-to-speech
 description: Convert text to speech using ElevenLabs voice AI. Use when generating audio from text, creating voiceovers, building voice apps, or synthesizing speech in 70+ languages.
 license: MIT
 compatibility: Requires internet access and an ElevenLabs API key (ELEVENLABS_API_KEY).
-metadata: {"openclaw": {"requires": {"env": ["ELEVENLABS_API_KEY"]}, "primaryEnv": "ELEVENLABS_API_KEY"}}
+metadata:
+  {
+    'openclaw':
+      { 'requires': { 'env': ['ELEVENLABS_API_KEY'] }, 'primaryEnv': 'ELEVENLABS_API_KEY' }
+  }
 ---
 
 # ElevenLabs Text-to-Speech
@@ -35,15 +39,15 @@ with open("output.mp3", "wb") as f:
 ### JavaScript
 
 ```javascript
-import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
-import { createWriteStream } from "fs";
+import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
+import { createWriteStream } from 'fs';
 
 const client = new ElevenLabsClient();
-const audio = await client.textToSpeech.convert("JBFqnCBsd6RMkjVDRZzb", {
-  text: "Hello, welcome to ElevenLabs!",
-  modelId: "eleven_multilingual_v2",
+const audio = await client.textToSpeech.convert('JBFqnCBsd6RMkjVDRZzb', {
+  text: 'Hello, welcome to ElevenLabs!',
+  modelId: 'eleven_multilingual_v2'
 });
-audio.pipe(createWriteStream("output.mp3"));
+audio.pipe(createWriteStream('output.mp3'));
 ```
 
 ### cURL
@@ -56,20 +60,21 @@ curl -X POST "https://api.elevenlabs.io/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb" 
 
 ## Models
 
-| Model ID | Languages | Latency | Best For |
-|----------|-----------|---------|----------|
-| `eleven_v3` | 70+ | Standard | Highest quality, emotional range |
-| `eleven_multilingual_v2` | 29 | Standard | High quality, long-form content |
-| `eleven_flash_v2_5` | 32 | ~75ms | Ultra-low latency, real-time |
-| `eleven_flash_v2` | English | ~75ms | English-only, fastest |
-| `eleven_turbo_v2_5` | 32 | ~250-300ms | Balanced quality/speed |
-| `eleven_turbo_v2` | English | ~250-300ms | English-only, balanced |
+| Model ID                 | Languages | Latency    | Best For                         |
+| ------------------------ | --------- | ---------- | -------------------------------- |
+| `eleven_v3`              | 70+       | Standard   | Highest quality, emotional range |
+| `eleven_multilingual_v2` | 29        | Standard   | High quality, long-form content  |
+| `eleven_flash_v2_5`      | 32        | ~75ms      | Ultra-low latency, real-time     |
+| `eleven_flash_v2`        | English   | ~75ms      | English-only, fastest            |
+| `eleven_turbo_v2_5`      | 32        | ~250-300ms | Balanced quality/speed           |
+| `eleven_turbo_v2`        | English   | ~250-300ms | English-only, balanced           |
 
 ## Voice IDs
 
 Use pre-made voices or create custom voices in the dashboard.
 
 **Popular voices:**
+
 - `JBFqnCBsd6RMkjVDRZzb` - George (male, narrative)
 - `EXAVITQu4vr4xnSDxMaL` - Sarah (female, soft)
 - `onwK4e9ZLuTAKqWW03F9` - Daniel (male, authoritative)
@@ -157,21 +162,21 @@ audio2 = client.text_to_speech.convert(
 
 ## Output Formats
 
-| Format | Description |
-|--------|-------------|
+| Format          | Description                                                   |
+| --------------- | ------------------------------------------------------------- |
 | `mp3_44100_128` | MP3 44.1kHz 128kbps (default) - compressed, good for web/apps |
-| `mp3_44100_192` | MP3 44.1kHz 192kbps (Creator+) - higher quality compressed |
-| `mp3_44100_64` | MP3 44.1kHz 64kbps - lower quality, smaller files |
-| `mp3_22050_32` | MP3 22.05kHz 32kbps - smallest MP3 files |
-| `pcm_16000` | Raw PCM 16kHz - use for real-time processing |
-| `pcm_22050` | Raw PCM 22.05kHz |
-| `pcm_24000` | Raw PCM 24kHz - good balance for streaming |
-| `pcm_44100` | Raw PCM 44.1kHz (Pro+) - CD quality |
-| `pcm_48000` | Raw PCM 48kHz (Pro+) - highest quality |
-| `ulaw_8000` | μ-law 8kHz - standard for phone systems (Twilio, telephony) |
-| `alaw_8000` | A-law 8kHz - telephony (alternative to μ-law) |
-| `opus_48000_64` | Opus 48kHz 64kbps - efficient streaming codec |
-| `wav_44100` | WAV 44.1kHz - uncompressed with headers |
+| `mp3_44100_192` | MP3 44.1kHz 192kbps (Creator+) - higher quality compressed    |
+| `mp3_44100_64`  | MP3 44.1kHz 64kbps - lower quality, smaller files             |
+| `mp3_22050_32`  | MP3 22.05kHz 32kbps - smallest MP3 files                      |
+| `pcm_16000`     | Raw PCM 16kHz - use for real-time processing                  |
+| `pcm_22050`     | Raw PCM 22.05kHz                                              |
+| `pcm_24000`     | Raw PCM 24kHz - good balance for streaming                    |
+| `pcm_44100`     | Raw PCM 44.1kHz (Pro+) - CD quality                           |
+| `pcm_48000`     | Raw PCM 48kHz (Pro+) - highest quality                        |
+| `ulaw_8000`     | μ-law 8kHz - standard for phone systems (Twilio, telephony)   |
+| `alaw_8000`     | A-law 8kHz - telephony (alternative to μ-law)                 |
+| `opus_48000_64` | Opus 48kHz 64kbps - efficient streaming codec                 |
+| `wav_44100`     | WAV 44.1kHz - uncompressed with headers                       |
 
 ## Streaming
 
@@ -203,6 +208,7 @@ except Exception as e:
 ```
 
 Common errors:
+
 - **401**: Invalid API key
 - **422**: Invalid parameters (check voice_id, model_id)
 - **429**: Rate limit exceeded

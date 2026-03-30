@@ -13,15 +13,12 @@ import {
   type ExportAudioPreset,
   type ExportVideoPreset,
   type Keyframe,
-  type ScreenFitMode,
+  type ScreenFitMode
 } from '../../shared/domain/project';
 import type { RenderProgressUpdate } from '../../shared/electron-api';
 import { chooseRenderFps, probeVideoFpsWithFfmpeg } from './fps-service';
 import { runFfmpeg, type FfmpegProgress } from './ffmpeg-runner';
-import {
-  buildFilterComplex,
-  buildScreenFilter,
-} from './render-filter-service';
+import { buildFilterComplex, buildScreenFilter } from './render-filter-service';
 
 export interface RenderSectionInput {
   takeId: string | null;
@@ -82,7 +79,7 @@ const QUALITY_RENDER_CONFIG: RenderVideoConfig = {
   crf: '8',
   preset: 'slow',
   pixelFormat: 'yuv420p',
-  audioBitrate: '192k',
+  audioBitrate: '192k'
 };
 
 const FAST_RENDER_CONFIG: RenderVideoConfig = {
@@ -93,7 +90,7 @@ const FAST_RENDER_CONFIG: RenderVideoConfig = {
   crf: '24',
   preset: 'veryfast',
   pixelFormat: 'yuv420p',
-  audioBitrate: '128k',
+  audioBitrate: '128k'
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -107,15 +104,13 @@ function roundDownToEven(value: number): number {
 }
 
 function getRenderVideoConfig(exportVideoPreset: ExportVideoPreset): RenderVideoConfig {
-  return exportVideoPreset === 'fast'
-    ? FAST_RENDER_CONFIG
-    : QUALITY_RENDER_CONFIG;
+  return exportVideoPreset === 'fast' ? FAST_RENDER_CONFIG : QUALITY_RENDER_CONFIG;
 }
 
 export function deriveRenderCanvasSize(
   sourceWidth: number,
   sourceHeight: number,
-  exportVideoPreset: ExportVideoPreset = 'quality',
+  exportVideoPreset: ExportVideoPreset = 'quality'
 ) {
   const config = getRenderVideoConfig(exportVideoPreset);
   const normalizedWidth = Number(sourceWidth);
@@ -139,17 +134,15 @@ export function deriveRenderCanvasSize(
   const fitWidth = roundDownToEven((boundedHeight * 16) / 9);
   const candidates = [
     fitHeight <= boundedHeight ? { canvasW: boundedWidth, canvasH: fitHeight } : null,
-    fitWidth <= boundedWidth ? { canvasW: fitWidth, canvasH: boundedHeight } : null,
+    fitWidth <= boundedWidth ? { canvasW: fitWidth, canvasH: boundedHeight } : null
   ].filter((candidate): candidate is { canvasW: number; canvasH: number } => Boolean(candidate));
 
   const bestFit = candidates.reduce<{ canvasW: number; canvasH: number } | null>(
     (best, candidate) => {
       if (!best) return candidate;
-      return candidate.canvasW * candidate.canvasH > best.canvasW * best.canvasH
-        ? candidate
-        : best;
+      return candidate.canvasW * candidate.canvasH > best.canvasW * best.canvasH ? candidate : best;
     },
-    null,
+    null
   );
 
   if (!bestFit || bestFit.canvasW < config.minWidth || bestFit.canvasH < config.minHeight) {
@@ -166,12 +159,15 @@ export function normalizeSectionInput(rawSections: unknown): RenderSectionInput[
       if (!isRecord(rawSection)) return null;
       const sourceStart = Number(rawSection.sourceStart);
       const sourceEnd = Number(rawSection.sourceEnd);
-      if (!Number.isFinite(sourceStart) || !Number.isFinite(sourceEnd) || sourceEnd <= sourceStart) {
+      if (
+        !Number.isFinite(sourceStart) ||
+        !Number.isFinite(sourceEnd) ||
+        sourceEnd <= sourceStart
+      ) {
         return null;
       }
       return {
-        takeId:
-          typeof rawSection.takeId === 'string' ? rawSection.takeId : null,
+        takeId: typeof rawSection.takeId === 'string' ? rawSection.takeId : null,
         sourceStart,
         sourceEnd,
         backgroundZoom: normalizeBackgroundZoom(rawSection.backgroundZoom),
@@ -180,16 +176,13 @@ export function normalizeSectionInput(rawSections: unknown): RenderSectionInput[
         imagePath:
           typeof rawSection.imagePath === 'string' && rawSection.imagePath
             ? rawSection.imagePath
-            : null,
+            : null
       };
     })
     .filter((section): section is RenderSectionInput => Boolean(section));
 }
 
-export function assertFilePath(
-  filePath: string | null,
-  label: string,
-): asserts filePath is string {
+export function assertFilePath(filePath: string | null, label: string): asserts filePath is string {
   if (typeof filePath !== 'string' || !filePath.trim()) {
     throw new Error(`Missing ${label} path`);
   }
@@ -212,7 +205,7 @@ export function buildCameraTrimFilter(
   section: RenderSectionInput,
   targetFps: number,
   index: number,
-  cameraSyncOffsetMs: number,
+  cameraSyncOffsetMs: number
 ): string {
   const start = Number(section.sourceStart);
   const end = Number(section.sourceEnd);
@@ -236,7 +229,7 @@ export function buildCameraTrimFilter(
 function buildInputPlan(
   sections: RenderSectionInput[],
   takeMap: Map<string, { screenPath: string | null; cameraPath: string | null }>,
-  hasCamera: boolean,
+  hasCamera: boolean
 ) {
   const fpsProbePaths = new Set<string>();
   const sectionInputs: Array<{ screenIdx: number; cameraIdx: number; imageIdx: number }> = [];
@@ -287,14 +280,14 @@ function buildInputPlan(
   return {
     args,
     fpsProbePaths,
-    sectionInputs,
+    sectionInputs
   };
 }
 
 function buildOutputArgs(
   targetFps: number,
   outputPath: string,
-  exportVideoPreset: ExportVideoPreset,
+  exportVideoPreset: ExportVideoPreset
 ): string[] {
   const config = getRenderVideoConfig(exportVideoPreset);
   return [
@@ -317,27 +310,27 @@ function buildOutputArgs(
     '-b:a',
     config.audioBitrate,
     '-y',
-    outputPath,
+    outputPath
   ];
 }
 
 function getTotalDurationSec(sections: RenderSectionInput[]): number {
   return sections.reduce(
     (total, section) => total + Math.max(0, section.sourceEnd - section.sourceStart),
-    0,
+    0
   );
 }
 
 function assertOverlayFilterSize(filter: string): void {
   if (filter.length <= MAX_OVERLAY_FILTER_LENGTH) return;
   throw new Error(
-    'Render filter is too complex for ffmpeg. Reduce camera layout changes and try again.',
+    'Render filter is too complex for ffmpeg. Reduce camera layout changes and try again.'
   );
 }
 
 function buildRenderProgressUpdate(
   progress: FfmpegProgress | null,
-  totalDurationSec: number,
+  totalDurationSec: number
 ): RenderProgressUpdate | null {
   if (!progress || typeof progress !== 'object') return null;
 
@@ -356,7 +349,7 @@ function buildRenderProgressUpdate(
       outTimeSec: hasOutTime ? outTimeSec : totalDurationSec,
       durationSec: totalDurationSec,
       frame: progress.frame ?? null,
-      speed: progress.speed ?? null,
+      speed: progress.speed ?? null
     };
   }
 
@@ -364,19 +357,17 @@ function buildRenderProgressUpdate(
     phase: 'rendering',
     percent: clampedPercent,
     status:
-      clampedPercent === null
-        ? 'Rendering...'
-        : `Rendering ${Math.round(clampedPercent * 100)}%`,
+      clampedPercent === null ? 'Rendering...' : `Rendering ${Math.round(clampedPercent * 100)}%`,
     outTimeSec: hasOutTime ? outTimeSec : null,
     durationSec: totalDurationSec,
     frame: progress.frame ?? null,
-    speed: progress.speed ?? null,
+    speed: progress.speed ?? null
   };
 }
 
 export async function renderComposite(
   opts: RenderCompositeOptions = {},
-  deps: RenderCompositeDeps = {},
+  deps: RenderCompositeDeps = {}
 ): Promise<string> {
   const takes = Array.isArray(opts.takes) ? opts.takes : [];
   const sections = normalizeSectionInput(opts.sections);
@@ -387,7 +378,9 @@ export async function renderComposite(
   const exportVideoPreset = normalizeExportVideoPreset(opts.exportVideoPreset);
   const cameraSyncOffsetMs = normalizeCameraSyncOffsetMs(opts.cameraSyncOffsetMs);
   const sourceWidth = Number.isFinite(Number(opts.sourceWidth)) ? Number(opts.sourceWidth) : 1920;
-  const sourceHeight = Number.isFinite(Number(opts.sourceHeight)) ? Number(opts.sourceHeight) : 1080;
+  const sourceHeight = Number.isFinite(Number(opts.sourceHeight))
+    ? Number(opts.sourceHeight)
+    : 1080;
   const outputFolder = typeof opts.outputFolder === 'string' ? opts.outputFolder : '';
 
   const probeFps = deps.probeVideoFpsWithFfmpeg || probeVideoFpsWithFfmpeg;
@@ -404,51 +397,41 @@ export async function renderComposite(
   if (!ffmpegPath) throw new Error('ffmpeg-static is unavailable on this platform');
 
   const outputPath = path.join(outputFolder, `recording-${now()}-edited.mp4`);
-  const { canvasW, canvasH } = deriveRenderCanvasSize(
-    sourceWidth,
-    sourceHeight,
-    exportVideoPreset,
-  );
+  const { canvasW, canvasH } = deriveRenderCanvasSize(sourceWidth, sourceHeight, exportVideoPreset);
 
   const takeMap = new Map<string, { screenPath: string | null; cameraPath: string | null }>();
   for (const take of takes) {
     if (!take || typeof take.id !== 'string' || !take.id) continue;
     takeMap.set(take.id, {
       screenPath: take.screenPath,
-      cameraPath: take.cameraPath,
+      cameraPath: take.cameraPath
     });
   }
 
-  const hasCamera = keyframes.some(
-    (keyframe) => keyframe.pipVisible || keyframe.cameraFullscreen,
-  );
-  const { args, fpsProbePaths, sectionInputs } = buildInputPlan(
-    sections,
-    takeMap,
-    hasCamera,
-  );
+  const hasCamera = keyframes.some((keyframe) => keyframe.pipVisible || keyframe.cameraFullscreen);
+  const { args, fpsProbePaths, sectionInputs } = buildInputPlan(sections, takeMap, hasCamera);
   const totalDurationSec = getTotalDurationSec(sections);
 
   const fpsProbeResults = await Promise.all(
     Array.from(fpsProbePaths).map(async (filePath) => ({
       filePath,
-      fps: await probeFps(ffmpegPath, filePath),
-    })),
+      fps: await probeFps(ffmpegPath, filePath)
+    }))
   );
 
   const targetFps = chooseRenderFps(
     fpsProbeResults.map((result) => result.fps),
-    hasCamera,
+    hasCamera
   );
 
   console.log(
     '[render-composite] FPS selection:',
     fpsProbeResults.map((result) => ({
       file: path.basename(result.filePath),
-      fps: result.fps ? Number(result.fps.toFixed(3)) : null,
+      fps: result.fps ? Number(result.fps.toFixed(3)) : null
     })),
     'targetFps=',
-    targetFps,
+    targetFps
   );
 
   const hasImageSections = sections.some((s) => s.imagePath);
@@ -460,35 +443,34 @@ export async function renderComposite(
     const end = section.sourceEnd.toFixed(3);
 
     if (imageIdx >= 0) {
-      const imageScale = screenFitMode === 'fill'
-        ? `scale=${canvasW}:${canvasH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH}`
-        : `scale=${canvasW}:${canvasH}:flags=lanczos:force_original_aspect_ratio=decrease,pad=${canvasW}:${canvasH}:(ow-iw)/2:(oh-ih)/2:black`;
+      const imageScale =
+        screenFitMode === 'fill'
+          ? `scale=${canvasW}:${canvasH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH}`
+          : `scale=${canvasW}:${canvasH}:flags=lanczos:force_original_aspect_ratio=decrease,pad=${canvasW}:${canvasH}:(ow-iw)/2:(oh-ih)/2:black`;
       filterParts.push(
-        `[${imageIdx}:v]${imageScale},format=yuv420p,setpts=PTS-STARTPTS,setsar=1[sv${index}]`,
+        `[${imageIdx}:v]${imageScale},format=yuv420p,setpts=PTS-STARTPTS,setsar=1[sv${index}]`
       );
     } else if (hasImageSections) {
       // Pre-scale video to canvas size so concat inputs match image sections
       filterParts.push(
-        `[${screenIdx}:v]trim=start=${start}:end=${end},setpts=PTS-STARTPTS,scale=${canvasW}:${canvasH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH},setsar=1[sv${index}]`,
+        `[${screenIdx}:v]trim=start=${start}:end=${end},setpts=PTS-STARTPTS,scale=${canvasW}:${canvasH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH},setsar=1[sv${index}]`
       );
     } else {
       filterParts.push(
-        `[${screenIdx}:v]trim=start=${start}:end=${end},setpts=PTS-STARTPTS,setsar=1[sv${index}]`,
+        `[${screenIdx}:v]trim=start=${start}:end=${end},setpts=PTS-STARTPTS,setsar=1[sv${index}]`
       );
     }
     filterParts.push(
-      `[${screenIdx}:a]atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS[sa${index}]`,
+      `[${screenIdx}:a]atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS[sa${index}]`
     );
   }
 
   const screenLabels = sections.map((_, index) => `[sv${index}][sa${index}]`).join('');
-  filterParts.push(
-    `${screenLabels}concat=n=${sections.length}:v=1:a=1[screen_raw][audio_out]`,
-  );
+  filterParts.push(`${screenLabels}concat=n=${sections.length}:v=1:a=1[screen_raw][audio_out]`);
   const exportAudioLabel = buildExportAudioLabel(exportAudioPreset);
   if (exportAudioLabel === 'audio_final') {
     filterParts.push(
-      '[audio_out]acompressor=threshold=0.125:ratio=3:attack=20:release=250:makeup=1.5[audio_final]',
+      '[audio_out]acompressor=threshold=0.125:ratio=3:attack=20:release=250:makeup=1.5[audio_final]'
     );
   }
 
@@ -499,13 +481,7 @@ export async function renderComposite(
       const duration = (section.sourceEnd - section.sourceStart).toFixed(3);
       if (cameraIdx >= 0) {
         filterParts.push(
-          buildCameraTrimFilter(
-            cameraIdx,
-            section,
-            targetFps,
-            index,
-            cameraSyncOffsetMs,
-          ),
+          buildCameraTrimFilter(cameraIdx, section, targetFps, index, cameraSyncOffsetMs)
         );
       } else {
         filterParts.push(`color=black:s=${canvasW}x${canvasH}:d=${duration}[cv${index}]`);
@@ -522,7 +498,7 @@ export async function renderComposite(
       sourceHeight,
       canvasW,
       canvasH,
-      targetFps,
+      targetFps
     );
     assertOverlayFilterSize(overlayFilter);
     const adaptedOverlay = overlayFilter
@@ -538,7 +514,7 @@ export async function renderComposite(
       canvasW,
       canvasH,
       '[out]',
-      targetFps,
+      targetFps
     ).replace(/\[0:v\]/g, '[screen_raw]');
     filterParts.push(screenOnlyFilter);
   }
@@ -550,7 +526,7 @@ export async function renderComposite(
     '-map',
     '[out_cfr]',
     '-map',
-    `[${exportAudioLabel}]`,
+    `[${exportAudioLabel}]`
   );
   args.push(...buildOutputArgs(targetFps, outputPath, exportVideoPreset));
 
@@ -561,7 +537,7 @@ export async function renderComposite(
       phase: 'starting',
       percent: 0,
       status: 'Preparing render...',
-      durationSec: totalDurationSec,
+      durationSec: totalDurationSec
     });
   }
 
@@ -573,7 +549,7 @@ export async function renderComposite(
         if (!onProgress) return;
         const update = buildRenderProgressUpdate(progress, totalDurationSec);
         if (update) onProgress(update);
-      },
+      }
     });
     return outputPath;
   } catch (error) {
