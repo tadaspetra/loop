@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
 import {
+  collectRecorderResults,
   createCameraRecordingStream,
   finalizeRecordingChunks,
   getRecorderOptions,
@@ -126,5 +127,52 @@ describe('recorder-utils', () => {
 
     expect(result.path).toBeNull();
     expect(result.error).toMatch(/camera recording could not be saved/i);
+  });
+
+  test('collectRecorderResults surfaces screen results before slower recorder timeouts', async () => {
+    const observed: string[] = [];
+    let resolveScreenSeen!: () => void;
+    const screenSeen = new Promise<void>((resolve) => {
+      resolveScreenSeen = resolve;
+    });
+
+    const pending = collectRecorderResults(
+      [
+        {
+          suffix: 'screen',
+          blobPromise: Promise.resolve({
+            blob: new Blob(['screen-data']),
+            error: null,
+            path: '/tmp/screen.webm',
+            suffix: 'screen'
+          })
+        },
+        {
+          suffix: 'camera',
+          blobPromise: new Promise(() => {})
+        }
+      ],
+      20,
+      {
+        onEachResult: async (result) => {
+          observed.push(result.suffix);
+          if (result.suffix === 'screen') resolveScreenSeen();
+        }
+      }
+    );
+
+    let settled = false;
+    pending.finally(() => {
+      settled = true;
+    });
+
+    await screenSeen;
+    expect(observed).toContain('screen');
+    expect(settled).toBe(false);
+
+    const result = await pending;
+    expect(result.results.screen?.path).toBe('/tmp/screen.webm');
+    expect(result.results.camera?.error).toMatch(/did not finish saving in time/i);
+    expect(result.finalizeErrors).toContain(result.results.camera?.error);
   });
 });

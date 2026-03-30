@@ -23,6 +23,16 @@ export interface FinalizedRecordingResult {
   suffix: string;
 }
 
+export interface RecorderBlobPromiseLike {
+  blobPromise: Promise<FinalizedRecordingResult>;
+  suffix: string;
+}
+
+export interface CollectedRecorderResults {
+  finalizeErrors: string[];
+  results: Record<string, FinalizedRecordingResult>;
+}
+
 export function getSupportedRecorderMimeType(
   mediaRecorderCtor: MediaRecorderCtorLike | undefined = globalThis.MediaRecorder
 ): string {
@@ -137,4 +147,54 @@ export async function finalizeRecordingChunks({
       suffix
     };
   }
+}
+
+export async function collectRecorderResults(
+  recorders: RecorderBlobPromiseLike[],
+  finalizeTimeoutMs: number,
+  {
+    BlobCtor = globalThis.Blob,
+    mimeType = 'video/webm',
+    onEachResult
+  }: {
+    BlobCtor?: BlobCtorLike;
+    mimeType?: string;
+    onEachResult?: (
+      result: FinalizedRecordingResult,
+      aggregate: CollectedRecorderResults
+    ) => void | Promise<void>;
+  } = {}
+): Promise<CollectedRecorderResults> {
+  const results: Record<string, FinalizedRecordingResult> = {};
+  const finalizeErrors: string[] = [];
+
+  await Promise.all(
+    recorders.map(async (recorder) => {
+      const result = (await Promise.race([
+        recorder.blobPromise,
+        new Promise<FinalizedRecordingResult>((resolve) => {
+          setTimeout(() => {
+            resolve({
+              blob: new BlobCtor([], { type: mimeType }),
+              error: `${recorder.suffix} recording did not finish saving in time`,
+              path: null,
+              suffix: recorder.suffix
+            });
+          }, finalizeTimeoutMs);
+        })
+      ])) as FinalizedRecordingResult;
+
+      results[recorder.suffix] = result;
+      if (result.error) finalizeErrors.push(result.error);
+
+      if (onEachResult) {
+        await onEachResult(result, {
+          finalizeErrors: [...finalizeErrors],
+          results: { ...results }
+        });
+      }
+    })
+  );
+
+  return { finalizeErrors, results };
 }

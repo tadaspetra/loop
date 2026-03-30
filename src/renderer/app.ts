@@ -31,6 +31,7 @@ import {
 } from './features/timeline/camera-sync';
 import { getTakePlaybackSources } from './features/timeline/take-playback-sources';
 import {
+  collectRecorderResults,
   finalizeRecordingChunks,
   getRecorderFinalizeTimeoutMs,
   getRecorderOptions,
@@ -2895,6 +2896,11 @@ async function stopRecording() {
   }
 
   const recorderFinalizeTimeoutMs = getRecorderFinalizeTimeoutMs();
+  const takeId = `take-${Date.now()}`;
+  const takeCreatedAt = new Date().toISOString();
+  const defaultSectionsForRecovery = buildDefaultSectionsForDuration(recordedDuration);
+  const getActiveSegments = () => speechSegments.filter((s) => !s.deleted);
+  let recoverySnapshotSaved = false;
   recorders.forEach((r) => {
     if (r.state === 'inactive') return;
     if (typeof r.requestData === 'function') {
@@ -2907,26 +2913,27 @@ async function stopRecording() {
     r.stop();
   });
 
-  // Await each recorder independently so one finalize failure cannot wedge the whole stop flow.
-  const results = {};
-  const finalizeErrors = [];
-  for (const r of recorders) {
-    const result = await Promise.race([
-      r.blobPromise,
-      new Promise((resolve) => {
-        setTimeout(() => {
-          resolve({
-            blob: new Blob([], { type: 'video/webm' }),
-            error: `${r.suffix} recording did not finish saving in time`,
-            path: null,
-            suffix: r.suffix
-          });
-        }, recorderFinalizeTimeoutMs);
-      })
-    ]);
-    results[r.suffix] = result;
-    if (result?.error) finalizeErrors.push(result.error);
-  }
+  // Persist a recovery snapshot as soon as the screen file lands so a slower
+  // secondary recorder cannot strand the primary footage.
+  const { results, finalizeErrors } = await collectRecorderResults(
+    recorders,
+    recorderFinalizeTimeoutMs,
+    {
+      onEachResult: async (result, aggregate) => {
+        if (result.suffix !== 'screen' || !result.path || recoverySnapshotSaved) return;
+        await saveRecoveryTake({
+          id: takeId,
+          createdAt: takeCreatedAt,
+          screenPath: result.path,
+          cameraPath: aggregate.results.camera?.path || null,
+          recordedDuration,
+          sections: defaultSectionsForRecovery,
+          trimSegments: getActiveSegments()
+        });
+        recoverySnapshotSaved = true;
+      }
+    }
+  );
 
   recorders = [];
   recording = false;
@@ -2948,14 +2955,12 @@ async function stopRecording() {
     if (finalizeErrors.length > 0) {
       console.warn('Recording finalized with partial failures:', finalizeErrors);
     }
-    const takeId = `take-${Date.now()}`;
-    const takeCreatedAt = new Date().toISOString();
     const screenPath = results.screen.path;
     const cameraPath = results.camera?.path || null;
-    let sectionsForTimeline = buildDefaultSectionsForDuration(recordedDuration);
+    let sectionsForTimeline = defaultSectionsForRecovery;
 
     // Compute sections from speech segments (instant, no FFmpeg)
-    const activeSegments = speechSegments.filter((s) => !s.deleted);
+    const activeSegments = getActiveSegments();
     const fallbackSections = buildRemappedSectionsFromSegments(activeSegments);
     await saveRecoveryTake({
       id: takeId,
