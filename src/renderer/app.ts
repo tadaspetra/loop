@@ -29,9 +29,7 @@ import {
   normalizeCameraSyncOffsetMs,
   resolveCameraPlaybackTargetTime
 } from './features/timeline/camera-sync';
-import { getTakePlaybackSources } from './features/timeline/take-playback-sources';
 import {
-  collectRecorderResults,
   finalizeRecordingChunks,
   getRecorderFinalizeTimeoutMs,
   getRecorderOptions,
@@ -234,7 +232,7 @@ if (typeof window.electronAPI.onRenderProgress === 'function') {
 
 if (typeof window.electronAPI.onProxyProgress === 'function') {
   window.electronAPI.onProxyProgress((payload) => {
-    if (!payload || !payload.takeId || !payload.kind) return;
+    if (!payload || !payload.takeId) return;
     if (payload.status === 'progress') {
       const current = proxyStatus.get(payload.takeId);
       if (current && current.status === 'pending') {
@@ -245,34 +243,30 @@ if (typeof window.electronAPI.onProxyProgress === 'function') {
       proxyStatus.set(payload.takeId, { status: 'done', percent: 1 });
       const take = activeProject?.takes?.find((t) => t.id === payload.takeId);
       if (take) {
-        if (payload.kind === 'camera') take.cameraProxyPath = payload.proxyPath;
-        else take.proxyPath = payload.proxyPath;
+        take.proxyPath = payload.proxyPath;
         persistProjectNow().catch((err) =>
           console.warn('[Proxy] Failed to persist proxyPath:', err)
         );
       }
-      // Hot-swap the cached playback element to use the proxy
+      // Hot-swap the cached video element to use the proxy
       const cached = takeVideoPool.get(payload.takeId);
       if (cached) {
-        const media = payload.kind === 'camera' ? cached.camera : cached.screen;
-        if (media) {
-          const wasPlaying = !media.paused;
-          const currentTime = media.currentTime;
-          const rate = media.playbackRate;
-          media.src = pathToFileUrl(payload.proxyPath);
-          media.addEventListener(
+        const wasPlaying = !cached.screen.paused;
+        const currentTime = cached.screen.currentTime;
+        const rate = cached.screen.playbackRate;
+        cached.screen.src = pathToFileUrl(payload.proxyPath);
+        cached.screen.addEventListener(
           'loadedmetadata',
           () => {
-            media.currentTime = currentTime;
+            cached.screen.currentTime = currentTime;
             if (wasPlaying) {
-              media.playbackRate = rate;
-              media.play().catch(() => {});
+              cached.screen.playbackRate = rate;
+              cached.screen.play().catch(() => {});
               if (!hasPendingEditorDraw()) scheduleEditorDrawLoop();
             }
           },
           { once: true }
-          );
-        }
+        );
       }
       renderSectionMarkers();
     } else if (payload.status === 'error') {
@@ -410,7 +404,7 @@ let draggingBackground = false;
 let backgroundDragMoved = false;
 let backgroundDragState = null;
 let takeAudioBufferCache = new Map(); // takeId -> AudioBuffer
-let takeVideoPool = new Map(); // takeId -> { screen, camera, audio }
+let takeVideoPool = new Map(); // takeId -> { screen: HTMLVideoElement, camera: HTMLVideoElement|null }
 const proxyStatus = new Map(); // takeId -> { status: 'pending'|'done'|'error', percent: number }
 let activeTakeId = null;
 let activePlaybackSection = null;
@@ -451,27 +445,19 @@ function getOrCreateTakeVideos(takeId) {
   if (takeVideoPool.has(takeId)) return takeVideoPool.get(takeId);
   const take = activeProject?.takes?.find((t) => t.id === takeId);
   if (!take) return null;
-  const playbackSources = getTakePlaybackSources(take);
   const screen = document.createElement('video');
   screen.playsInline = true;
-  screen.muted = !!playbackSources.audioPath;
+  screen.muted = true;
   screen.preload = 'auto';
-  screen.src = pathToFileUrl(playbackSources.screenVideoPath);
+  screen.src = pathToFileUrl(take.proxyPath || take.screenPath);
   let camera = null;
-  if (playbackSources.cameraVideoPath) {
+  if (take.cameraPath) {
     camera = document.createElement('video');
     camera.playsInline = true;
-    camera.muted = true;
     camera.preload = 'auto';
-    camera.src = pathToFileUrl(playbackSources.cameraVideoPath);
+    camera.src = pathToFileUrl(take.cameraPath);
   }
-  let audio = null;
-  if (playbackSources.audioPath) {
-    audio = document.createElement('audio');
-    audio.preload = 'auto';
-    audio.src = pathToFileUrl(playbackSources.audioPath);
-  }
-  const entry = { screen, camera, audio };
+  const entry = { screen, camera };
   takeVideoPool.set(takeId, entry);
   return entry;
 }
@@ -483,10 +469,6 @@ function cleanupVideoPool() {
     if (videos.camera) {
       videos.camera.pause();
       videos.camera.src = '';
-    }
-    if (videos.audio) {
-      videos.audio.pause();
-      videos.audio.src = '';
     }
   }
   takeVideoPool.clear();
@@ -1022,21 +1004,7 @@ async function activateProject(projectPath, project, preferredView = 'recording'
         window.electronAPI
           .generateProxy({
             takeId: take.id,
-            sourcePath: take.screenPath,
-            kind: 'screen',
-            projectFolder: projectPath,
-            durationSec: take.duration || 0
-          })
-          .catch((err) => console.warn('[Proxy] Failed to start proxy generation:', err));
-      }
-      if (!take.cameraProxyPath && take.cameraPath) {
-        proxyStatus.set(take.id, { status: 'pending', percent: 0 });
-        needsMarkerUpdate = true;
-        window.electronAPI
-          .generateProxy({
-            takeId: take.id,
-            sourcePath: take.cameraPath,
-            kind: 'camera',
+            screenPath: take.screenPath,
             projectFolder: projectPath,
             durationSec: take.duration || 0
           })
@@ -1370,10 +1338,9 @@ async function extractWaveformPeaks(numBuckets = 800) {
       if (!section.takeId || takeAudioBufferCache.has(section.takeId)) continue;
       const take = activeProject?.takes?.find((t) => t.id === section.takeId);
       if (!take) continue;
-      const playbackSources = getTakePlaybackSources(take);
-      if (!playbackSources.audioPath) continue;
+      const audioSource = take.cameraPath || take.screenPath;
       try {
-        const url = pathToFileUrl(playbackSources.audioPath);
+        const url = pathToFileUrl(audioSource);
         const response = await fetch(url);
         const arrayBuffer = await response.arrayBuffer();
         const offlineCtx = new OfflineAudioContext(1, 1, 44100);
@@ -2153,6 +2120,12 @@ function createRecorder(stream, suffix) {
   return recorder;
 }
 
+function addAudioToStream(stream) {
+  if (!audioStream) return stream;
+  const combined = new MediaStream([...stream.getVideoTracks(), ...audioStream.getAudioTracks()]);
+  return combined;
+}
+
 function mergeInt16Arrays(arrays) {
   let totalLength = 0;
   for (const arr of arrays) totalLength += arr.length;
@@ -2202,7 +2175,7 @@ async function startRecording() {
   scribeLastFailureReason = null;
   scribeManualClose = false;
 
-  // Individual screen (video only)
+  // Individual screen (with audio)
   // Route through a canvas at constant 30fps to prevent keyframe flicker
   // from variable frame rate desktop capture input
   if (screenStream) {
@@ -2216,12 +2189,13 @@ async function startRecording() {
     screenRecInterval = setInterval(() => {
       recCtx.drawImage(screenVideo, 0, 0, recCanvas.width, recCanvas.height);
     }, 1000 / 30);
-    recorders.push(createRecorder(recCanvas.captureStream(30), 'screen'));
+    const screenOnly = addAudioToStream(recCanvas.captureStream(30));
+    recorders.push(createRecorder(screenOnly, 'screen'));
   }
 
-  // Individual camera with mic audio for PiP/editor/export playback
+  // Individual camera (video only; export uses screen audio)
   if (cameraStream) {
-    const cameraOnly = createCameraRecordingStream(cameraStream, audioStream);
+    const cameraOnly = createCameraRecordingStream(cameraStream);
     if (cameraOnly) {
       const [cameraTrack] = cameraOnly.getVideoTracks();
       console.log(
@@ -2498,8 +2472,6 @@ async function recoverPendingTake(recoveryTake) {
         duration: recoveryTake.recordedDuration,
         screenPath,
         cameraPath,
-        proxyPath: null,
-        cameraProxyPath: null,
         sections: recoverySections
       });
     }
@@ -2522,32 +2494,6 @@ async function recoverPendingTake(recoveryTake) {
         take.sections = appendResult.takeSections;
       }
       await persistProjectNow();
-      if (projectSession.projectPath && screenPath) {
-        proxyStatus.set(takeId, { status: 'pending', percent: 0 });
-        renderSectionMarkers();
-        window.electronAPI
-          .generateProxy({
-            takeId,
-            sourcePath: screenPath,
-            kind: 'screen',
-            projectFolder: projectSession.projectPath,
-            durationSec: recoveryTake.recordedDuration
-          })
-          .catch((err) => console.warn('[Proxy] Failed to start proxy generation:', err));
-      }
-      if (projectSession.projectPath && cameraPath) {
-        proxyStatus.set(takeId, { status: 'pending', percent: 0 });
-        renderSectionMarkers();
-        window.electronAPI
-          .generateProxy({
-            takeId,
-            sourcePath: cameraPath,
-            kind: 'camera',
-            projectFolder: projectSession.projectPath,
-            durationSec: recoveryTake.recordedDuration
-          })
-          .catch((err) => console.warn('[Proxy] Failed to start proxy generation:', err));
-      }
     }
 
     await completeRecoveryTake(projectSession.projectPath);
@@ -2896,11 +2842,6 @@ async function stopRecording() {
   }
 
   const recorderFinalizeTimeoutMs = getRecorderFinalizeTimeoutMs();
-  const takeId = `take-${Date.now()}`;
-  const takeCreatedAt = new Date().toISOString();
-  const defaultSectionsForRecovery = buildDefaultSectionsForDuration(recordedDuration);
-  const getActiveSegments = () => speechSegments.filter((s) => !s.deleted);
-  let recoverySnapshotSaved = false;
   recorders.forEach((r) => {
     if (r.state === 'inactive') return;
     if (typeof r.requestData === 'function') {
@@ -2913,27 +2854,26 @@ async function stopRecording() {
     r.stop();
   });
 
-  // Persist a recovery snapshot as soon as the screen file lands so a slower
-  // secondary recorder cannot strand the primary footage.
-  const { results, finalizeErrors } = await collectRecorderResults(
-    recorders,
-    recorderFinalizeTimeoutMs,
-    {
-      onEachResult: async (result, aggregate) => {
-        if (result.suffix !== 'screen' || !result.path || recoverySnapshotSaved) return;
-        await saveRecoveryTake({
-          id: takeId,
-          createdAt: takeCreatedAt,
-          screenPath: result.path,
-          cameraPath: aggregate.results.camera?.path || null,
-          recordedDuration,
-          sections: defaultSectionsForRecovery,
-          trimSegments: getActiveSegments()
-        });
-        recoverySnapshotSaved = true;
-      }
-    }
-  );
+  // Await each recorder independently so one finalize failure cannot wedge the whole stop flow.
+  const results = {};
+  const finalizeErrors = [];
+  for (const r of recorders) {
+    const result = await Promise.race([
+      r.blobPromise,
+      new Promise((resolve) => {
+        setTimeout(() => {
+          resolve({
+            blob: new Blob([], { type: 'video/webm' }),
+            error: `${r.suffix} recording did not finish saving in time`,
+            path: null,
+            suffix: r.suffix
+          });
+        }, recorderFinalizeTimeoutMs);
+      })
+    ]);
+    results[r.suffix] = result;
+    if (result?.error) finalizeErrors.push(result.error);
+  }
 
   recorders = [];
   recording = false;
@@ -2955,12 +2895,14 @@ async function stopRecording() {
     if (finalizeErrors.length > 0) {
       console.warn('Recording finalized with partial failures:', finalizeErrors);
     }
+    const takeId = `take-${Date.now()}`;
+    const takeCreatedAt = new Date().toISOString();
     const screenPath = results.screen.path;
     const cameraPath = results.camera?.path || null;
-    let sectionsForTimeline = defaultSectionsForRecovery;
+    let sectionsForTimeline = buildDefaultSectionsForDuration(recordedDuration);
 
     // Compute sections from speech segments (instant, no FFmpeg)
-    const activeSegments = getActiveSegments();
+    const activeSegments = speechSegments.filter((s) => !s.deleted);
     const fallbackSections = buildRemappedSectionsFromSegments(activeSegments);
     await saveRecoveryTake({
       id: takeId,
@@ -3004,7 +2946,6 @@ async function stopRecording() {
         screenPath,
         cameraPath,
         proxyPath: null,
-        cameraProxyPath: null,
         sections: sectionsForTimeline
       });
     }
@@ -3034,21 +2975,7 @@ async function stopRecording() {
           window.electronAPI
             .generateProxy({
               takeId,
-              sourcePath: screenPath,
-              kind: 'screen',
-              projectFolder: activeProjectPath,
-              durationSec: recordedDuration
-            })
-            .catch((err) => console.warn('[Proxy] Failed to start proxy generation:', err));
-        }
-        if (activeProjectPath && cameraPath) {
-          proxyStatus.set(takeId, { status: 'pending', percent: 0 });
-          renderSectionMarkers();
-          window.electronAPI
-            .generateProxy({
-              takeId,
-              sourcePath: cameraPath,
-              kind: 'camera',
+              screenPath,
               projectFolder: activeProjectPath,
               durationSec: recordedDuration
             })
@@ -3166,12 +3093,6 @@ function enterEditor(rawSections, opts = {}) {
       videos.screen.currentTime = firstSection.sourceStart;
       if (videos.camera) {
         videos.camera.currentTime = resolveCameraPlaybackTargetTime(
-          firstSection.sourceStart,
-          editorState.cameraSyncOffsetMs
-        );
-      }
-      if (videos.audio) {
-        videos.audio.currentTime = resolveCameraPlaybackTargetTime(
           firstSection.sourceStart,
           editorState.cameraSyncOffsetMs
         );
@@ -3383,17 +3304,12 @@ function switchPlaybackSection(nextSection, opts = {}) {
         previousVideos.camera.pause();
         previousVideos.camera.playbackRate = 1;
       }
-      if (previousVideos.audio) {
-        previousVideos.audio.pause();
-        previousVideos.audio.playbackRate = 1;
-      }
     }
   }
 
   if (seekPlan.screenNeedsSeek) nextVideos.screen.currentTime = seekPlan.targetSourceTime;
   if (nextVideos.camera && seekPlan.cameraNeedsSeek)
     nextVideos.camera.currentTime = seekPlan.targetCameraTime;
-  if (nextVideos.audio && seekPlan.cameraNeedsSeek) nextVideos.audio.currentTime = seekPlan.targetCameraTime;
 
   activeTakeId = nextSection.takeId;
   activePlaybackSection = nextSection;
@@ -3412,13 +3328,9 @@ function switchPlaybackSection(nextSection, opts = {}) {
     const speed = editorState.playbackSpeed || 1;
     nextVideos.screen.playbackRate = speed;
     if (nextVideos.screen.paused) nextVideos.screen.play().catch(() => {});
-    if (editorState.hasCamera && nextVideos.camera && nextVideos.camera.paused) {
+    if (nextVideos.camera && nextVideos.camera.paused) {
       nextVideos.camera.playbackRate = speed;
       nextVideos.camera.play().catch(() => {});
-    }
-    if (nextVideos.audio && nextVideos.audio.paused) {
-      nextVideos.audio.playbackRate = speed;
-      nextVideos.audio.play().catch(() => {});
     }
   }
 
@@ -3438,11 +3350,10 @@ function syncCameraPlayback(videos) {
   const now = performance.now();
 
   if (absDrift >= CAMERA_DRIFT_HARD_THRESHOLD && now >= cameraResyncCooldownUntil) {
-    const targetTime = resolveCameraPlaybackTargetTime(
+    videos.camera.currentTime = resolveCameraPlaybackTargetTime(
       videos.screen.currentTime,
       editorState.cameraSyncOffsetMs
     );
-    videos.camera.currentTime = targetTime;
     videos.camera.playbackRate = baseRate;
     cameraResyncCooldownUntil = now + CAMERA_RESYNC_COOLDOWN_MS;
     console.debug('[Editor] Camera hard resync', {
@@ -3483,13 +3394,9 @@ function editorPlay() {
     if (videos) {
       videos.screen.playbackRate = speed;
       videos.screen.play().catch(() => {});
-      if (editorState.hasCamera && videos.camera) {
+      if (videos.camera) {
         videos.camera.playbackRate = speed;
         videos.camera.play().catch(() => {});
-      }
-      if (videos.audio) {
-        videos.audio.playbackRate = speed;
-        videos.audio.play().catch(() => {});
       }
     }
   }
@@ -3505,10 +3412,6 @@ function editorPause() {
     if (videos.camera) {
       videos.camera.pause();
       videos.camera.playbackRate = 1;
-    }
-    if (videos.audio) {
-      videos.audio.pause();
-      videos.audio.playbackRate = 1;
     }
   }
   editorPlayBtn.textContent = 'Play';
@@ -3529,11 +3432,8 @@ function cyclePlaybackSpeed() {
     const videos = getOrCreateTakeVideos(activeTakeId);
     if (videos) {
       videos.screen.playbackRate = editorState.playbackSpeed;
-      if (editorState.hasCamera && videos.camera) {
+      if (videos.camera) {
         videos.camera.playbackRate = editorState.playbackSpeed;
-      }
-      if (videos.audio) {
-        videos.audio.playbackRate = editorState.playbackSpeed;
       }
     }
   }

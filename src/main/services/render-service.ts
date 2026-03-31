@@ -214,7 +214,7 @@ export function buildCameraTrimFilter(
   const label = `[cv${index}]`;
 
   if (!Number.isFinite(offsetSec) || Math.abs(offsetSec) < 0.0005) {
-    return `[${cameraIdx}:v]trim=start=${start.toFixed(3)}:end=${end.toFixed(3)},setpts=PTS-STARTPTS${label}`;
+    return `[${cameraIdx}:v]trim=start=${start.toFixed(3)}:end=${end.toFixed(3)},setpts=PTS-STARTPTS,fps=fps=${targetFps}:round=near,trim=duration=${duration.toFixed(3)},setpts=PTS-STARTPTS${label}`;
   }
 
   const sampleStart = Math.max(0, start + offsetSec);
@@ -223,22 +223,45 @@ export function buildCameraTrimFilter(
   const startPad = Math.max(0, -offsetSec);
   const stopPad = Math.max(0, offsetSec);
 
-  return `[${cameraIdx}:v]trim=start=${sampleStart.toFixed(3)}:end=${sampleEnd.toFixed(3)},setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=${startPad.toFixed(3)}:stop_mode=clone:stop_duration=${stopPad.toFixed(3)},trim=duration=${duration.toFixed(3)},setpts=PTS-STARTPTS${label}`;
+  return `[${cameraIdx}:v]trim=start=${sampleStart.toFixed(3)}:end=${sampleEnd.toFixed(3)},setpts=PTS-STARTPTS,fps=fps=${targetFps}:round=near,tpad=start_mode=clone:start_duration=${startPad.toFixed(3)}:stop_mode=clone:stop_duration=${stopPad.toFixed(3)},trim=duration=${duration.toFixed(3)},setpts=PTS-STARTPTS${label}`;
+}
+
+export function buildAudioTrimFilter(
+  screenIdx: number,
+  cameraIdx: number,
+  screenHasAudio: boolean,
+  cameraHasAudio: boolean,
+  sourceStart: number,
+  sourceEnd: number,
+  cameraSyncOffsetMs: number,
+  index: number
+): string {
+  const label = `[sa${index}]`;
+
+  if (screenHasAudio) {
+    return `[${screenIdx}:a]atrim=start=${sourceStart.toFixed(3)}:end=${sourceEnd.toFixed(3)},asetpts=PTS-STARTPTS${label}`;
+  }
+
+  if (cameraIdx >= 0 && cameraHasAudio) {
+    const offsetSec = normalizeCameraSyncOffsetMs(cameraSyncOffsetMs) / 1000;
+    const audioStart = Math.max(0, sourceStart + offsetSec);
+    const audioEnd = Math.max(audioStart + 0.001, sourceEnd + offsetSec);
+    return `[${cameraIdx}:a]atrim=start=${audioStart.toFixed(3)}:end=${audioEnd.toFixed(3)},asetpts=PTS-STARTPTS${label}`;
+  }
+
+  const duration = (sourceEnd - sourceStart).toFixed(3);
+  return `anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration=${duration},asetpts=PTS-STARTPTS${label}`;
 }
 
 function buildInputPlan(
   sections: RenderSectionInput[],
   takeMap: Map<string, { screenPath: string | null; cameraPath: string | null }>,
-  {
-    includeCameraVideo,
-    includeCameraAudio
-  }: { includeCameraVideo: boolean; includeCameraAudio: boolean }
+  hasCamera: boolean
 ) {
   const fpsProbePaths = new Set<string>();
-  const sectionInputs: Array<{ screenIdx: number; cameraIdx: number; audioIdx: number; imageIdx: number }> =
-    [];
+  const sectionInputs: Array<{ screenIdx: number; cameraIdx: number; imageIdx: number }> = [];
   const args = ['-progress', 'pipe:1', '-nostats'];
-  const takeInputs = new Map<string, { screenIdx: number; cameraIdx: number; audioIdx: number }>();
+  const takeInputs = new Map<string, { screenIdx: number; cameraIdx: number }>();
   let inputIndex = 0;
 
   for (const section of sections) {
@@ -257,21 +280,15 @@ function buildInputPlan(
       inputIndex += 1;
 
       let cameraIdx = -1;
-      let audioIdx = -1;
-      if ((includeCameraVideo || includeCameraAudio) && take.cameraPath) {
+      if (hasCamera && take.cameraPath) {
         assertFilePath(take.cameraPath, 'Camera');
         args.push('-i', take.cameraPath);
-        if (includeCameraVideo) {
-          fpsProbePaths.add(take.cameraPath);
-          cameraIdx = inputIndex;
-        }
-        if (includeCameraAudio) {
-          audioIdx = inputIndex;
-        }
+        fpsProbePaths.add(take.cameraPath);
+        cameraIdx = inputIndex;
         inputIndex += 1;
       }
 
-      inputPlan = { screenIdx, cameraIdx, audioIdx };
+      inputPlan = { screenIdx, cameraIdx };
       takeInputs.set(takeId, inputPlan);
     }
 
@@ -418,34 +435,33 @@ export async function renderComposite(
     });
   }
 
-  const hasCameraVideo = keyframes.some((keyframe) => keyframe.pipVisible || keyframe.cameraFullscreen);
-  const hasCameraAudio = sections.some((section) => {
-    if (!section.takeId) return false;
-    return Boolean(takeMap.get(section.takeId)?.cameraPath);
-  });
-  const { args, fpsProbePaths, sectionInputs } = buildInputPlan(sections, takeMap, {
-    includeCameraVideo: hasCameraVideo,
-    includeCameraAudio: hasCameraAudio
-  });
+  const hasCamera = keyframes.some((keyframe) => keyframe.pipVisible || keyframe.cameraFullscreen);
+  const { args, fpsProbePaths, sectionInputs } = buildInputPlan(sections, takeMap, hasCamera);
   const totalDurationSec = getTotalDurationSec(sections);
 
   const fpsProbeResults = await Promise.all(
-    Array.from(fpsProbePaths).map(async (filePath) => ({
-      filePath,
-      fps: await probeFps(ffmpegPath, filePath)
-    }))
+    Array.from(fpsProbePaths).map(async (filePath) => {
+      const result = await probeFps(ffmpegPath, filePath);
+      return { filePath, ...result };
+    })
   );
 
   const targetFps = chooseRenderFps(
     fpsProbeResults.map((result) => result.fps),
-    hasCameraVideo
+    hasCamera
   );
+
+  const fileHasAudio = new Map<string, boolean>();
+  for (const result of fpsProbeResults) {
+    fileHasAudio.set(result.filePath, result.hasAudio);
+  }
 
   console.log(
     '[render-composite] FPS selection:',
     fpsProbeResults.map((result) => ({
       file: path.basename(result.filePath),
-      fps: result.fps ? Number(result.fps.toFixed(3)) : null
+      fps: result.fps ? Number(result.fps.toFixed(3)) : null,
+      hasAudio: result.hasAudio
     })),
     'targetFps=',
     targetFps
@@ -455,11 +471,16 @@ export async function renderComposite(
   const filterParts: string[] = [];
   for (let index = 0; index < sections.length; index += 1) {
     const section = sections[index];
-    const { screenIdx, audioIdx, imageIdx } = sectionInputs[index];
+    const { screenIdx, imageIdx } = sectionInputs[index];
     const start = section.sourceStart.toFixed(3);
     const end = section.sourceEnd.toFixed(3);
-    const duration = (section.sourceEnd - section.sourceStart).toFixed(3);
 
+    const sectionDuration = (section.sourceEnd - section.sourceStart).toFixed(3);
+    // Each video section gets fps-normalized and duration-clamped so its
+    // duration exactly matches the audio trim.  Without this, VFR sections
+    // are slightly shorter than the audio and the mismatch accumulates
+    // across concat segments, causing progressive A/V drift.
+    const cfrClamp = `,fps=fps=${targetFps}:round=near,trim=duration=${sectionDuration},setpts=PTS-STARTPTS`;
     if (imageIdx >= 0) {
       const imageScale =
         screenFitMode === 'fill'
@@ -471,24 +492,42 @@ export async function renderComposite(
     } else if (hasImageSections) {
       // Pre-scale video to canvas size so concat inputs match image sections
       filterParts.push(
-        `[${screenIdx}:v]trim=start=${start}:end=${end},setpts=PTS-STARTPTS,scale=${canvasW}:${canvasH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH},setsar=1[sv${index}]`
+        `[${screenIdx}:v]trim=start=${start}:end=${end},setpts=PTS-STARTPTS,scale=${canvasW}:${canvasH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH}${cfrClamp},setsar=1[sv${index}]`
       );
     } else {
       filterParts.push(
-        `[${screenIdx}:v]trim=start=${start}:end=${end},setpts=PTS-STARTPTS,setsar=1[sv${index}]`
+        `[${screenIdx}:v]trim=start=${start}:end=${end},setpts=PTS-STARTPTS${cfrClamp},setsar=1[sv${index}]`
       );
     }
-    if (audioIdx >= 0) {
-      filterParts.push(`[${audioIdx}:a]atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS[sa${index}]`);
-    } else {
-      filterParts.push(
-        `anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration=${duration},asetpts=PTS-STARTPTS[sa${index}]`
-      );
-    }
+    const take = takeMap.get(section.takeId!);
+    const screenHasAudio = take?.screenPath
+      ? (fileHasAudio.get(take.screenPath) ?? false)
+      : false;
+    const cameraHasAudio =
+      sectionInputs[index].cameraIdx >= 0 && take?.cameraPath
+        ? (fileHasAudio.get(take.cameraPath) ?? false)
+        : false;
+    filterParts.push(
+      buildAudioTrimFilter(
+        screenIdx,
+        sectionInputs[index].cameraIdx,
+        screenHasAudio,
+        cameraHasAudio,
+        section.sourceStart,
+        section.sourceEnd,
+        cameraSyncOffsetMs,
+        index
+      )
+    );
   }
 
   const screenLabels = sections.map((_, index) => `[sv${index}][sa${index}]`).join('');
   filterParts.push(`${screenLabels}concat=n=${sections.length}:v=1:a=1[screen_raw][audio_out]`);
+  // Normalize VFR screen video to constant frame rate right after concat.
+  // VFR sources (WebM from MediaRecorder) cause trim boundaries to misalign
+  // with audio, and the per-section drift accumulates across concat segments.
+  // Applying fps here fills frame-timing gaps so video duration matches audio.
+  filterParts.push(`[screen_raw]fps=fps=${targetFps}:round=near[screen_cfr]`);
   const exportAudioLabel = buildExportAudioLabel(exportAudioPreset);
   if (exportAudioLabel === 'audio_final') {
     filterParts.push(
@@ -496,7 +535,7 @@ export async function renderComposite(
     );
   }
 
-  if (hasCameraVideo) {
+  if (hasCamera) {
     for (let index = 0; index < sections.length; index += 1) {
       const section = sections[index];
       const { cameraIdx } = sectionInputs[index];
@@ -512,8 +551,6 @@ export async function renderComposite(
 
     const cameraLabels = sections.map((_, index) => `[cv${index}]`).join('');
     filterParts.push(`${cameraLabels}concat=n=${sections.length}:v=1:a=0[camera_raw]`);
-    // Align the concatenated camera stream to the render cadence before overlay so
-    // ffmpeg does not hold stale camera frames against the screen timeline.
     filterParts.push(`[camera_raw]fps=fps=${targetFps}:round=near[camera_cfr]`);
     const overlayFilter = buildFilterComplex(
       keyframes,
@@ -527,7 +564,7 @@ export async function renderComposite(
     );
     assertOverlayFilterSize(overlayFilter);
     const adaptedOverlay = overlayFilter
-      .replace(/\[0:v\]/g, '[screen_raw]')
+      .replace(/\[0:v\]/g, '[screen_cfr]')
       .replace(/\[1:v\]/g, '[camera_cfr]');
     filterParts.push(adaptedOverlay);
   } else {
@@ -540,7 +577,7 @@ export async function renderComposite(
       canvasH,
       '[out]',
       targetFps
-    ).replace(/\[0:v\]/g, '[screen_raw]');
+    ).replace(/\[0:v\]/g, '[screen_cfr]');
     filterParts.push(screenOnlyFilter);
   }
 
