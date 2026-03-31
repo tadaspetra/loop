@@ -22,6 +22,16 @@ export function parseFpsToken(token: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+export interface MediaProbeResult {
+  fps: number | null;
+  hasAudio: boolean;
+}
+
+export function parseHasAudioFromProbeOutput(output: unknown): boolean {
+  if (typeof output !== 'string') return false;
+  return /Stream\s+#\d+:\d+[^:]*:\s*Audio:/i.test(output);
+}
+
 export function parseVideoFpsFromProbeOutput(output: unknown): number | null {
   if (typeof output !== 'string' || !output.trim()) return null;
 
@@ -44,7 +54,7 @@ export function parseVideoFpsFromProbeOutput(output: unknown): number | null {
 export function probeVideoFpsWithFfmpeg(
   ffmpegPath: string,
   filePath: string
-): Promise<number | null> {
+): Promise<MediaProbeResult> {
   return new Promise((resolve) => {
     execFile(
       ffmpegPath,
@@ -53,10 +63,11 @@ export function probeVideoFpsWithFfmpeg(
       (error, stdout, stderr) => {
         const output = `${stdout || ''}\n${stderr || ''}`;
         const fps = parseVideoFpsFromProbeOutput(output);
+        const hasAudio = parseHasAudioFromProbeOutput(output);
         if (error && !fps) {
           console.warn(`[render-composite] FPS probe failed for ${filePath}:`, error.message);
         }
-        resolve(fps);
+        resolve({ fps, hasAudio });
       }
     );
   });

@@ -6,6 +6,7 @@ import { describe, expect, test } from 'vitest';
 
 import {
   assertFilePath,
+  buildAudioTrimFilter,
   normalizeSectionInput,
   renderComposite,
   type RenderCompositeDeps
@@ -105,7 +106,7 @@ describe('main/services/render-service', () => {
         },
         {
           ffmpegPath: '/usr/bin/ffmpeg',
-          probeVideoFpsWithFfmpeg: async () => 30,
+          probeVideoFpsWithFfmpeg: async () => ({ fps: 30, hasAudio: true }),
           runFfmpeg: createRunFfmpegStub()
         }
       )
@@ -135,7 +136,7 @@ describe('main/services/render-service', () => {
       {
         ffmpegPath: '/usr/bin/ffmpeg',
         now: () => 123,
-        probeVideoFpsWithFfmpeg: async () => 29.97,
+        probeVideoFpsWithFfmpeg: async () => ({ fps: 29.97, hasAudio: true }),
         runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
           execCalls.push({ bin: ffmpegPath, args });
         })
@@ -197,7 +198,7 @@ describe('main/services/render-service', () => {
       {
         ffmpegPath: '/usr/bin/ffmpeg',
         now: () => 124,
-        probeVideoFpsWithFfmpeg: async () => 30,
+        probeVideoFpsWithFfmpeg: async () => ({ fps: 30, hasAudio: true }),
         runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
           execCalls.push({ bin: ffmpegPath, args });
         })
@@ -253,7 +254,7 @@ describe('main/services/render-service', () => {
       {
         ffmpegPath: '/usr/bin/ffmpeg',
         now: () => 321,
-        probeVideoFpsWithFfmpeg: async () => 30,
+        probeVideoFpsWithFfmpeg: async () => ({ fps: 30, hasAudio: true }),
         runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
           execCalls.push({ bin: ffmpegPath, args });
         })
@@ -291,7 +292,7 @@ describe('main/services/render-service', () => {
       {
         ffmpegPath: '/usr/bin/ffmpeg',
         now: () => 654,
-        probeVideoFpsWithFfmpeg: async () => 30,
+        probeVideoFpsWithFfmpeg: async () => ({ fps: 30, hasAudio: true }),
         runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
           execCalls.push({ bin: ffmpegPath, args });
         })
@@ -338,7 +339,7 @@ describe('main/services/render-service', () => {
       {
         ffmpegPath: '/usr/bin/ffmpeg',
         now: () => 456,
-        probeVideoFpsWithFfmpeg: async () => 30,
+        probeVideoFpsWithFfmpeg: async () => ({ fps: 30, hasAudio: true }),
         runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
           execCalls.push({ bin: ffmpegPath, args });
         })
@@ -347,9 +348,9 @@ describe('main/services/render-service', () => {
 
     const argString = execCalls[0].args.join(' ');
     expect(argString).toContain(
-      "[screen_raw]scale=1920:1080:flags=lanczos:force_original_aspect_ratio=increase,crop=1920:1080[screen_base];[screen_base]zoompan=z='2.000'"
+      "[screen_cfr]scale=1920:1080:flags=lanczos:force_original_aspect_ratio=increase,crop=1920:1080[screen_base];[screen_base]zoompan=z='2.000'"
     );
-    expect(argString).toContain('[1:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS[cv0]');
+    expect(argString).toContain('[1:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,fps=fps=30:round=near,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]');
     expect(argString).not.toContain('scale=3840:2160,crop=1920:1080:960:540[cv0]');
   });
 
@@ -378,7 +379,7 @@ describe('main/services/render-service', () => {
       {
         ffmpegPath: '/usr/bin/ffmpeg',
         now: () => 457,
-        probeVideoFpsWithFfmpeg: async () => 30,
+        probeVideoFpsWithFfmpeg: async () => ({ fps: 30, hasAudio: true }),
         runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
           execCalls.push({ bin: ffmpegPath, args });
         })
@@ -416,7 +417,7 @@ describe('main/services/render-service', () => {
       {
         ffmpegPath: '/usr/bin/ffmpeg',
         now: () => 458,
-        probeVideoFpsWithFfmpeg: async () => 30,
+        probeVideoFpsWithFfmpeg: async () => ({ fps: 30, hasAudio: true }),
         runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
           execCalls.push({ bin: ffmpegPath, args });
         })
@@ -456,7 +457,7 @@ describe('main/services/render-service', () => {
       {
         ffmpegPath: '/usr/bin/ffmpeg',
         now: () => 147,
-        probeVideoFpsWithFfmpeg: async () => 30,
+        probeVideoFpsWithFfmpeg: async () => ({ fps: 30, hasAudio: true }),
         runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
           execCalls.push({ bin: ffmpegPath, args });
         })
@@ -465,7 +466,7 @@ describe('main/services/render-service', () => {
 
     const argString = execCalls[0].args.join(' ');
     expect(argString).toContain(
-      '[1:v]trim=start=0.120:end=1.120,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.120,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]'
+      '[1:v]trim=start=0.120:end=1.120,setpts=PTS-STARTPTS,fps=fps=30:round=near,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.120,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]'
     );
   });
 
@@ -510,7 +511,7 @@ describe('main/services/render-service', () => {
       {
         ffmpegPath: '/usr/bin/ffmpeg',
         now: () => 789,
-        probeVideoFpsWithFfmpeg: async () => 30,
+        probeVideoFpsWithFfmpeg: async () => ({ fps: 30, hasAudio: true }),
         runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
           execCalls.push({ bin: ffmpegPath, args });
         })
@@ -582,7 +583,7 @@ describe('main/services/render-service', () => {
       {
         ffmpegPath: '/usr/bin/ffmpeg',
         now: () => 999,
-        probeVideoFpsWithFfmpeg: async () => 30,
+        probeVideoFpsWithFfmpeg: async () => ({ fps: 30, hasAudio: true }),
         runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
           execCalls.push({ bin: ffmpegPath, args });
         })
@@ -623,7 +624,7 @@ describe('main/services/render-service', () => {
       {
         ffmpegPath: '/usr/bin/ffmpeg',
         now: () => 222,
-        probeVideoFpsWithFfmpeg: async () => 30,
+        probeVideoFpsWithFfmpeg: async () => ({ fps: 30, hasAudio: true }),
         runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
           execCalls.push({ bin: ffmpegPath, args });
         })
@@ -637,13 +638,16 @@ describe('main/services/render-service', () => {
 
     const argString = args.join(' ');
     expect(argString).toContain(
-      '[0:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,setsar=1[sv0]'
+      '[0:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,fps=fps=30:round=near,trim=duration=1.000,setpts=PTS-STARTPTS,setsar=1[sv0]'
     );
     expect(argString).toContain(
-      '[0:v]trim=start=1.000:end=2.000,setpts=PTS-STARTPTS,setsar=1[sv1]'
+      '[0:v]trim=start=1.000:end=2.000,setpts=PTS-STARTPTS,fps=fps=30:round=near,trim=duration=1.000,setpts=PTS-STARTPTS,setsar=1[sv1]'
     );
-    expect(argString).toContain('[1:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS[cv0]');
-    expect(argString).toContain('[1:v]trim=start=1.000:end=2.000,setpts=PTS-STARTPTS[cv1]');
+    expect(argString).toContain('[1:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,fps=fps=30:round=near,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]');
+    expect(argString).toContain('[1:v]trim=start=1.000:end=2.000,setpts=PTS-STARTPTS,fps=fps=30:round=near,trim=duration=1.000,setpts=PTS-STARTPTS[cv1]');
+    // Both screen and camera get CFR normalization after concat
+    expect(argString).toContain('[screen_raw]fps=fps=30:round=near[screen_cfr]');
+    expect(argString).toContain('[camera_raw]fps=fps=30:round=near[camera_cfr]');
   });
 
   test('renderComposite keeps reused input indexes stable across mixed take ordering', async () => {
@@ -682,7 +686,7 @@ describe('main/services/render-service', () => {
       {
         ffmpegPath: '/usr/bin/ffmpeg',
         now: () => 333,
-        probeVideoFpsWithFfmpeg: async () => 30,
+        probeVideoFpsWithFfmpeg: async () => ({ fps: 30, hasAudio: true }),
         runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
           execCalls.push({ bin: ffmpegPath, args });
         })
@@ -692,20 +696,20 @@ describe('main/services/render-service', () => {
     const argString = execCalls[0].args.join(' ');
     expect(execCalls[0].args.filter((value) => value === '-i')).toHaveLength(4);
     expect(argString).toContain(
-      '[0:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,setsar=1[sv0]'
+      '[0:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,fps=fps=30:round=near,trim=duration=1.000,setpts=PTS-STARTPTS,setsar=1[sv0]'
     );
     expect(argString).toContain(
-      '[2:v]trim=start=1.000:end=2.000,setpts=PTS-STARTPTS,setsar=1[sv1]'
+      '[2:v]trim=start=1.000:end=2.000,setpts=PTS-STARTPTS,fps=fps=30:round=near,trim=duration=1.000,setpts=PTS-STARTPTS,setsar=1[sv1]'
     );
     expect(argString).toContain(
-      '[0:v]trim=start=2.000:end=3.000,setpts=PTS-STARTPTS,setsar=1[sv2]'
+      '[0:v]trim=start=2.000:end=3.000,setpts=PTS-STARTPTS,fps=fps=30:round=near,trim=duration=1.000,setpts=PTS-STARTPTS,setsar=1[sv2]'
     );
-    expect(argString).toContain('[1:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS[cv0]');
-    expect(argString).toContain('[3:v]trim=start=1.000:end=2.000,setpts=PTS-STARTPTS[cv1]');
-    expect(argString).toContain('[1:v]trim=start=2.000:end=3.000,setpts=PTS-STARTPTS[cv2]');
+    expect(argString).toContain('[1:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,fps=fps=30:round=near,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]');
+    expect(argString).toContain('[3:v]trim=start=1.000:end=2.000,setpts=PTS-STARTPTS,fps=fps=30:round=near,trim=duration=1.000,setpts=PTS-STARTPTS[cv1]');
+    expect(argString).toContain('[1:v]trim=start=2.000:end=3.000,setpts=PTS-STARTPTS,fps=fps=30:round=near,trim=duration=1.000,setpts=PTS-STARTPTS[cv2]');
   });
 
-  test('renderComposite defers screen fps normalization until after concat to avoid per-section drift', async () => {
+  test('renderComposite normalizes screen to CFR after concat to prevent VFR drift', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-fps-after-concat-'));
     const outputDir = path.join(tmpDir, 'out');
     const screenPath = path.join(tmpDir, 'screen.webm');
@@ -732,7 +736,7 @@ describe('main/services/render-service', () => {
       {
         ffmpegPath: '/usr/bin/ffmpeg',
         now: () => 334,
-        probeVideoFpsWithFfmpeg: async () => 29.97,
+        probeVideoFpsWithFfmpeg: async () => ({ fps: 29.97, hasAudio: true }),
         runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
           execCalls.push({ bin: ffmpegPath, args });
         })
@@ -740,17 +744,20 @@ describe('main/services/render-service', () => {
     );
 
     const argString = execCalls[0].args.join(' ');
+    // Each section gets fps-normalized and duration-clamped to match audio
     expect(argString).toContain(
-      '[0:v]trim=start=0.000:end=61.113,setpts=PTS-STARTPTS,setsar=1[sv0]'
+      '[0:v]trim=start=0.000:end=61.113,setpts=PTS-STARTPTS,fps=fps=30:round=near,trim=duration=61.113,setpts=PTS-STARTPTS,setsar=1[sv0]'
     );
     expect(argString).toContain(
-      '[0:v]trim=start=90.017:end=143.531,setpts=PTS-STARTPTS,setsar=1[sv1]'
+      '[0:v]trim=start=90.017:end=143.531,setpts=PTS-STARTPTS,fps=fps=30:round=near,trim=duration=53.514,setpts=PTS-STARTPTS,setsar=1[sv1]'
     );
     expect(argString).toContain(
-      '[0:v]trim=start=200.201:end=271.889,setpts=PTS-STARTPTS,setsar=1[sv2]'
+      '[0:v]trim=start=200.201:end=271.889,setpts=PTS-STARTPTS,fps=fps=30:round=near,trim=duration=71.688,setpts=PTS-STARTPTS,setsar=1[sv2]'
     );
+    // CFR normalization must happen after concat to align video timing with audio
+    expect(argString).toContain('[screen_raw]fps=fps=30:round=near[screen_cfr]');
+    // Final output also gets fps as a safety measure
     expect(argString).toContain('[out]fps=fps=30:round=near[out_cfr]');
-    expect(argString).not.toContain('setpts=PTS-STARTPTS,fps=fps=30,setsar=1[sv');
   });
 
   test('renderComposite forwards mapped progress updates from ffmpeg output time', async () => {
@@ -776,7 +783,7 @@ describe('main/services/render-service', () => {
       {
         ffmpegPath: '/usr/bin/ffmpeg',
         now: () => 444,
-        probeVideoFpsWithFfmpeg: async () => 30,
+        probeVideoFpsWithFfmpeg: async () => ({ fps: 30, hasAudio: true }),
         onProgress: (update) => updates.push(update),
         runFfmpeg: createRunFfmpegStub(({ onProgress }) => {
           onProgress!({
@@ -851,7 +858,7 @@ describe('main/services/render-service', () => {
       {
         ffmpegPath: '/usr/bin/ffmpeg',
         now: () => 555,
-        probeVideoFpsWithFfmpeg: async () => 30,
+        probeVideoFpsWithFfmpeg: async () => ({ fps: 30, hasAudio: true }),
         runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
           execCalls.push({ bin: ffmpegPath, args });
         })
@@ -861,5 +868,110 @@ describe('main/services/render-service', () => {
     const argString = execCalls[0].args.join(' ');
     expect(argString).toContain("overlay=x='10':y='10'");
     expect(argString).not.toContain('if(gte(T,');
+  });
+
+  test('renderComposite falls back to camera audio when screen has no audio stream', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-no-screen-audio-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    const cameraPath = path.join(tmpDir, 'camera.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+    fs.writeFileSync(cameraPath, 'camera', 'utf8');
+
+    const execCalls: { bin: string; args: string[] }[] = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        takes: [{ id: 'take-1', screenPath, cameraPath }],
+        sections: [{ takeId: 'take-1', sourceStart: 2, sourceEnd: 5 }],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: true, cameraFullscreen: false }
+        ] as Keyframe[],
+        pipSize: 300,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill',
+        cameraSyncOffsetMs: 0
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 777,
+        probeVideoFpsWithFfmpeg: async (_path, filePath) => ({
+          fps: 30,
+          hasAudio: filePath.includes('camera')
+        }),
+        runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
+          execCalls.push({ bin: ffmpegPath, args });
+        })
+      }
+    );
+
+    const argString = execCalls[0].args.join(' ');
+    // Audio should come from camera input (index 1), not screen (index 0)
+    expect(argString).toContain(
+      '[1:a]atrim=start=2.000:end=5.000,asetpts=PTS-STARTPTS[sa0]'
+    );
+    expect(argString).not.toContain('[0:a]atrim=');
+  });
+
+  test('renderComposite generates silence when no input has audio', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-no-audio-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+
+    const execCalls: { bin: string; args: string[] }[] = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        takes: [{ id: 'take-1', screenPath, cameraPath: null }],
+        sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 2.5 }],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }
+        ] as Keyframe[],
+        pipSize: 300,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill'
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 888,
+        probeVideoFpsWithFfmpeg: async () => ({ fps: 30, hasAudio: false }),
+        runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
+          execCalls.push({ bin: ffmpegPath, args });
+        })
+      }
+    );
+
+    const argString = execCalls[0].args.join(' ');
+    expect(argString).toContain(
+      'anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration=2.500,asetpts=PTS-STARTPTS[sa0]'
+    );
+    expect(argString).not.toContain('[0:a]atrim=');
+  });
+});
+
+describe('buildAudioTrimFilter', () => {
+  test('uses screen audio when available', () => {
+    const filter = buildAudioTrimFilter(0, 1, true, true, 2, 5, 0, 0);
+    expect(filter).toBe('[0:a]atrim=start=2.000:end=5.000,asetpts=PTS-STARTPTS[sa0]');
+  });
+
+  test('falls back to camera audio with sync offset when screen has no audio', () => {
+    const filter = buildAudioTrimFilter(0, 1, false, true, 2, 5, 120, 0);
+    expect(filter).toBe('[1:a]atrim=start=2.120:end=5.120,asetpts=PTS-STARTPTS[sa0]');
+  });
+
+  test('clamps camera audio start to zero for negative offset', () => {
+    const filter = buildAudioTrimFilter(0, 1, false, true, 0, 3, -500, 0);
+    expect(filter).toBe('[1:a]atrim=start=0.000:end=2.500,asetpts=PTS-STARTPTS[sa0]');
+  });
+
+  test('generates silence when no audio source exists', () => {
+    const filter = buildAudioTrimFilter(0, -1, false, false, 0, 4, 0, 0);
+    expect(filter).toBe(
+      'anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration=4.000,asetpts=PTS-STARTPTS[sa0]'
+    );
   });
 });

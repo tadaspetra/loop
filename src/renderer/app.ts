@@ -447,13 +447,13 @@ function getOrCreateTakeVideos(takeId) {
   if (!take) return null;
   const screen = document.createElement('video');
   screen.playsInline = true;
+  screen.muted = true;
   screen.preload = 'auto';
   screen.src = pathToFileUrl(take.proxyPath || take.screenPath);
   let camera = null;
   if (take.cameraPath) {
     camera = document.createElement('video');
     camera.playsInline = true;
-    camera.muted = true;
     camera.preload = 'auto';
     camera.src = pathToFileUrl(take.cameraPath);
   }
@@ -1338,8 +1338,9 @@ async function extractWaveformPeaks(numBuckets = 800) {
       if (!section.takeId || takeAudioBufferCache.has(section.takeId)) continue;
       const take = activeProject?.takes?.find((t) => t.id === section.takeId);
       if (!take) continue;
+      const audioSource = take.cameraPath || take.screenPath;
       try {
-        const url = pathToFileUrl(take.screenPath);
+        const url = pathToFileUrl(audioSource);
         const response = await fetch(url);
         const arrayBuffer = await response.arrayBuffer();
         const offlineCtx = new OfflineAudioContext(1, 1, 44100);
@@ -3327,7 +3328,7 @@ function switchPlaybackSection(nextSection, opts = {}) {
     const speed = editorState.playbackSpeed || 1;
     nextVideos.screen.playbackRate = speed;
     if (nextVideos.screen.paused) nextVideos.screen.play().catch(() => {});
-    if (editorState.hasCamera && nextVideos.camera && nextVideos.camera.paused) {
+    if (nextVideos.camera && nextVideos.camera.paused) {
       nextVideos.camera.playbackRate = speed;
       nextVideos.camera.play().catch(() => {});
     }
@@ -3393,7 +3394,7 @@ function editorPlay() {
     if (videos) {
       videos.screen.playbackRate = speed;
       videos.screen.play().catch(() => {});
-      if (editorState.hasCamera && videos.camera) {
+      if (videos.camera) {
         videos.camera.playbackRate = speed;
         videos.camera.play().catch(() => {});
       }
@@ -3431,7 +3432,7 @@ function cyclePlaybackSpeed() {
     const videos = getOrCreateTakeVideos(activeTakeId);
     if (videos) {
       videos.screen.playbackRate = editorState.playbackSpeed;
-      if (editorState.hasCamera && videos.camera) {
+      if (videos.camera) {
         videos.camera.playbackRate = editorState.playbackSpeed;
       }
     }
