@@ -214,7 +214,7 @@ export function buildCameraTrimFilter(
   const label = `[cv${index}]`;
 
   if (!Number.isFinite(offsetSec) || Math.abs(offsetSec) < 0.0005) {
-    return `[${cameraIdx}:v]trim=start=${start.toFixed(3)}:end=${end.toFixed(3)},setpts=PTS-STARTPTS${label}`;
+    return `[${cameraIdx}:v]trim=start=${start.toFixed(3)}:end=${end.toFixed(3)},setpts=PTS-STARTPTS,fps=${targetFps},trim=duration=${duration.toFixed(3)},setpts=PTS-STARTPTS${label}`;
   }
 
   const sampleStart = Math.max(0, start + offsetSec);
@@ -223,7 +223,7 @@ export function buildCameraTrimFilter(
   const startPad = Math.max(0, -offsetSec);
   const stopPad = Math.max(0, offsetSec);
 
-  return `[${cameraIdx}:v]trim=start=${sampleStart.toFixed(3)}:end=${sampleEnd.toFixed(3)},setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=${startPad.toFixed(3)}:stop_mode=clone:stop_duration=${stopPad.toFixed(3)},trim=duration=${duration.toFixed(3)},setpts=PTS-STARTPTS${label}`;
+  return `[${cameraIdx}:v]trim=start=${sampleStart.toFixed(3)}:end=${sampleEnd.toFixed(3)},setpts=PTS-STARTPTS,fps=${targetFps},tpad=start_mode=clone:start_duration=${startPad.toFixed(3)}:stop_mode=clone:stop_duration=${stopPad.toFixed(3)},trim=duration=${duration.toFixed(3)},setpts=PTS-STARTPTS${label}`;
 }
 
 function buildInputPlan(
@@ -246,7 +246,7 @@ function buildInputPlan(
     let inputPlan = takeInputs.get(takeId);
     if (!inputPlan) {
       assertFilePath(take.screenPath, 'Screen');
-      args.push('-i', take.screenPath);
+      args.push('-fflags', '+genpts', '-i', take.screenPath);
       fpsProbePaths.add(take.screenPath);
 
       const screenIdx = inputIndex;
@@ -255,7 +255,7 @@ function buildInputPlan(
       let cameraIdx = -1;
       if (hasCamera && take.cameraPath) {
         assertFilePath(take.cameraPath, 'Camera');
-        args.push('-i', take.cameraPath);
+        args.push('-fflags', '+genpts', '-i', take.cameraPath);
         fpsProbePaths.add(take.cameraPath);
         cameraIdx = inputIndex;
         inputIndex += 1;
@@ -291,8 +291,6 @@ function buildOutputArgs(
 ): string[] {
   const config = getRenderVideoConfig(exportVideoPreset);
   return [
-    '-r',
-    String(targetFps),
     '-fps_mode',
     'cfr',
     '-c:v',
@@ -442,6 +440,7 @@ export async function renderComposite(
     const start = section.sourceStart.toFixed(3);
     const end = section.sourceEnd.toFixed(3);
 
+    const sectionDur = (section.sourceEnd - section.sourceStart).toFixed(3);
     if (imageIdx >= 0) {
       const imageScale =
         screenFitMode === 'fill'
@@ -451,13 +450,12 @@ export async function renderComposite(
         `[${imageIdx}:v]${imageScale},format=yuv420p,setpts=PTS-STARTPTS,setsar=1[sv${index}]`
       );
     } else if (hasImageSections) {
-      // Pre-scale video to canvas size so concat inputs match image sections
       filterParts.push(
-        `[${screenIdx}:v]trim=start=${start}:end=${end},setpts=PTS-STARTPTS,scale=${canvasW}:${canvasH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH},setsar=1[sv${index}]`
+        `[${screenIdx}:v]trim=start=${start}:end=${end},setpts=PTS-STARTPTS,fps=${targetFps},trim=duration=${sectionDur},setpts=PTS-STARTPTS,scale=${canvasW}:${canvasH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH},setsar=1[sv${index}]`
       );
     } else {
       filterParts.push(
-        `[${screenIdx}:v]trim=start=${start}:end=${end},setpts=PTS-STARTPTS,setsar=1[sv${index}]`
+        `[${screenIdx}:v]trim=start=${start}:end=${end},setpts=PTS-STARTPTS,fps=${targetFps},trim=duration=${sectionDur},setpts=PTS-STARTPTS,setsar=1[sv${index}]`
       );
     }
     filterParts.push(
@@ -519,12 +517,11 @@ export async function renderComposite(
     filterParts.push(screenOnlyFilter);
   }
 
-  filterParts.push(`[out]fps=fps=${targetFps}:round=near[out_cfr]`);
   args.push(
     '-filter_complex',
     filterParts.join(';'),
     '-map',
-    '[out_cfr]',
+    '[out]',
     '-map',
     `[${exportAudioLabel}]`
   );

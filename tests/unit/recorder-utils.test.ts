@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 
 import {
   createCameraRecordingStream,
+  createScreenRecordingStream,
   finalizeRecordingChunks,
   getRecorderOptions,
   getRecorderFinalizeTimeoutMs,
@@ -84,6 +85,62 @@ describe('recorder-utils', () => {
     expect(recordingStream).toBeInstanceOf(FakeMediaStream);
     expect((recordingStream as unknown as InstanceType<typeof FakeMediaStream>).tracks).toEqual(
       videoTracks
+    );
+  });
+
+  test('creates a screen recording stream with screen video and microphone audio tracks', () => {
+    const screenVideoTracks = [{ id: 'screen-video-1' }];
+    const audioTracks = [{ id: 'mic-audio-1' }, { id: 'mic-audio-2' }];
+    const screenStream = {
+      getVideoTracks: () => screenVideoTracks,
+      getAudioTracks: () => [{ id: 'screen-audio-ignored' }]
+    };
+    const audioStream = {
+      getAudioTracks: () => audioTracks
+    };
+
+    class FakeMediaStream {
+      tracks: unknown[];
+      constructor(tracks: unknown[]) {
+        this.tracks = tracks;
+      }
+    }
+
+    const recordingStream = createScreenRecordingStream(
+      screenStream as unknown as MediaStream,
+      audioStream as unknown as MediaStream,
+      FakeMediaStream as unknown as typeof MediaStream
+    );
+
+    expect(recordingStream).toBeInstanceOf(FakeMediaStream);
+    expect((recordingStream as unknown as InstanceType<typeof FakeMediaStream>).tracks).toEqual([
+      ...screenVideoTracks,
+      ...audioTracks
+    ]);
+  });
+
+  test('creates a screen-only recording stream when microphone audio is unavailable', () => {
+    const screenVideoTracks = [{ id: 'screen-video-1' }];
+    const screenStream = {
+      getVideoTracks: () => screenVideoTracks,
+      getAudioTracks: () => []
+    };
+
+    class FakeMediaStream {
+      tracks: unknown[];
+      constructor(tracks: unknown[]) {
+        this.tracks = tracks;
+      }
+    }
+
+    const recordingStream = createScreenRecordingStream(
+      screenStream as unknown as MediaStream,
+      null,
+      FakeMediaStream as unknown as typeof MediaStream
+    );
+
+    expect((recordingStream as unknown as InstanceType<typeof FakeMediaStream>).tracks).toEqual(
+      screenVideoTracks
     );
   });
 

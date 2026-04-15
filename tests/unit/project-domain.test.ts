@@ -225,6 +225,25 @@ describe('shared/domain/project', () => {
     expect(project.takes[1].proxyPath).toBeNull();
   });
 
+  test('normalizeSections deduplicates section IDs', () => {
+    const sections = normalizeSections([
+      { id: 'section-1', start: 0, end: 5, transcript: 'first' },
+      { id: 'section-2', start: 5, end: 10, transcript: 'second' },
+      { id: 'section-2', start: 10, end: 15, transcript: 'third with dupe id' },
+      { id: 'section-3', start: 15, end: 20, transcript: 'fourth' }
+    ]);
+
+    expect(sections).toHaveLength(4);
+    const ids = sections.map((s) => s.id);
+    expect(new Set(ids).size).toBe(4);
+    expect(ids[0]).toBe('section-1');
+    expect(ids[1]).toBe('section-2');
+    expect(ids[3]).toBe('section-3');
+    // The duplicated ID should have been renamed
+    expect(ids[2]).not.toBe('section-2');
+    expect(sections[2].transcript).toBe('third with dupe id');
+  });
+
   test('normalizeProjectData converts section imagePath to absolute path', () => {
     const project = normalizeProjectData(
       {

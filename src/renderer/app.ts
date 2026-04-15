@@ -29,13 +29,15 @@ import {
   normalizeCameraSyncOffsetMs,
   resolveCameraPlaybackTargetTime
 } from './features/timeline/camera-sync';
+import { getTakePlaybackSources } from './features/timeline/take-playback-sources';
 import {
   finalizeRecordingChunks,
   getRecorderFinalizeTimeoutMs,
   getRecorderOptions,
   getRecorderTimesliceMs,
   shouldRenderPreviewFrame,
-  createCameraRecordingStream
+  createCameraRecordingStream,
+  createScreenRecordingStream
 } from './features/recording/recorder-utils';
 import { drawMirroredImage, getCenteredSquareCropRect } from './features/camera/camera-render';
 import { cleanupAllMedia } from './features/media-cleanup';
@@ -445,17 +447,18 @@ function getOrCreateTakeVideos(takeId) {
   if (takeVideoPool.has(takeId)) return takeVideoPool.get(takeId);
   const take = activeProject?.takes?.find((t) => t.id === takeId);
   if (!take) return null;
+  const playbackSources = getTakePlaybackSources(take);
   const screen = document.createElement('video');
   screen.playsInline = true;
   screen.preload = 'auto';
-  screen.src = pathToFileUrl(take.proxyPath || take.screenPath);
+  screen.src = pathToFileUrl(playbackSources.screenPath);
   let camera = null;
-  if (take.cameraPath) {
+  if (playbackSources.cameraPath) {
     camera = document.createElement('video');
     camera.playsInline = true;
     camera.muted = true;
     camera.preload = 'auto';
-    camera.src = pathToFileUrl(take.cameraPath);
+    camera.src = pathToFileUrl(playbackSources.cameraPath);
   }
   const entry = { screen, camera };
   takeVideoPool.set(takeId, entry);
@@ -2119,12 +2122,6 @@ function createRecorder(stream, suffix) {
   return recorder;
 }
 
-function addAudioToStream(stream) {
-  if (!audioStream) return stream;
-  const combined = new MediaStream([...stream.getVideoTracks(), ...audioStream.getAudioTracks()]);
-  return combined;
-}
-
 function mergeInt16Arrays(arrays) {
   let totalLength = 0;
   for (const arr of arrays) totalLength += arr.length;
@@ -2175,21 +2172,16 @@ async function startRecording() {
   scribeManualClose = false;
 
   // Individual screen (with audio)
-  // Route through a canvas at constant 30fps to prevent keyframe flicker
-  // from variable frame rate desktop capture input
   if (screenStream) {
-    const srcTrack = screenStream.getVideoTracks()[0];
-    const settings = srcTrack.getSettings();
-    const recCanvas = document.createElement('canvas');
-    recCanvas.width = settings.width || 1920;
-    recCanvas.height = settings.height || 1080;
-    const recCtx = recCanvas.getContext('2d', { alpha: false });
-    recCtx.drawImage(screenVideo, 0, 0, recCanvas.width, recCanvas.height);
-    screenRecInterval = setInterval(() => {
-      recCtx.drawImage(screenVideo, 0, 0, recCanvas.width, recCanvas.height);
-    }, 1000 / 30);
-    const screenOnly = addAudioToStream(recCanvas.captureStream(30));
-    recorders.push(createRecorder(screenOnly, 'screen'));
+    const screenOnly = createScreenRecordingStream(screenStream, audioStream);
+    if (screenOnly) {
+      const [screenTrack] = screenOnly.getVideoTracks();
+      console.log(
+        '[Recorder] screen recording track settings:',
+        screenTrack?.getSettings?.() || {}
+      );
+      recorders.push(createRecorder(screenOnly, 'screen'));
+    }
   }
 
   // Individual camera (video only; export uses screen audio)
@@ -2743,20 +2735,16 @@ function appendTakeToTimeline({
   const hadCameraBefore = !!editorState.hasCamera;
   const keepCamera = hadCameraBefore || hasCamera;
 
-  const startIndex = existingSections.length;
-  const appendedSections = takeSections.map((section, idx) => {
-    const sectionNumber = startIndex + idx + 1;
-    return {
-      ...section,
-      id: `section-${sectionNumber}`,
-      index: sectionNumber - 1,
-      label: `Section ${sectionNumber}`,
-      start: roundMs(section.start + baseDuration),
-      end: roundMs(section.end + baseDuration),
-      duration: roundMs(section.end - section.start),
-      takeId
-    };
-  });
+  const appendedSections = takeSections.map((section) => ({
+    ...section,
+    id: generateSectionId(),
+    index: 0,
+    label: '',
+    start: roundMs(section.start + baseDuration),
+    end: roundMs(section.end + baseDuration),
+    duration: roundMs(section.end - section.start),
+    takeId
+  }));
 
   const timelineSections = [...existingSections, ...appendedSections];
 

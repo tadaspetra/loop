@@ -84,6 +84,24 @@ export function createCameraRecordingStream(
   return new MediaStreamCtor(videoTracks);
 }
 
+export function createScreenRecordingStream(
+  screenStream: MediaStream | null | undefined,
+  audioStream: MediaStream | null | undefined,
+  MediaStreamCtor: MediaStreamCtorLike = globalThis.MediaStream
+): MediaStream | null {
+  if (!screenStream || typeof screenStream.getVideoTracks !== 'function') {
+    return null;
+  }
+
+  const videoTracks = screenStream.getVideoTracks();
+  if (!videoTracks.length) return null;
+
+  const audioTracks =
+    audioStream && typeof audioStream.getAudioTracks === 'function' ? audioStream.getAudioTracks() : [];
+
+  return new MediaStreamCtor([...videoTracks, ...audioTracks]);
+}
+
 export async function finalizeRecordingChunks({
   chunks,
   saveFolder,

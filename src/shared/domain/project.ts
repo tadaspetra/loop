@@ -157,7 +157,7 @@ export function toProjectRelativePath(projectFolder: string, value: unknown): st
 
 export function normalizeSections(rawSections: unknown = []): Section[] {
   if (!Array.isArray(rawSections)) return [];
-  return rawSections
+  const sorted = rawSections
     .map((rawSection, index) => {
       const section = isRecord(rawSection)
         ? (rawSection as PartialSectionInput)
@@ -199,6 +199,18 @@ export function normalizeSections(rawSections: unknown = []): Section[] {
     })
     .filter((section) => section.end - section.start > 0.0001)
     .sort((left, right) => left.start - right.start);
+
+  const seen = new Set<string>();
+  let dedupCounter = 0;
+  for (const section of sorted) {
+    if (seen.has(section.id)) {
+      dedupCounter += 1;
+      section.id = `section-dedup-${dedupCounter}`;
+    }
+    seen.add(section.id);
+  }
+
+  return sorted;
 }
 
 export function normalizeBackgroundZoom(value: unknown): number {

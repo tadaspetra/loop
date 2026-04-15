@@ -42,7 +42,15 @@ describe('main/services/proxy-service', () => {
     expect(callArgs.args).toContain('/project/screen.webm');
     expect(callArgs.args).toContain('/project/screen-proxy.mp4.tmp');
     expect(callArgs.args).toContain('libx264');
-    expect(callArgs.args).toContain('scale=960:540');
+    expect(callArgs.args).toContain('-fflags');
+    expect(callArgs.args).toContain('+genpts');
+    expect(callArgs.args).toContain('-r');
+    expect(callArgs.args).toContain('30');
+    expect(callArgs.args).toContain('-fps_mode');
+    expect(callArgs.args).toContain('cfr');
+    expect(callArgs.args[callArgs.args.indexOf('-vf') + 1]).toBe(
+      'fps=30,scale=960:540,setpts=N/(30*TB)'
+    );
 
     expect(fsStub.renameSync).toHaveBeenCalledWith(
       '/project/screen-proxy.mp4.tmp',
