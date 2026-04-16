@@ -61,6 +61,20 @@ export interface RecordingCancelResult {
   cancelled: boolean;
 }
 
+export interface OrphanRecordingCandidate {
+  takeId: string;
+  createdAt: string;
+  screen: { partPath: string; bytes: number } | null;
+  camera: { partPath: string; bytes: number } | null;
+}
+
+export interface RecoveredOrphanRecording {
+  takeId: string;
+  createdAt: string;
+  screenPath: string | null;
+  cameraPath: string | null;
+}
+
 export interface ProjectEnvelope {
   projectPath: string;
   project: ProjectData;
@@ -124,4 +138,13 @@ export interface ElectronApi {
   recordingFinalize: (opts: RecordingFinalizeOpts) => Promise<RecordingFinalizeResult>;
   recordingCancel: (opts: RecordingFinalizeOpts) => Promise<RecordingCancelResult>;
   recordingListOrphans: (folder: string) => Promise<string[]>;
+  recordingScanOrphans: (folder: string) => Promise<OrphanRecordingCandidate[]>;
+  recordingRecoverOrphan: (opts: {
+    folder: string;
+    takeId: string;
+  }) => Promise<RecoveredOrphanRecording | null>;
+  recordingDiscardOrphan: (opts: {
+    folder: string;
+    takeId: string;
+  }) => Promise<{ discarded: number }>;
 }

@@ -250,6 +250,152 @@ export function findOrphanRecordingParts(folder: string): string[] {
 }
 
 /**
+ * Orphan recovery: .part files left behind by a crashed MediaRecorder are
+ * grouped by takeId and presented as candidates. The renderer decides whether
+ * to rename them into playable final files or discard them entirely.
+ */
+
+const ORPHAN_FILENAME_PATTERN =
+  /^\.recording-(.+)-(screen|camera)-([0-9a-f]{6})\.webm\.part$/;
+
+type OrphanSuffix = 'screen' | 'camera';
+
+export interface OrphanRecordingCandidate {
+  takeId: string;
+  createdAt: string;
+  screen: { partPath: string; bytes: number } | null;
+  camera: { partPath: string; bytes: number } | null;
+}
+
+export interface RecoveredOrphanRecording {
+  takeId: string;
+  createdAt: string;
+  screenPath: string | null;
+  cameraPath: string | null;
+}
+
+function parseOrphanPartFilename(filename: string): { takeId: string; suffix: OrphanSuffix } | null {
+  const match = ORPHAN_FILENAME_PATTERN.exec(filename);
+  if (!match) return null;
+  const takeId = match[1];
+  const suffix = match[2] as OrphanSuffix;
+  if (!takeId) return null;
+  return { takeId, suffix };
+}
+
+function inferOrphanCreatedAt(takeId: string): string {
+  // Renderer-issued takeIds have shape "take-<ms-timestamp>"; derive a
+  // best-effort ISO string so the recovery UI can show a human-friendly date.
+  const match = /^take-(\d+)$/.exec(takeId);
+  if (match) {
+    const ts = Number(match[1]);
+    if (Number.isFinite(ts) && ts > 0) return new Date(ts).toISOString();
+  }
+  return new Date().toISOString();
+}
+
+function statSizeSafe(filePath: string): number {
+  try {
+    return fs.statSync(filePath).size;
+  } catch {
+    return 0;
+  }
+}
+
+export function scanOrphanRecordings(folder: string): OrphanRecordingCandidate[] {
+  const parts = findOrphanRecordingParts(folder);
+  const groups = new Map<string, OrphanRecordingCandidate>();
+
+  for (const partPath of parts) {
+    const parsed = parseOrphanPartFilename(path.basename(partPath));
+    if (!parsed) continue;
+
+    let group = groups.get(parsed.takeId);
+    if (!group) {
+      group = {
+        takeId: parsed.takeId,
+        createdAt: inferOrphanCreatedAt(parsed.takeId),
+        screen: null,
+        camera: null
+      };
+      groups.set(parsed.takeId, group);
+    }
+
+    const bytes = statSizeSafe(partPath);
+    const existing = group[parsed.suffix];
+    // If there are multiple .part files for the same suffix (rare: same takeId
+    // crashed twice), keep the one with more captured data so recovery yields
+    // the best available recording.
+    if (!existing || bytes > existing.bytes) {
+      group[parsed.suffix] = { partPath, bytes };
+    }
+  }
+
+  // Sort oldest-first so the UI lists crashes in the order they happened.
+  return Array.from(groups.values()).sort((a, b) =>
+    a.createdAt.localeCompare(b.createdAt)
+  );
+}
+
+export function recoverOrphanRecording(
+  folder: string,
+  takeId: string
+): RecoveredOrphanRecording | null {
+  const candidate = scanOrphanRecordings(folder).find((c) => c.takeId === takeId);
+  if (!candidate) return null;
+
+  // A take without any screen bytes is not useful — we have no way to build a
+  // timeline section that points at it.
+  const screenBytes = candidate.screen?.bytes ?? 0;
+  if (!candidate.screen || screenBytes <= 0) {
+    // Clean up orphaned camera-only .part files so the folder doesn't stay
+    // cluttered with unusable fragments.
+    if (candidate.camera?.partPath) safeUnlink(candidate.camera.partPath);
+    return null;
+  }
+
+  const recovered: RecoveredOrphanRecording = {
+    takeId,
+    createdAt: candidate.createdAt,
+    screenPath: null,
+    cameraPath: null
+  };
+
+  for (const suffix of ['screen', 'camera'] as const) {
+    const entry = candidate[suffix];
+    if (!entry) continue;
+    if (!fs.existsSync(entry.partPath)) continue;
+    const { finalPath } = computeRecordingPaths(folder, takeId, suffix);
+    try {
+      fs.renameSync(entry.partPath, finalPath);
+      if (suffix === 'screen') recovered.screenPath = finalPath;
+      else recovered.cameraPath = finalPath;
+    } catch (error) {
+      console.warn(`[recording] Failed to rename ${entry.partPath}:`, error);
+    }
+  }
+
+  if (!recovered.screenPath) return null;
+  return recovered;
+}
+
+export function discardOrphanRecording(
+  folder: string,
+  takeId: string
+): { discarded: number } {
+  const candidate = scanOrphanRecordings(folder).find((c) => c.takeId === takeId);
+  if (!candidate) return { discarded: 0 };
+  let discarded = 0;
+  for (const suffix of ['screen', 'camera'] as const) {
+    const entry = candidate[suffix];
+    if (!entry) continue;
+    safeUnlink(entry.partPath);
+    discarded += 1;
+  }
+  return { discarded };
+}
+
+/**
  * Reset service state. Test-only helper; in production, finalize/cancel own
  * every handle.
  */

@@ -100,5 +100,20 @@ describe('preload', () => {
 
     electronAPI.recordingListOrphans('/proj');
     expect(mockIpcRenderer.invoke).toHaveBeenCalledWith('recording:list-orphans', '/proj');
+
+    electronAPI.recordingScanOrphans('/proj');
+    expect(mockIpcRenderer.invoke).toHaveBeenCalledWith('recording:scan-orphans', '/proj');
+
+    electronAPI.recordingRecoverOrphan({ folder: '/proj', takeId: 'take-1' });
+    expect(mockIpcRenderer.invoke).toHaveBeenCalledWith('recording:recover-orphan', {
+      folder: '/proj',
+      takeId: 'take-1'
+    });
+
+    electronAPI.recordingDiscardOrphan({ folder: '/proj', takeId: 'take-1' });
+    expect(mockIpcRenderer.invoke).toHaveBeenCalledWith('recording:discard-orphan', {
+      folder: '/proj',
+      takeId: 'take-1'
+    });
   });
 });

@@ -68,7 +68,10 @@ const electronApi: ElectronApi = {
   recordingAppend: (opts) => ipcRenderer.invoke('recording:append', opts),
   recordingFinalize: (opts) => ipcRenderer.invoke('recording:finalize', opts),
   recordingCancel: (opts) => ipcRenderer.invoke('recording:cancel', opts),
-  recordingListOrphans: (folder) => ipcRenderer.invoke('recording:list-orphans', folder)
+  recordingListOrphans: (folder) => ipcRenderer.invoke('recording:list-orphans', folder),
+  recordingScanOrphans: (folder) => ipcRenderer.invoke('recording:scan-orphans', folder),
+  recordingRecoverOrphan: (opts) => ipcRenderer.invoke('recording:recover-orphan', opts),
+  recordingDiscardOrphan: (opts) => ipcRenderer.invoke('recording:discard-orphan', opts)
 };
 
 contextBridge.exposeInMainWorld('electronAPI', electronApi);

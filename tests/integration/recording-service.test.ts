@@ -10,9 +10,12 @@ import {
   beginRecording,
   cancelRecording,
   computeRecordingPaths,
+  discardOrphanRecording,
   finalizeRecording,
   findOrphanRecordingParts,
-  getActiveRecordingCount
+  getActiveRecordingCount,
+  recoverOrphanRecording,
+  scanOrphanRecordings
 } from '../../src/main/services/recording-service';
 
 function createSandbox() {
@@ -157,5 +160,102 @@ describe('main/services/recording-service', () => {
 
   test('findOrphanRecordingParts returns empty array for missing folders', () => {
     expect(findOrphanRecordingParts(path.join(sandbox.root, 'does-not-exist'))).toEqual([]);
+  });
+
+  test('scanOrphanRecordings groups screen+camera .part files by takeId', () => {
+    const screenPath = path.join(
+      sandbox.root,
+      '.recording-take-1700000000000-screen-aaaaaa.webm.part'
+    );
+    const cameraPath = path.join(
+      sandbox.root,
+      '.recording-take-1700000000000-camera-bbbbbb.webm.part'
+    );
+    const otherScreen = path.join(
+      sandbox.root,
+      '.recording-take-1800000000000-screen-cccccc.webm.part'
+    );
+    fs.writeFileSync(screenPath, Buffer.alloc(1024));
+    fs.writeFileSync(cameraPath, Buffer.alloc(256));
+    fs.writeFileSync(otherScreen, Buffer.alloc(42));
+    // Stray file that does not match the orphan pattern should be ignored.
+    fs.writeFileSync(path.join(sandbox.root, 'not-an-orphan.webm.part'), 'x');
+
+    const candidates = scanOrphanRecordings(sandbox.root);
+    expect(candidates).toHaveLength(2);
+    // Sorted oldest-first by derived createdAt.
+    expect(candidates[0].takeId).toBe('take-1700000000000');
+    expect(candidates[0].screen?.partPath).toBe(screenPath);
+    expect(candidates[0].screen?.bytes).toBe(1024);
+    expect(candidates[0].camera?.partPath).toBe(cameraPath);
+    expect(candidates[0].camera?.bytes).toBe(256);
+    expect(candidates[0].createdAt).toBe('2023-11-14T22:13:20.000Z');
+
+    expect(candidates[1].takeId).toBe('take-1800000000000');
+    expect(candidates[1].screen?.partPath).toBe(otherScreen);
+    expect(candidates[1].camera).toBeNull();
+  });
+
+  test('recoverOrphanRecording renames the .part files into final names', () => {
+    const screenPart = path.join(
+      sandbox.root,
+      '.recording-take-1700000000000-screen-aaaaaa.webm.part'
+    );
+    const cameraPart = path.join(
+      sandbox.root,
+      '.recording-take-1700000000000-camera-bbbbbb.webm.part'
+    );
+    fs.writeFileSync(screenPart, 'screen-bytes');
+    fs.writeFileSync(cameraPart, 'camera-bytes');
+
+    const result = recoverOrphanRecording(sandbox.root, 'take-1700000000000');
+    expect(result).not.toBeNull();
+    expect(result!.takeId).toBe('take-1700000000000');
+    expect(result!.screenPath).toBe(
+      path.join(sandbox.root, 'recording-take-1700000000000-screen.webm')
+    );
+    expect(result!.cameraPath).toBe(
+      path.join(sandbox.root, 'recording-take-1700000000000-camera.webm')
+    );
+    expect(fs.existsSync(screenPart)).toBe(false);
+    expect(fs.existsSync(cameraPart)).toBe(false);
+    expect(fs.existsSync(result!.screenPath!)).toBe(true);
+    expect(fs.existsSync(result!.cameraPath!)).toBe(true);
+  });
+
+  test('recoverOrphanRecording returns null when screen bytes are missing', () => {
+    const cameraPart = path.join(
+      sandbox.root,
+      '.recording-take-1700000000000-camera-aaaaaa.webm.part'
+    );
+    fs.writeFileSync(cameraPart, 'camera-only');
+
+    const result = recoverOrphanRecording(sandbox.root, 'take-1700000000000');
+    expect(result).toBeNull();
+    // Camera-only fragments are cleaned up since they are unusable without a
+    // screen recording.
+    expect(fs.existsSync(cameraPart)).toBe(false);
+  });
+
+  test('recoverOrphanRecording returns null for unknown takeIds', () => {
+    expect(recoverOrphanRecording(sandbox.root, 'take-does-not-exist')).toBeNull();
+  });
+
+  test('discardOrphanRecording removes every .part file for a takeId', () => {
+    const screenPart = path.join(
+      sandbox.root,
+      '.recording-take-1700000000000-screen-aaaaaa.webm.part'
+    );
+    const cameraPart = path.join(
+      sandbox.root,
+      '.recording-take-1700000000000-camera-bbbbbb.webm.part'
+    );
+    fs.writeFileSync(screenPart, 'x');
+    fs.writeFileSync(cameraPart, 'y');
+
+    const result = discardOrphanRecording(sandbox.root, 'take-1700000000000');
+    expect(result.discarded).toBe(2);
+    expect(fs.existsSync(screenPart)).toBe(false);
+    expect(fs.existsSync(cameraPart)).toBe(false);
   });
 });

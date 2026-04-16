@@ -34,6 +34,9 @@ function createRecordingServiceStub() {
     finalizeRecording: vi.fn(() => ({ path: '/tmp/x.webm', bytesWritten: 10 })),
     cancelRecording: vi.fn(() => ({ cancelled: true })),
     findOrphanRecordingParts: vi.fn(() => []),
+    scanOrphanRecordings: vi.fn(() => []),
+    recoverOrphanRecording: vi.fn(() => null),
+    discardOrphanRecording: vi.fn(() => ({ discarded: 0 })),
     computeRecordingPaths: vi.fn(),
     listActiveRecordings: vi.fn(() => []),
     getActiveRecordingCount: vi.fn(() => 0),
@@ -333,5 +336,69 @@ describe('main/ipc/register-handlers', () => {
 
     expect(await handlers.get('recording:list-orphans')!({ sender }, '')).toEqual([]);
     expect(await handlers.get('recording:list-orphans')!({ sender }, undefined)).toEqual([]);
+  });
+
+  test('recording:scan-orphans, recover-orphan, and discard-orphan forward to recordingService', async () => {
+    const { handlers, recordingService } = registerWithHandlers();
+    const sender = {
+      send: vi.fn(),
+      isDestroyed: vi.fn().mockReturnValue(false),
+      once: vi.fn(),
+      removeListener: vi.fn()
+    };
+
+    type AnyMock = { mockReturnValueOnce: (value: unknown) => unknown };
+    (recordingService.scanOrphanRecordings as unknown as AnyMock).mockReturnValueOnce([
+      { takeId: 'take-1', createdAt: '2024-01-01T00:00:00Z', screen: null, camera: null }
+    ]);
+    expect(await handlers.get('recording:scan-orphans')!({ sender }, '/project')).toEqual([
+      { takeId: 'take-1', createdAt: '2024-01-01T00:00:00Z', screen: null, camera: null }
+    ]);
+    expect(recordingService.scanOrphanRecordings).toHaveBeenCalledWith('/project');
+
+    (recordingService.recoverOrphanRecording as unknown as AnyMock).mockReturnValueOnce({
+      takeId: 'take-1',
+      createdAt: '2024-01-01T00:00:00Z',
+      screenPath: '/project/recording-take-1-screen.webm',
+      cameraPath: null
+    });
+    expect(
+      await handlers.get('recording:recover-orphan')!(
+        { sender },
+        { folder: '/project', takeId: 'take-1' }
+      )
+    ).toEqual({
+      takeId: 'take-1',
+      createdAt: '2024-01-01T00:00:00Z',
+      screenPath: '/project/recording-take-1-screen.webm',
+      cameraPath: null
+    });
+    expect(recordingService.recoverOrphanRecording).toHaveBeenCalledWith('/project', 'take-1');
+
+    recordingService.discardOrphanRecording.mockReturnValueOnce({ discarded: 2 });
+    expect(
+      await handlers.get('recording:discard-orphan')!(
+        { sender },
+        { folder: '/project', takeId: 'take-1' }
+      )
+    ).toEqual({ discarded: 2 });
+  });
+
+  test('recording recover/discard reject invalid payloads gracefully', async () => {
+    const { handlers } = registerWithHandlers();
+    const sender = {
+      send: vi.fn(),
+      isDestroyed: vi.fn().mockReturnValue(false),
+      once: vi.fn(),
+      removeListener: vi.fn()
+    };
+
+    expect(
+      await handlers.get('recording:recover-orphan')!({ sender }, { takeId: 't' })
+    ).toBeNull();
+    expect(
+      await handlers.get('recording:discard-orphan')!({ sender }, { folder: '/p' })
+    ).toEqual({ discarded: 0 });
+    expect(await handlers.get('recording:scan-orphans')!({ sender }, '')).toEqual([]);
   });
 });

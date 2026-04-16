@@ -495,6 +495,48 @@
       </div>
     </div>
 
+    <!-- Orphan recording recovery dialog -->
+    <div
+      id="orphanRecoveryOverlay"
+      class="hidden fixed inset-0 bg-neutral-950/80 backdrop-blur-md flex items-center justify-center z-50 p-4"
+    >
+      <div
+        class="max-w-md w-full bg-neutral-900 border border-neutral-800 rounded-xl p-6 space-y-4 shadow-2xl"
+      >
+        <div>
+          <h2 class="text-lg font-semibold">Unfinished recordings found</h2>
+          <p id="orphanRecoveryDescription" class="text-xs text-neutral-400 mt-1">
+            We found recordings from a previous session that didn't finish saving. Recover them
+            into this project or discard them.
+          </p>
+        </div>
+        <div
+          id="orphanRecoveryList"
+          class="space-y-1.5 max-h-60 overflow-y-auto text-sm"
+        ></div>
+        <div
+          id="orphanRecoveryStatus"
+          class="hidden text-xs text-neutral-400"
+        ></div>
+        <div class="flex gap-2 justify-end pt-1">
+          <button
+            id="orphanRecoveryDiscardBtn"
+            type="button"
+            class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Discard all
+          </button>
+          <button
+            id="orphanRecoveryRecoverBtn"
+            type="button"
+            class="px-3.5 py-1.5 bg-white text-neutral-950 hover:bg-neutral-200 rounded-lg text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Recover
+          </button>
+        </div>
+      </div>
+    </div>
+
     <script type="module" src="./renderer/app.ts"></script>
   </body>
 </html>

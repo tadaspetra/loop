@@ -90,6 +90,12 @@ const processingView = document.getElementById('processingView');
 const processingTitle = document.getElementById('processingTitle');
 const processingStatus = document.getElementById('processingStatus');
 const processingBar = document.getElementById('processingBar');
+const orphanRecoveryOverlay = document.getElementById('orphanRecoveryOverlay');
+const orphanRecoveryList = document.getElementById('orphanRecoveryList');
+const orphanRecoveryDescription = document.getElementById('orphanRecoveryDescription');
+const orphanRecoveryStatus = document.getElementById('orphanRecoveryStatus');
+const orphanRecoveryRecoverBtn = document.getElementById('orphanRecoveryRecoverBtn');
+const orphanRecoveryDiscardBtn = document.getElementById('orphanRecoveryDiscardBtn');
 
 // Editor DOM refs
 const editorView = document.getElementById('editorView');
@@ -2493,6 +2499,287 @@ function commitTranscript(data) {
   updateSegmentBadge();
 }
 
+/**
+ * Probe a media file's duration using a throwaway <video> element. Partial
+ * WebM files produced by a crashed MediaRecorder typically report
+ * duration=Infinity on loadedmetadata; seeking to a huge time forces the
+ * browser to compute the real duration from the seekable range.
+ *
+ * Always resolves — never rejects — so a broken file cannot wedge the
+ * recovery flow.
+ */
+function probeMediaDuration(filePath) {
+  return new Promise((resolve) => {
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.muted = true;
+    let settled = false;
+    const finalize = (value) => {
+      if (settled) return;
+      settled = true;
+      const duration = Number.isFinite(value) && value > 0 ? value : 0;
+      try {
+        video.removeAttribute('src');
+        video.load();
+      } catch {
+        // Best-effort teardown.
+      }
+      resolve(duration);
+    };
+
+    const readSeekableEnd = () => {
+      try {
+        if (video.seekable && video.seekable.length > 0) {
+          return video.seekable.end(video.seekable.length - 1);
+        }
+      } catch {
+        // Seekable not available; ignore.
+      }
+      return 0;
+    };
+
+    video.addEventListener(
+      'loadedmetadata',
+      () => {
+        if (Number.isFinite(video.duration) && video.duration > 0) {
+          finalize(video.duration);
+          return;
+        }
+        // Force duration computation for streamed/partial WebM files.
+        try {
+          video.currentTime = 1e101;
+        } catch {
+          // If the seek throws we fall through to the durationchange timeout.
+        }
+      },
+      { once: true }
+    );
+    video.addEventListener('durationchange', () => {
+      if (Number.isFinite(video.duration) && video.duration > 0) {
+        finalize(video.duration);
+      }
+    });
+    video.addEventListener('error', () => finalize(readSeekableEnd()), { once: true });
+
+    // Absolute ceiling: never block recovery on a stuck probe.
+    setTimeout(() => finalize(readSeekableEnd() || Number(video.duration)), 10000);
+
+    video.src = pathToFileUrl(filePath);
+  });
+}
+
+function formatBytesApprox(bytes) {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value <= 0) return '0 B';
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
+  if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function buildOrphanSummary(orphan) {
+  const parts = [];
+  const screen = orphan?.screen;
+  const camera = orphan?.camera;
+  if (screen?.bytes) parts.push(`screen ${formatBytesApprox(screen.bytes)}`);
+  if (camera?.bytes) parts.push(`camera ${formatBytesApprox(camera.bytes)}`);
+  return parts.join(' · ') || 'empty recording';
+}
+
+function renderOrphanRecoveryList(orphans) {
+  if (!orphanRecoveryList) return;
+  orphanRecoveryList.innerHTML = '';
+  for (const orphan of orphans) {
+    const row = document.createElement('div');
+    row.className =
+      'bg-neutral-950/60 border border-neutral-800 rounded-lg px-3 py-2 flex items-center justify-between gap-3';
+    const label = document.createElement('div');
+    label.className = 'min-w-0';
+    const title = document.createElement('div');
+    title.className = 'text-sm text-neutral-200 truncate';
+    title.textContent = formatProjectDate(orphan.createdAt) || orphan.takeId;
+    const subtitle = document.createElement('div');
+    subtitle.className = 'text-xs text-neutral-500 truncate mt-0.5';
+    subtitle.textContent = buildOrphanSummary(orphan);
+    label.appendChild(title);
+    label.appendChild(subtitle);
+    row.appendChild(label);
+    orphanRecoveryList.appendChild(row);
+  }
+}
+
+function setOrphanRecoveryStatus(text, visible = true) {
+  if (!orphanRecoveryStatus) return;
+  orphanRecoveryStatus.textContent = text || '';
+  orphanRecoveryStatus.classList.toggle('hidden', !visible || !text);
+}
+
+function setOrphanRecoveryBusy(busy) {
+  if (orphanRecoveryRecoverBtn) orphanRecoveryRecoverBtn.disabled = !!busy;
+  if (orphanRecoveryDiscardBtn) orphanRecoveryDiscardBtn.disabled = !!busy;
+}
+
+function hideOrphanRecoveryOverlay() {
+  if (!orphanRecoveryOverlay) return;
+  orphanRecoveryOverlay.classList.add('hidden');
+  setOrphanRecoveryStatus('', false);
+  setOrphanRecoveryBusy(false);
+}
+
+async function recoverOrphansForProject(projectPath) {
+  if (!projectPath) return;
+  if (typeof window.electronAPI.recordingScanOrphans !== 'function') return;
+
+  let orphans = [];
+  try {
+    orphans = (await window.electronAPI.recordingScanOrphans(projectPath)) || [];
+  } catch (error) {
+    console.warn('[Recovery] Failed to scan for orphan recordings:', error);
+    return;
+  }
+  if (orphans.length === 0) return;
+  if (!orphanRecoveryOverlay || !orphanRecoveryRecoverBtn || !orphanRecoveryDiscardBtn) return;
+
+  await new Promise((resolve) => {
+    const projectSession = getActiveProjectSession();
+    renderOrphanRecoveryList(orphans);
+    if (orphanRecoveryDescription) {
+      orphanRecoveryDescription.textContent =
+        orphans.length === 1
+          ? 'We found one unfinished recording from a previous session. Recover it into this project or discard it.'
+          : `We found ${orphans.length} unfinished recordings from a previous session. Recover them into this project or discard them.`;
+    }
+    setOrphanRecoveryStatus('', false);
+    setOrphanRecoveryBusy(false);
+    orphanRecoveryOverlay.classList.remove('hidden');
+
+    const cleanup = () => {
+      orphanRecoveryRecoverBtn.removeEventListener('click', onRecover);
+      orphanRecoveryDiscardBtn.removeEventListener('click', onDiscard);
+      hideOrphanRecoveryOverlay();
+      resolve();
+    };
+
+    const onRecover = async () => {
+      if (!matchesActiveProjectSession(projectSession)) {
+        cleanup();
+        return;
+      }
+      setOrphanRecoveryBusy(true);
+      const total = orphans.length;
+      let successCount = 0;
+      const recoveryErrors = [];
+
+      for (let index = 0; index < orphans.length; index += 1) {
+        const orphan = orphans[index];
+        setOrphanRecoveryStatus(`Recovering ${index + 1} of ${total}...`);
+        try {
+          const recovered = await window.electronAPI.recordingRecoverOrphan({
+            folder: projectPath,
+            takeId: orphan.takeId
+          });
+          if (!recovered?.screenPath) {
+            recoveryErrors.push(`${orphan.takeId}: no usable screen recording`);
+            continue;
+          }
+          if (!matchesActiveProjectSession(projectSession)) break;
+
+          const duration = await probeMediaDuration(recovered.screenPath);
+          if (duration <= 0) {
+            recoveryErrors.push(`${orphan.takeId}: could not determine duration`);
+            continue;
+          }
+          if (!matchesActiveProjectSession(projectSession)) break;
+
+          const takeId = recovered.takeId;
+          const createdAt = recovered.createdAt || new Date().toISOString();
+          const sections = buildDefaultSectionsForDuration(duration).map((section) => ({
+            ...section,
+            takeId
+          }));
+
+          if (activeProject) {
+            if (!Array.isArray(activeProject.takes)) activeProject.takes = [];
+            activeProject.takes.push({
+              id: takeId,
+              createdAt,
+              duration,
+              screenPath: recovered.screenPath,
+              cameraPath: recovered.cameraPath,
+              proxyPath: null,
+              sections
+            });
+          }
+
+          const appendResult = appendTakeToTimeline({
+            takeId,
+            screenPath: recovered.screenPath,
+            cameraPath: recovered.cameraPath,
+            recordedDuration: duration,
+            trimSections: sections,
+            projectSession
+          });
+          if (!appendResult || !matchesActiveProjectSession(projectSession)) break;
+
+          if (activeProject) {
+            const take = activeProject.takes.find((t) => t.id === takeId);
+            if (take) {
+              take.duration = appendResult.takeDuration;
+              take.sections = appendResult.takeSections;
+            }
+            await persistProjectNow();
+            if (recovered.screenPath) {
+              window.electronAPI
+                .generateProxy({
+                  takeId,
+                  screenPath: recovered.screenPath,
+                  projectFolder: projectPath,
+                  durationSec: duration
+                })
+                .catch((err) =>
+                  console.warn('[Recovery] Failed to queue proxy generation:', err)
+                );
+            }
+          }
+          successCount += 1;
+        } catch (error) {
+          console.error('[Recovery] Failed to recover orphan:', orphan.takeId, error);
+          recoveryErrors.push(
+            `${orphan.takeId}: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      }
+
+      if (successCount > 0) {
+        console.log(`[Recovery] Restored ${successCount} of ${total} unfinished recordings.`);
+      }
+      if (recoveryErrors.length > 0) {
+        console.warn('[Recovery] Some recordings could not be restored:', recoveryErrors);
+      }
+      cleanup();
+    };
+
+    const onDiscard = async () => {
+      setOrphanRecoveryBusy(true);
+      setOrphanRecoveryStatus('Discarding...');
+      for (const orphan of orphans) {
+        try {
+          await window.electronAPI.recordingDiscardOrphan({
+            folder: projectPath,
+            takeId: orphan.takeId
+          });
+        } catch (error) {
+          console.warn('[Recovery] Failed to discard orphan:', orphan.takeId, error);
+        }
+      }
+      cleanup();
+    };
+
+    orphanRecoveryRecoverBtn.addEventListener('click', onRecover);
+    orphanRecoveryDiscardBtn.addEventListener('click', onDiscard);
+  });
+}
+
 async function recoverPendingTake(recoveryTake) {
   if (!recoveryTake?.screenPath) return;
 
@@ -4528,6 +4815,7 @@ async function openProjectByPath(projectPath, preferredView = 'timeline') {
     if (opened?.recoveryTake) {
       await recoverPendingTake(opened.recoveryTake);
     }
+    await recoverOrphansForProject(opened.projectPath);
     await refreshRecentProjects();
   } catch (error) {
     console.error('Failed to open project:', error);

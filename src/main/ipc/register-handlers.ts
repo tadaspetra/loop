@@ -358,4 +358,27 @@ export function registerIpcHandlers({
     if (typeof folder !== 'string' || !folder.trim()) return [];
     return recordingService.findOrphanRecordingParts(folder);
   });
+
+  ipcMain.handle('recording:scan-orphans', async (_event, folder: unknown) => {
+    if (typeof folder !== 'string' || !folder.trim()) return [];
+    return recordingService.scanOrphanRecordings(folder);
+  });
+
+  ipcMain.handle(
+    'recording:recover-orphan',
+    async (_event, payload: unknown) => {
+      const opts = (payload || {}) as { folder?: string; takeId?: string };
+      if (!opts.folder || !opts.takeId) return null;
+      return recordingService.recoverOrphanRecording(opts.folder, opts.takeId);
+    }
+  );
+
+  ipcMain.handle(
+    'recording:discard-orphan',
+    async (_event, payload: unknown) => {
+      const opts = (payload || {}) as { folder?: string; takeId?: string };
+      if (!opts.folder || !opts.takeId) return { discarded: 0 };
+      return recordingService.discardOrphanRecording(opts.folder, opts.takeId);
+    }
+  );
 }
