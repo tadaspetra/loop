@@ -1,5 +1,11 @@
 import type { ProjectData, RecoveryTake } from './domain/project';
 
+export interface PremiereExportResult {
+  outputFolder: string;
+  xmlPath: string;
+  mediaFolder: string;
+}
+
 export interface RenderProgressUpdate {
   phase?: string;
   percent?: number | null;
@@ -127,6 +133,8 @@ export interface ElectronApi {
   }) => Promise<{ sections: ProjectData['timeline']['sections']; trimmedDuration: number }>;
   renderComposite: (opts: Record<string, unknown>) => Promise<string>;
   onRenderProgress: (listener: (payload: RenderProgressUpdate) => void) => () => void;
+  exportPremiereProject: (opts: Record<string, unknown>) => Promise<PremiereExportResult>;
+  onExportPremiereProgress: (listener: (payload: RenderProgressUpdate) => void) => () => void;
   importFile: (sourcePath: string, projectFolder: string) => Promise<string>;
   pickImageFile: () => Promise<string | null>;
   getScribeToken: () => Promise<string>;

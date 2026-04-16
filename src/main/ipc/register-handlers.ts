@@ -14,6 +14,7 @@ import type {
 
 import type { createProjectService } from '../services/project-service';
 import type { renderComposite } from '../services/render-service';
+import type { exportPremiereProject } from '../services/premiere-export-service';
 import type { computeSections } from '../services/sections-service';
 import type * as proxyServiceModule from '../services/proxy-service';
 import type * as recordingServiceModule from '../services/recording-service';
@@ -21,6 +22,7 @@ import type * as recordingServiceModule from '../services/recording-service';
 type ProjectService = ReturnType<typeof createProjectService>;
 
 type RenderComposite = typeof renderComposite;
+type ExportPremiereProject = typeof exportPremiereProject;
 type ComputeSections = typeof computeSections;
 type ProxyService = typeof proxyServiceModule;
 type RecordingService = typeof recordingServiceModule;
@@ -40,6 +42,7 @@ export function registerIpcHandlers({
   getWindow,
   projectService,
   renderComposite,
+  exportPremiereProject,
   computeSections,
   getScribeToken,
   proxyService,
@@ -53,6 +56,7 @@ export function registerIpcHandlers({
   getWindow: () => BrowserWindow | null;
   projectService: ProjectService;
   renderComposite: RenderComposite;
+  exportPremiereProject: ExportPremiereProject;
   computeSections: ComputeSections;
   getScribeToken: () => Promise<string>;
   proxyService: ProxyService;
@@ -190,6 +194,35 @@ export function registerIpcHandlers({
             // The renderer may be tearing down mid-render; swallowing keeps the
             // ffmpeg process draining rather than crashing the main process.
             console.warn('render-composite-progress send failed:', error);
+          }
+        }
+      });
+    } finally {
+      activeFfmpegAborts.delete(controller);
+      try {
+        event.sender.removeListener('destroyed', onSenderDestroy);
+      } catch {
+        // Sender may already be gone; ignore.
+      }
+    }
+  });
+
+  ipcMain.handle('export-premiere-project', async (event: IpcMainInvokeEvent, opts: unknown) => {
+    const controller = new AbortController();
+    activeFfmpegAborts.add(controller);
+
+    const onSenderDestroy = () => controller.abort();
+    event.sender.once('destroyed', onSenderDestroy);
+
+    try {
+      return await exportPremiereProject(opts as Parameters<ExportPremiereProject>[0], {
+        signal: controller.signal,
+        onProgress: (progress) => {
+          if (event.sender.isDestroyed()) return;
+          try {
+            event.sender.send('export-premiere-progress', progress);
+          } catch (error) {
+            console.warn('export-premiere-progress send failed:', error);
           }
         }
       });

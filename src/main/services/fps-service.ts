@@ -62,6 +62,49 @@ export function probeVideoFpsWithFfmpeg(
   });
 }
 
+export interface VideoDimensions {
+  width: number;
+  height: number;
+}
+
+export function parseVideoDimensionsFromProbeOutput(output: unknown): VideoDimensions | null {
+  if (typeof output !== 'string' || !output.trim()) return null;
+
+  // ffmpeg stderr typically contains: `Stream ... Video: h264 (High), yuv420p, 1920x1080, ...`
+  const match = output.match(/Video:[^\n]*?(\d{2,5})x(\d{2,5})/);
+  if (!match) return null;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null;
+  }
+  return { width, height };
+}
+
+export function probeVideoDimensionsWithFfmpeg(
+  ffmpegPath: string,
+  filePath: string
+): Promise<VideoDimensions | null> {
+  return new Promise((resolve) => {
+    execFile(
+      ffmpegPath,
+      ['-hide_banner', '-i', filePath],
+      { maxBuffer: 10 * 1024 * 1024 },
+      (error, stdout, stderr) => {
+        const output = `${stdout || ''}\n${stderr || ''}`;
+        const dims = parseVideoDimensionsFromProbeOutput(output);
+        if (error && !dims) {
+          console.warn(
+            `[premiere-export] dimensions probe failed for ${filePath}:`,
+            error.message
+          );
+        }
+        resolve(dims);
+      }
+    );
+  });
+}
+
 export function chooseRenderFps(candidates: unknown[], hasCamera: boolean): number {
   const valid = (Array.isArray(candidates) ? candidates : [])
     .map((value) => Number(value))

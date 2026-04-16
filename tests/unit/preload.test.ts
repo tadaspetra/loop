@@ -59,6 +59,37 @@ describe('preload', () => {
     );
   });
 
+  test('exportPremiereProject invokes matching IPC channel and progress listener attaches', () => {
+    electronAPI.exportPremiereProject({ outputFolder: '/tmp/x', takes: [], sections: [] });
+    expect(mockIpcRenderer.invoke).toHaveBeenCalledWith('export-premiere-project', {
+      outputFolder: '/tmp/x',
+      takes: [],
+      sections: []
+    });
+
+    const listener = vi.fn();
+    const unsubscribe = electronAPI.onExportPremiereProgress(listener);
+    expect(mockIpcRenderer.on).toHaveBeenCalledWith(
+      'export-premiere-progress',
+      expect.any(Function)
+    );
+
+    const handler = mockIpcRenderer.on.mock.calls
+      .reverse()
+      .find((call) => call[0] === 'export-premiere-progress')?.[1] as (
+      _event: unknown,
+      payload: unknown
+    ) => void;
+    handler({}, { phase: 'transcoding', percent: 0.25 });
+    expect(listener).toHaveBeenCalledWith({ phase: 'transcoding', percent: 0.25 });
+
+    unsubscribe();
+    expect(mockIpcRenderer.removeListener).toHaveBeenCalledWith(
+      'export-premiere-progress',
+      handler
+    );
+  });
+
   test('getPathForFile delegates to webUtils for drag-dropped files', () => {
     const file = { _mockPath: '/Users/test/foo.png' } as unknown as File;
     expect(electronAPI.getPathForFile(file)).toBe('/Users/test/foo.png');

@@ -43,6 +43,13 @@ const electronApi: ElectronApi = {
     ipcRenderer.on('render-composite-progress', handler);
     return () => ipcRenderer.removeListener('render-composite-progress', handler);
   },
+  exportPremiereProject: (opts) => ipcRenderer.invoke('export-premiere-project', opts),
+  onExportPremiereProgress: (listener) => {
+    if (typeof listener !== 'function') return () => {};
+    const handler = (_event: unknown, payload: RenderProgressUpdate) => listener(payload);
+    ipcRenderer.on('export-premiere-progress', handler);
+    return () => ipcRenderer.removeListener('export-premiere-progress', handler);
+  },
   importFile: (sourcePath, projectFolder) =>
     ipcRenderer.invoke('import-file', sourcePath, projectFolder),
   pickImageFile: () => ipcRenderer.invoke('pick-image-file'),

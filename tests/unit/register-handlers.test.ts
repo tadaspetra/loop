@@ -62,6 +62,19 @@ function registerWithHandlers() {
   );
   const proxyService = createProxyServiceStub();
   const recordingService = createRecordingServiceStub();
+  const exportPremiereProject = vi.fn(
+    async (
+      _opts: unknown,
+      deps: { onProgress?: (u: unknown) => void; signal?: AbortSignal }
+    ) => {
+      deps.onProgress?.({ phase: 'transcoding', percent: 0.5 });
+      return {
+        outputFolder: '/tmp/export',
+        xmlPath: '/tmp/export/project.xml',
+        mediaFolder: '/tmp/export/media'
+      };
+    }
+  );
 
   registerIpcHandlers({
     ipcMain,
@@ -72,13 +85,14 @@ function registerWithHandlers() {
     getWindow: () => null,
     projectService: createProjectServiceStub(),
     renderComposite,
+    exportPremiereProject,
     computeSections: vi.fn(),
     getScribeToken: vi.fn(),
     proxyService,
     recordingService
   } as unknown as Parameters<typeof registerIpcHandlers>[0]);
 
-  return { handlers, renderComposite, proxyService, recordingService };
+  return { handlers, renderComposite, exportPremiereProject, proxyService, recordingService };
 }
 
 describe('main/ipc/register-handlers', () => {
@@ -150,6 +164,35 @@ describe('main/ipc/register-handlers', () => {
     expect(capturedSignal).toBeDefined();
     expect(capturedSignal!.aborted).toBe(true);
     expect(sender.removeListener).toHaveBeenCalledWith('destroyed', expect.any(Function));
+  });
+
+  test('export-premiere-project forwards progress updates over IPC', async () => {
+    const { handlers, exportPremiereProject } = registerWithHandlers();
+
+    const sender = {
+      send: vi.fn(),
+      isDestroyed: vi.fn().mockReturnValue(false),
+      once: vi.fn(),
+      removeListener: vi.fn()
+    };
+    const result = await handlers.get('export-premiere-project')!(
+      { sender },
+      { outputFolder: '/tmp/x', sections: [], takes: [] }
+    );
+
+    expect(exportPremiereProject).toHaveBeenCalledWith(
+      expect.objectContaining({ outputFolder: '/tmp/x' }),
+      expect.objectContaining({ onProgress: expect.any(Function) })
+    );
+    expect(sender.send).toHaveBeenCalledWith('export-premiere-progress', {
+      phase: 'transcoding',
+      percent: 0.5
+    });
+    expect(result).toEqual({
+      outputFolder: '/tmp/export',
+      xmlPath: '/tmp/export/project.xml',
+      mediaFolder: '/tmp/export/media'
+    });
   });
 
   test('render-composite does not crash when sender.send throws', async () => {

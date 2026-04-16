@@ -4,8 +4,12 @@ import { describe, expect, test } from 'vitest';
 
 import {
   createDefaultProject,
+  DEFAULT_PIP_SIZE,
+  MAX_PIP_SIZE,
+  MIN_PIP_SIZE,
   normalizeCameraSyncOffsetMs,
   normalizeKeyframes,
+  normalizePipSize,
   normalizeProjectData,
   normalizeExportVideoPreset,
   normalizeSections,
@@ -188,6 +192,25 @@ describe('shared/domain/project', () => {
     expect(project.settings.cameraSyncOffsetMs).toBe(135);
     expect(fallbackProject.settings.cameraSyncOffsetMs).toBe(0);
     expect(createDefaultProject('Demo').settings.cameraSyncOffsetMs).toBe(0);
+  });
+
+  test('normalizePipSize clamps and defaults invalid values', () => {
+    expect(normalizePipSize(undefined)).toBe(DEFAULT_PIP_SIZE);
+    expect(normalizePipSize('bad')).toBe(DEFAULT_PIP_SIZE);
+    expect(normalizePipSize(0)).toBe(DEFAULT_PIP_SIZE);
+    expect(normalizePipSize(-10)).toBe(DEFAULT_PIP_SIZE);
+    expect(normalizePipSize(32)).toBe(MIN_PIP_SIZE);
+    expect(normalizePipSize(99999)).toBe(MAX_PIP_SIZE);
+    expect(normalizePipSize(600.6)).toBe(601);
+  });
+
+  test('normalizeProjectData preserves valid pipSize and defaults invalid values', () => {
+    const sized = normalizeProjectData({ settings: { pipSize: 500 } }, '/tmp/proj');
+    const fallback = normalizeProjectData({ settings: { pipSize: 'huge' } }, '/tmp/proj');
+
+    expect(sized.settings.pipSize).toBe(500);
+    expect(fallback.settings.pipSize).toBe(DEFAULT_PIP_SIZE);
+    expect(createDefaultProject('Demo').settings.pipSize).toBe(DEFAULT_PIP_SIZE);
   });
 
   test('normalizeSections preserves imagePath and defaults to null', () => {

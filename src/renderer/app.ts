@@ -102,6 +102,7 @@ const editorView = document.getElementById('editorView');
 const editorCanvas = document.getElementById('editorCanvas');
 const editorCtx = editorCanvas.getContext('2d');
 const editorRenderBtn = document.getElementById('editorRenderBtn');
+const editorExportPremiereBtn = document.getElementById('editorExportPremiereBtn');
 const editorUndoBtn = document.getElementById('editorUndoBtn');
 const editorRedoBtn = document.getElementById('editorRedoBtn');
 const editorPlayBtn = document.getElementById('editorPlayBtn');
@@ -236,6 +237,32 @@ function handleRenderProgress(update) {
 if (typeof window.electronAPI.onRenderProgress === 'function') {
   window.electronAPI.onRenderProgress((update) => {
     handleRenderProgress(update);
+  });
+}
+
+function handlePremiereExportProgress(update) {
+  if (!editorState || !editorState.exportingPremiere) return;
+
+  const percent = Number.isFinite(Number(update?.percent))
+    ? Math.max(0, Math.min(1, Number(update.percent)))
+    : null;
+  processingTitle.textContent = 'Exporting to Premiere...';
+  processingStatus.textContent =
+    typeof update?.status === 'string' && update.status
+      ? update.status
+      : 'Transcoding media...';
+  setProcessingProgress(percent);
+
+  if (percent === null) {
+    setPremiereBtnState(processingStatus.textContent, 'busy');
+    return;
+  }
+  setPremiereBtnState(`Exporting ${Math.round(percent * 100)}%`, 'busy');
+}
+
+if (typeof window.electronAPI.onExportPremiereProgress === 'function') {
+  window.electronAPI.onExportPremiereProgress((update) => {
+    handlePremiereExportProgress(update);
   });
 }
 
@@ -566,6 +593,7 @@ function updateWorkspaceHeader() {
   exportVideoPresetControl.classList.toggle('hidden', !showTimelineTools);
   exportVideoPresetControl.classList.toggle('flex', showTimelineTools);
   editorRenderBtn.classList.toggle('hidden', !showTimelineTools);
+  editorExportPremiereBtn.classList.toggle('hidden', !showTimelineTools);
 }
 
 function hasPendingEditorDraw() {
@@ -737,7 +765,8 @@ function buildProjectSavePayload() {
       hideFromRecording: hideFromRecording === 'true',
       exportAudioPreset: normalizeExportAudioPreset(exportAudioPresetSelect.value),
       exportVideoPreset: normalizeExportVideoPreset(exportVideoPresetSelect.value),
-      cameraSyncOffsetMs: normalizeCameraSyncOffsetMs(cameraSyncOffsetInput.value)
+      cameraSyncOffsetMs: normalizeCameraSyncOffsetMs(cameraSyncOffsetInput.value),
+      pipSize: editorState?.pipSize || PIP_SIZE
     },
     timeline: getProjectTimelineSnapshot()
   };
@@ -4569,6 +4598,112 @@ async function renderVideo() {
   editorRenderTimeout = setTimeout(() => setRenderBtnState('Render', 'idle'), 3000);
   editorSeek(0);
 }
+
+let editorPremiereTimeout = null;
+
+function setPremiereBtnState(text, style = 'idle') {
+  clearTimeout(editorPremiereTimeout);
+  editorExportPremiereBtn.textContent = text;
+  if (style === 'busy') {
+    editorExportPremiereBtn.className =
+      'px-4 py-1.5 bg-neutral-700 text-neutral-300 rounded-lg text-sm font-medium transition-colors min-w-[140px] text-center cursor-wait';
+  } else if (style === 'done') {
+    editorExportPremiereBtn.className =
+      'px-4 py-1.5 bg-emerald-600 text-white rounded-lg text-sm font-medium transition-colors min-w-[140px] text-center';
+  } else if (style === 'error') {
+    editorExportPremiereBtn.className =
+      'px-4 py-1.5 bg-red-600 text-white rounded-lg text-sm font-medium transition-colors min-w-[140px] text-center';
+  } else {
+    editorExportPremiereBtn.className =
+      'px-4 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-neutral-100 rounded-lg text-sm font-medium transition-colors min-w-[140px] text-center';
+  }
+}
+
+function getPremiereExportSections() {
+  if (!editorState) return [];
+  return editorState.sections.map((section) => ({
+    takeId: section.takeId,
+    timelineStart: section.start,
+    timelineEnd: section.end,
+    sourceStart: section.sourceStart,
+    sourceEnd: section.sourceEnd
+  }));
+}
+
+async function exportPremiere() {
+  commitSectionZoomChange();
+  if (!editorState || editorState.rendering || editorState.exportingPremiere) return;
+
+  const defaultExportFolder = activeProjectPath
+    ? `${activeProjectPath}-premiere`
+    : saveFolder || null;
+  const targetFolder = await window.electronAPI.pickFolder({
+    title: 'Choose Premiere Export Folder',
+    buttonLabel: 'Export Here',
+    defaultPath: defaultExportFolder
+  });
+  if (!targetFolder) return;
+
+  editorState.exportingPremiere = true;
+  setPremiereBtnState('Exporting...', 'busy');
+  processingTitle.textContent = 'Exporting to Premiere...';
+  processingStatus.textContent = 'Preparing export...';
+  setProcessingProgress(0);
+  editorPause();
+
+  editorRenderBtn.disabled = true;
+  editorExportPremiereBtn.disabled = true;
+
+  try {
+    const premiereSections = getPremiereExportSections();
+    const referencedTakeIds = new Set(premiereSections.map((s) => s.takeId).filter(Boolean));
+    const takes = [];
+    for (const takeId of referencedTakeIds) {
+      const take = activeProject?.takes?.find((t) => t.id === takeId);
+      if (take) {
+        takes.push({
+          id: take.id,
+          screenPath: take.screenPath,
+          cameraPath: take.cameraPath,
+          duration: take.duration || 0
+        });
+      }
+    }
+
+    const projectName = (activeProject?.name || 'Loop Project').trim() || 'Loop Project';
+
+    const result = await window.electronAPI.exportPremiereProject({
+      outputFolder: targetFolder,
+      projectName,
+      pipSize: editorState.pipSize,
+      sourceWidth: editorState.sourceWidth || CANVAS_W,
+      sourceHeight: editorState.sourceHeight || CANVAS_H,
+      cameraSyncOffsetMs: editorState.cameraSyncOffsetMs,
+      takes,
+      sections: premiereSections,
+      keyframes: getRenderKeyframes()
+    });
+
+    editorState.exportingPremiere = false;
+    setProcessingProgress(1);
+    setPremiereBtnState('Done!', 'done');
+    console.log('Premiere export:', result);
+  } catch (err) {
+    editorState.exportingPremiere = false;
+    setProcessingProgress(null);
+    console.error('Premiere export error:', err);
+    setPremiereBtnState('Failed', 'error');
+  }
+
+  editorRenderBtn.disabled = false;
+  editorExportPremiereBtn.disabled = false;
+
+  editorPremiereTimeout = setTimeout(() => setPremiereBtnState('Export to Premiere', 'idle'), 3000);
+}
+
+editorExportPremiereBtn.addEventListener('click', async () => {
+  await exportPremiere();
+});
 
 // ===== Segment selection =====
 

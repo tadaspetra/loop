@@ -6,6 +6,7 @@ import { createWindow } from './main/app/create-window';
 import { registerIpcHandlers } from './main/ipc/register-handlers';
 import { createProjectService } from './main/services/project-service';
 import { renderComposite } from './main/services/render-service';
+import { exportPremiereProject } from './main/services/premiere-export-service';
 import { computeSections } from './main/services/sections-service';
 import { getScribeToken } from './main/services/scribe-service';
 import * as proxyService from './main/services/proxy-service';
@@ -24,6 +25,7 @@ registerIpcHandlers({
   getWindow: () => win,
   projectService,
   renderComposite,
+  exportPremiereProject,
   computeSections,
   getScribeToken,
   proxyService,

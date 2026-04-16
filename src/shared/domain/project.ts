@@ -16,6 +16,9 @@ export const EXPORT_AUDIO_PRESET_OFF = 'off';
 export const EXPORT_AUDIO_PRESET_COMPRESSED = 'compressed';
 export const EXPORT_VIDEO_PRESET_FAST = 'fast';
 export const EXPORT_VIDEO_PRESET_QUALITY = 'quality';
+export const DEFAULT_PIP_SIZE = 422;
+export const MIN_PIP_SIZE = 64;
+export const MAX_PIP_SIZE = 1920;
 
 export type ScreenFitMode = 'fill' | 'fit';
 export type ExportAudioPreset =
@@ -58,6 +61,7 @@ export interface ProjectSettings {
   exportAudioPreset: ExportAudioPreset;
   exportVideoPreset: ExportVideoPreset;
   cameraSyncOffsetMs: number;
+  pipSize: number;
 }
 
 export interface Take {
@@ -267,6 +271,13 @@ export function normalizeExportVideoPreset(value: unknown): ExportVideoPreset {
     : EXPORT_VIDEO_PRESET_QUALITY;
 }
 
+export function normalizePipSize(value: unknown): number {
+  const size = Number(value);
+  if (!Number.isFinite(size) || size <= 0) return DEFAULT_PIP_SIZE;
+  const rounded = Math.round(size);
+  return Math.max(MIN_PIP_SIZE, Math.min(MAX_PIP_SIZE, rounded));
+}
+
 export function createDefaultProject(name: unknown = 'Untitled Project'): ProjectData {
   const now = new Date().toISOString();
   return {
@@ -279,7 +290,8 @@ export function createDefaultProject(name: unknown = 'Untitled Project'): Projec
       hideFromRecording: true,
       exportAudioPreset: EXPORT_AUDIO_PRESET_COMPRESSED,
       exportVideoPreset: EXPORT_VIDEO_PRESET_QUALITY,
-      cameraSyncOffsetMs: 0
+      cameraSyncOffsetMs: 0,
+      pipSize: DEFAULT_PIP_SIZE
     },
     takes: [],
     timeline: {
@@ -321,7 +333,8 @@ export function normalizeProjectData(rawProject: unknown, projectFolder?: string
       hideFromRecording: rawSettings.hideFromRecording !== false,
       exportAudioPreset: normalizeExportAudioPreset(rawSettings.exportAudioPreset),
       exportVideoPreset: normalizeExportVideoPreset(rawSettings.exportVideoPreset),
-      cameraSyncOffsetMs: normalizeCameraSyncOffsetMs(rawSettings.cameraSyncOffsetMs)
+      cameraSyncOffsetMs: normalizeCameraSyncOffsetMs(rawSettings.cameraSyncOffsetMs),
+      pipSize: normalizePipSize(rawSettings.pipSize)
     },
     takes: rawTakes.map((rawTake, index) => {
       const take = isRecord(rawTake) ? (rawTake as PartialTakeInput) : ({} as PartialTakeInput);

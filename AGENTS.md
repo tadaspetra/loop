@@ -226,6 +226,7 @@ Default to:
 - Prefer resilient recording stop/finalize behavior: if one recorder (e.g. camera) fails during finalize, do not wedge the whole flow; allow partial success where possible and surface a clear error instead of hanging.
 - When judging recording reliability, do not treat helper-only unit tests as sufficient proof for real `MediaRecorder`, device, or OS-level capture edge cases.
 - Prefer making live transcription failures visible (surface realtime close/error reasons from Scribe) rather than failing silently when the WebSocket drops.
+- Treat recording durability as non-negotiable: an app crash, quit, or finalize failure must not lose captured bytes, and recovery must still surface whatever was saved.
 
 ## Learned Workspace Facts
 
@@ -240,3 +241,4 @@ Default to:
 - `@electron/packager` dependency pruning can miss transitive packages under `pnpm`’s symlinked `node_modules` layout (fresh CI installs surface this); the packaging smoke harness avoids relying on that prune path.
 - The Scribe live-transcription `AudioWorklet` (`audio-processor`) must load as a plain browser worklet script; compiling it with the main-process TypeScript target (e.g. CommonJS/NodeNext) breaks loading (`exports` undefined) and silently disables transcription-driven features.
 - `src/renderer/styles/main.css` is Tailwind build output (`build:styles`, minified); full `check` rebuilds styles via nested steps, so tracking a non-matching formatted copy causes perpetual diffs—prefer generating locally and not treating it as hand-edited source.
+- Recording durability depends on streaming `MediaRecorder` chunks directly to disk via IPC temp `.part` files (renamed on finalize) instead of buffering in the renderer; recovery normalization must require the screen file but tolerate a missing camera file so a partial failure does not discard an otherwise-recoverable take.
