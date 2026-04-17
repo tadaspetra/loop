@@ -103,16 +103,21 @@ describe('main/services/preview-render-service integration', () => {
     expect(fs.existsSync(result.path)).toBe(true);
 
     // The filter graph must include the per-recorder camera shift (80ms)
-    // because the preview must be sample-accurate even at low quality.
-    // cameraStartOffsetMs=80 shifts the camera trim window 80ms earlier.
-    // The stop_duration is the constant 0.250s safety pad that locks every
-    // section's output to its nominal length.
+    // so the preview stays sample-accurate. The shifted window starts
+    // 80ms before the source's t=0, so start_duration=0.080 clone-pads the
+    // missing prefix; no stop pad is needed because the shifted window
+    // still fits inside the source's tail. trim=duration caps the section
+    // to the nominal 1.000s.
     expect(capturedArgs).toHaveLength(1);
     expect(capturedArgs[0]).toContain(
-      '[1:v]trim=start=0.000:end=0.920,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.080:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]'
+      '[1:v]fps=30,trim=start=0.000:end=0.920,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.080:stop_mode=clone:stop_duration=0.000,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]'
     );
     // Post-concat fps normalization applies to the preview too.
-    expect(capturedArgs[0]).toContain('[screen_concat]fps=30,setsar=1[screen_raw]');
+    // fps normalization is applied BEFORE per-section trim (`[N:v]fps=30,trim=...`)
+    // so concat directly yields [screen_raw]; there is no intermediate
+    // [screen_concat] + post-concat fps filter.
+    expect(capturedArgs[0]).toContain('concat=n=1:v=1:a=1[screen_raw][audio_out]');
+    expect(capturedArgs[0]).not.toContain('screen_concat');
     // Preview runs the fast export preset: veryfast preset, crf 24.
     expect(capturedArgs[0]).toContain('-preset veryfast');
     expect(capturedArgs[0]).toContain('-crf 24');

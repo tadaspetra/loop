@@ -264,14 +264,18 @@ describe('main/services/render-service', () => {
     );
 
     const argString = execCalls[0].args.join(' ');
-    // Concat now emits [screen_concat][audio_out]; the fps=N step after the
-    // concat promotes it to [screen_raw]. The 'off' audio preset still maps
-    // audio_out directly to the output (no compressor).
-    expect(argString).toContain('[screen_concat][audio_out]');
-    expect(argString).toContain('[screen_concat]fps=30,setsar=1[screen_raw]');
+    // Concat now emits [screen_raw][audio_out] directly (each section was
+    // already CFR-normalized via `fps=N` BEFORE `trim`, so no post-concat
+    // fps filter is needed). The 'off' audio preset maps audio_out
+    // directly to the output with no compressor in the chain.
+    expect(argString).toContain('[screen_raw][audio_out]');
     expect(argString).toContain('-map [audio_out]');
     expect(argString).not.toContain('acompressor=');
     expect(argString).not.toContain('[audio_final]');
+    // fps=N should be present per-section (before trim), never in a
+    // separate post-concat chain that transforms [screen_raw].
+    expect(argString).not.toContain('[screen_raw]fps=');
+    expect(argString).not.toContain('screen_concat');
   });
 
   test('renderComposite applies compressor filter when export audio preset is compressed', async () => {
@@ -356,17 +360,17 @@ describe('main/services/render-service', () => {
     expect(argString).toContain(
       "[screen_raw]scale=1920:1080:flags=lanczos:force_original_aspect_ratio=increase,crop=1920:1080[screen_base];[screen_base]zoompan=z='2.000'"
     );
-    // Every section's video trim ends with a tpad safety-pad + trim=duration
-    // cap so the section's video length is EXACTLY the section's nominal
-    // duration, even if the VFR source produced a few frames fewer than
-    // expected. Without this, multi-section exports drifted audio-ahead
-    // of video over time because `atrim` is sample-accurate while bare
-    // `trim` on VFR quietly loses a frame-or-two per section.
-    expect(argString).toContain(
-      '[1:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]'
-    );
-    expect(argString).toContain('[cv0]concat=n=1:v=1:a=0[camera_concat]');
-    expect(argString).toContain('[camera_concat]fps=30,setsar=1[camera_raw]');
+    // No shift for this take, so the camera trim is a plain trim+setpts
+    // chain with `fps=N` INSERTED BEFORE the trim. Applying fps=N before
+    // trim (rather than after concat) lets per-section durations stay
+    // exactly matched to the sample-accurate audio even when the screen
+    // source is VFR with multi-second static-screen gaps.
+    expect(argString).toContain('[1:v]fps=30,trim=start=0.000:end=1.000,setpts=PTS-STARTPTS[cv0]');
+    expect(argString).toContain('[cv0]concat=n=1:v=1:a=0[camera_raw]');
+    // No post-concat fps filter on [camera_raw] — it's already CFR from
+    // the per-section fps=N preamble.
+    expect(argString).not.toContain('[camera_raw]fps=');
+    expect(argString).not.toContain('camera_concat');
     expect(argString).not.toContain('scale=3840:2160,crop=1920:1080:960:540[cv0]');
   });
 
@@ -481,13 +485,11 @@ describe('main/services/render-service', () => {
     );
 
     const argString = execCalls[0].args.join(' ');
-    // User camera sync offset shifts the sample window (no per-section fps
-    // anymore — that's applied once after the concat so multi-section
-    // trimmed durations do not drift). The tail stop_duration is the shift
-    // (0.120s) PLUS the constant 0.250s safety pad that locks every
-    // section's video length to the nominal section duration.
+    // User camera sync offset shifts the sample window; tpad + trim=duration
+    // is used to clone-pad past the source tail when the shifted window
+    // would otherwise run out of content.
     expect(argString).toContain(
-      '[1:v]trim=start=0.120:end=1.120,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.370,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]'
+      '[1:v]fps=30,trim=start=0.120:end=1.120,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.120,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]'
     );
   });
 
@@ -658,26 +660,28 @@ describe('main/services/render-service', () => {
     expect(args.filter((value) => value === cameraPath)).toHaveLength(1);
 
     const argString = args.join(' ');
-    // Every section trim locks its output to the nominal duration via a
-    // tpad safety pad + trim=duration cap. Without this, VFR sources
-    // quietly produce shorter-than-nominal video per section, causing
-    // multi-section exports to drift audio against video over time.
+    // Unshifted sections use a plain `trim=X:Y,setpts=PTS-STARTPTS` chain.
+    // The trim filter reports duration = (Y - X) to downstream concat and
+    // fps filters, which then line up with the sample-accurate atrim on
+    // the audio side. A single post-concat `fps=N` normalizes both video
+    // branches to CFR so the exported durations match.
     expect(argString).toContain(
-      '[0:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS,setsar=1[sv0]'
+      '[0:v]fps=30,trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,setsar=1[sv0]'
     );
     expect(argString).toContain(
-      '[0:v]trim=start=1.000:end=2.000,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS,setsar=1[sv1]'
+      '[0:v]fps=30,trim=start=1.000:end=2.000,setpts=PTS-STARTPTS,setsar=1[sv1]'
     );
-    expect(argString).toContain(
-      '[1:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]'
-    );
-    expect(argString).toContain(
-      '[1:v]trim=start=1.000:end=2.000,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS[cv1]'
-    );
-    expect(argString).toContain('concat=n=2:v=1:a=1[screen_concat][audio_out]');
-    expect(argString).toContain('[screen_concat]fps=30,setsar=1[screen_raw]');
-    expect(argString).toContain('[cv0][cv1]concat=n=2:v=1:a=0[camera_concat]');
-    expect(argString).toContain('[camera_concat]fps=30,setsar=1[camera_raw]');
+    expect(argString).toContain('[1:v]fps=30,trim=start=0.000:end=1.000,setpts=PTS-STARTPTS[cv0]');
+    expect(argString).toContain('[1:v]fps=30,trim=start=1.000:end=2.000,setpts=PTS-STARTPTS[cv1]');
+    expect(argString).toContain('concat=n=2:v=1:a=1[screen_raw][audio_out]');
+    expect(argString).toContain('[cv0][cv1]concat=n=2:v=1:a=0[camera_raw]');
+    // No post-concat fps step — each section is already CFR from the
+    // per-section preamble, so concat directly yields [screen_raw] /
+    // [camera_raw].
+    expect(argString).not.toContain('screen_concat');
+    expect(argString).not.toContain('camera_concat');
+    expect(argString).not.toContain('[screen_raw]fps=');
+    expect(argString).not.toContain('[camera_raw]fps=');
   });
 
   test('renderComposite keeps reused input indexes stable across mixed take ordering', async () => {
@@ -726,23 +730,17 @@ describe('main/services/render-service', () => {
     const argString = execCalls[0].args.join(' ');
     expect(execCalls[0].args.filter((value) => value === '-i')).toHaveLength(4);
     expect(argString).toContain(
-      '[0:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS,setsar=1[sv0]'
+      '[0:v]fps=30,trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,setsar=1[sv0]'
     );
     expect(argString).toContain(
-      '[2:v]trim=start=1.000:end=2.000,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS,setsar=1[sv1]'
+      '[2:v]fps=30,trim=start=1.000:end=2.000,setpts=PTS-STARTPTS,setsar=1[sv1]'
     );
     expect(argString).toContain(
-      '[0:v]trim=start=2.000:end=3.000,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS,setsar=1[sv2]'
+      '[0:v]fps=30,trim=start=2.000:end=3.000,setpts=PTS-STARTPTS,setsar=1[sv2]'
     );
-    expect(argString).toContain(
-      '[1:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]'
-    );
-    expect(argString).toContain(
-      '[3:v]trim=start=1.000:end=2.000,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS[cv1]'
-    );
-    expect(argString).toContain(
-      '[1:v]trim=start=2.000:end=3.000,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS[cv2]'
-    );
+    expect(argString).toContain('[1:v]fps=30,trim=start=0.000:end=1.000,setpts=PTS-STARTPTS[cv0]');
+    expect(argString).toContain('[3:v]fps=30,trim=start=1.000:end=2.000,setpts=PTS-STARTPTS[cv1]');
+    expect(argString).toContain('[1:v]fps=30,trim=start=2.000:end=3.000,setpts=PTS-STARTPTS[cv2]');
   });
 
   test('renderComposite normalizes VFR to CFR once after concat, not per-section', async () => {
@@ -785,26 +783,31 @@ describe('main/services/render-service', () => {
     );
 
     const argString = execCalls[0].args.join(' ');
-    // Per-section trims must NOT apply fps per section (that caused multi-
-    // section exports to drift a frame or two per section), but each section
-    // MUST still lock its output duration via tpad + trim=duration so
-    // VFR source quirks do not quietly shorten any section's video.
+    // Per-section trims stay as plain `trim=X:Y,setpts=PTS-STARTPTS,setsar=1`
+    // (no fps=N, no tpad, no trim=duration). The `trim` filter reports each
+    // section's declared duration (Y - X) to the concat filter, and a
+    // single post-concat `fps=N` normalizes the whole stream to CFR once.
+    // This keeps per-section video and audio durations byte-exactly
+    // equal to their nominal lengths.
     expect(argString).toContain(
-      '[0:v]trim=start=0.000:end=61.113,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=61.113,setpts=PTS-STARTPTS,setsar=1[sv0]'
+      '[0:v]fps=30,trim=start=0.000:end=61.113,setpts=PTS-STARTPTS,setsar=1[sv0]'
     );
     expect(argString).toContain(
-      '[0:v]trim=start=90.017:end=143.531,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=53.514,setpts=PTS-STARTPTS,setsar=1[sv1]'
+      '[0:v]fps=30,trim=start=90.017:end=143.531,setpts=PTS-STARTPTS,setsar=1[sv1]'
     );
     expect(argString).toContain(
-      '[0:v]trim=start=200.201:end=271.889,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=71.688,setpts=PTS-STARTPTS,setsar=1[sv2]'
+      '[0:v]fps=30,trim=start=200.201:end=271.889,setpts=PTS-STARTPTS,setsar=1[sv2]'
     );
-    // And the single fps normalization step runs after the concat once.
-    expect(argString).toContain('[screen_concat]fps=30,setsar=1[screen_raw]');
-    // Exactly one post-concat fps filter per branch: screen only here
-    // (single-branch export), so 'fps=30' appears exactly once in the
-    // filter graph when the overlay/zoompan path is not active.
+    // Each section emits its own `fps=N` BEFORE trim. There is no
+    // post-concat fps filter and no `screen_concat` intermediate label
+    // because concat feeds [screen_raw] directly.
+    expect(argString).toContain('concat=n=3:v=1:a=1[screen_raw][audio_out]');
+    expect(argString).not.toContain('screen_concat');
+    expect(argString).not.toContain('[screen_raw]fps=');
+    // Exactly one fps=N per section (3 screen sections, no camera in this
+    // test — so 3 total).
     const fps30Matches = (argString.match(/fps=30/g) || []).length;
-    expect(fps30Matches).toBe(1);
+    expect(fps30Matches).toBe(3);
     expect(execCalls[0].args).not.toContain('-r');
   });
 
@@ -1229,23 +1232,23 @@ describe('main/services/render-service', () => {
     );
 
     const argString = execCalls[0].args.join(' ');
-    // Interior section: shifting start by -0.15 lands on 1.85/2.85 cleanly
-    // (no shift-driven stop-pad needed), but the constant 0.250s safety pad
-    // is always present so the per-section video duration is locked to the
-    // nominal length even for VFR sources that otherwise lose a few frames.
+    // Shifted interior section: clean tpad + trim=duration chain so the
+    // shifted window can't fall off the source's t=0. No safety stop pad
+    // is added — adding one would over-extend the video vs its matching
+    // audio section and drift the export.
     expect(argString).toContain(
-      '[0:v]trim=start=1.850:end=2.850,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS,setsar=1[sv0]'
+      '[0:v]fps=30,trim=start=1.850:end=2.850,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.000,trim=duration=1.000,setpts=PTS-STARTPTS,setsar=1[sv0]'
     );
-    // Camera has no auto/user offset for this take, but still gets the same
-    // safety pad + trim=duration so audio/video stay locked in lockstep.
+    // Camera has no auto/user offset for this take, so its trim collapses
+    // to the plain `trim + setpts` chain that lines up byte-for-byte with
+    // the sample-accurate atrim on the audio side.
+    expect(argString).toContain('[1:v]fps=30,trim=start=2.000:end=3.000,setpts=PTS-STARTPTS[cv0]');
+    // Screen mic audio rides with the screen file, so it must be shifted
+    // by the same -150ms. Audio gets adelay only when the window crosses
+    // t=0 (not the case here); plain-looking atrim with the shift embedded
+    // in start/end keeps the audio aligned to the shifted video.
     expect(argString).toContain(
-      '[1:v]trim=start=2.000:end=3.000,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]'
-    );
-    // Screen mic audio rides with the screen file, so it must be shifted by
-    // the same -150ms. Audio always gets apad+atrim=duration so each
-    // section's audio length matches its video exactly.
-    expect(argString).toContain(
-      '[0:a]atrim=start=1.850:end=2.850,asetpts=PTS-STARTPTS,apad=pad_dur=0.250,atrim=duration=1.000,asetpts=PTS-STARTPTS[sa0]'
+      '[0:a]atrim=start=1.850:end=2.850,asetpts=PTS-STARTPTS,atrim=duration=1.000,asetpts=PTS-STARTPTS[sa0]'
     );
   });
 
@@ -1296,11 +1299,10 @@ describe('main/services/render-service', () => {
 
     const argString = execCalls[0].args.join(' ');
     // Interior section (sectionStart >> 0) with net negative shift: no
-    // start-pad (effectiveStart > 0), no shift-driven stop-pad (we're
-    // pulling from a still-valid range), but the 0.250s safety pad is
-    // always present for duration locking.
+    // start-pad (effectiveStart > 0) and no stop-pad (the shifted window
+    // stays inside the source). Output duration = nominal 1.000s.
     expect(argString).toContain(
-      '[1:v]trim=start=1.910:end=2.910,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]'
+      '[1:v]fps=30,trim=start=1.910:end=2.910,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.000,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]'
     );
   });
 
@@ -1348,12 +1350,12 @@ describe('main/services/render-service', () => {
     );
 
     const argString = execCalls[0].args.join(' ');
-    // start_duration=0.200 fills the 200ms missing prefix with clone frames;
-    // stop_duration=0.250 is the constant safety pad that locks every
-    // section's output to its nominal length (so VFR sources can't shorten
-    // it). trim=duration caps the final stream to exactly the section size.
+    // start_duration=0.200 fills the 200ms missing prefix with clone frames
+    // so the section's video window lines up with the section start. No
+    // stop pad is needed because the shifted window still fits in the
+    // source's tail.
     expect(argString).toContain(
-      '[1:v]trim=start=0.000:end=0.800,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.200:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]'
+      '[1:v]fps=30,trim=start=0.000:end=0.800,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.200:stop_mode=clone:stop_duration=0.000,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]'
     );
   });
 
@@ -1405,10 +1407,10 @@ describe('main/services/render-service', () => {
 
     const argString = execCalls[0].args.join(' ');
     // adelay prepends 90ms of silence so the audio lines up with the video
-    // section; apad then adds the 0.250s silence safety pad, and the final
-    // atrim=duration caps to exactly 1.000s.
+    // section, and the final atrim=duration clamps to exactly 1.000s.
+    // No apad stop pad here because the shifted window fits in the source.
     expect(argString).toContain(
-      '[1:a]atrim=start=0.000:end=0.910,asetpts=PTS-STARTPTS,adelay=90|90,apad=pad_dur=0.250,atrim=duration=1.000,asetpts=PTS-STARTPTS[sa0]'
+      '[1:a]atrim=start=0.000:end=0.910,asetpts=PTS-STARTPTS,adelay=90|90,atrim=duration=1.000,asetpts=PTS-STARTPTS[sa0]'
     );
   });
 
@@ -1457,47 +1459,55 @@ describe('main/services/render-service', () => {
     );
 
     const argString = execCalls[0].args.join(' ');
-    // Both concat branches get fps normalized once, AFTER the concat, not
-    // once per section — that is the whole point of the AGENTS.md rule.
-    expect(argString).toContain('concat=n=3:v=1:a=1[screen_concat][audio_out]');
-    expect(argString).toContain('[screen_concat]fps=30,setsar=1[screen_raw]');
-    expect(argString).toContain('[cv0][cv1][cv2]concat=n=3:v=1:a=0[camera_concat]');
-    expect(argString).toContain('[camera_concat]fps=30,setsar=1[camera_raw]');
-    // Exactly one fps step per branch — screen + camera + the zoompan path
-    // would add more only if background animation is enabled (not here).
+    // Both concat branches feed [screen_raw] / [camera_raw] directly —
+    // no post-concat fps step, because each section applied `fps=N`
+    // BEFORE its trim. That ordering is what keeps long VFR-with-gaps
+    // exports from drifting audio against video (applying fps AFTER
+    // setpts=PTS-STARTPTS on such sources stretches the per-section
+    // duration beyond the declared trim length).
+    expect(argString).toContain('concat=n=3:v=1:a=1[screen_raw][audio_out]');
+    expect(argString).toContain('[cv0][cv1][cv2]concat=n=3:v=1:a=0[camera_raw]');
+    expect(argString).not.toContain('screen_concat');
+    expect(argString).not.toContain('camera_concat');
+    expect(argString).not.toContain('[screen_raw]fps=');
+    expect(argString).not.toContain('[camera_raw]fps=');
+    // One fps=N per section per branch: 3 sections × 2 branches (screen +
+    // camera) = 6 total. No post-concat fps, so exactly 6.
     const fps30Matches = (argString.match(/fps=30/g) || []).length;
-    expect(fps30Matches).toBe(2);
+    expect(fps30Matches).toBe(6);
     // Each section's camera trim window is shifted 120ms earlier; interior
-    // sections (start >= 2s) need no start-pad and no shift-driven
-    // stop-pad, but every section still gets the constant 0.250s safety
-    // pad so `trim=duration=D` always hits D exactly even on VFR sources.
+    // sections (start >= 2s) need no start-pad and no shift-driven stop-pad
+    // because the shifted window stays inside the source.
     expect(argString).toContain(
-      '[1:v]trim=start=1.880:end=5.920,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=4.040,setpts=PTS-STARTPTS[cv0]'
+      '[1:v]fps=30,trim=start=1.880:end=5.920,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.000,trim=duration=4.040,setpts=PTS-STARTPTS[cv0]'
     );
     expect(argString).toContain(
-      '[1:v]trim=start=8.880:end=11.100,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=2.220,setpts=PTS-STARTPTS[cv1]'
+      '[1:v]fps=30,trim=start=8.880:end=11.100,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.000,trim=duration=2.220,setpts=PTS-STARTPTS[cv1]'
     );
     expect(argString).toContain(
-      '[1:v]trim=start=14.880:end=17.920,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=3.040,setpts=PTS-STARTPTS[cv2]'
+      '[1:v]fps=30,trim=start=14.880:end=17.920,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.000,trim=duration=3.040,setpts=PTS-STARTPTS[cv2]'
     );
   });
 
-  test('every section trim locks its output duration via tpad+trim=duration so VFR sources cannot drift audio against video', async () => {
-    // Regression guard. The original export pipeline wrapped each
-    // per-section `trim` with `fps=N,trim=duration=D` so any frame lost to
-    // VFR quantization on `trim=X:Y` was replaced by a duplicate/adjacent
-    // frame, keeping video section length exactly equal to audio section
-    // length. Phase 1c moved `fps=N` to a single post-concat filter, but
-    // it dropped the per-section `trim=duration=D` in the process, which
-    // let VFR sources quietly shorten per-section video by up to a frame.
-    // Over a many-section export that produced a growing audio-ahead-of-
-    // video offset — reported as "camera + audio drift" on long exports.
+  test('fps=N is applied BEFORE per-section trim (regression for VFR-gap post-setpts drift)', async () => {
+    // Regression guard for a class of bugs that drift audio against video
+    // on long multi-section exports of VFR screen captures:
     //
-    // This test pins the invariant: EVERY per-section video trim ends with
-    // `tpad=...,trim=duration=D,setpts=PTS-STARTPTS` and EVERY per-section
-    // audio trim ends with `apad=...,atrim=duration=D,asetpts=...` so both
-    // contribute exactly D seconds of content to the concat regardless of
-    // whether the source was VFR, short-tailed, or perfectly aligned.
+    // 1. `tpad + trim=duration=D` per section rounded video UP to the
+    //    next 30fps grid boundary while atrim stayed sample-accurate,
+    //    drifting a few ms per section.
+    // 2. Running `fps=N` AFTER `setpts=PTS-STARTPTS` on a source with
+    //    multi-second VFR gaps (getDisplayMedia only emits frames on
+    //    screen change) made each section's fps-filtered video up to
+    //    780ms longer than its nominal duration, drifting far more
+    //    dramatically.
+    //
+    // The fix, pinned by this test: `fps=N` MUST run BEFORE `trim` on
+    // each video input reference so the fps filter sees the original
+    // source PTS (including any gaps) and resamples against them
+    // correctly. Audio stays sample-accurate via plain atrim. No
+    // post-concat fps filter is used — per-section CFR propagates
+    // through concat to the output directly.
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-section-duration-lock-'));
     const outputDir = path.join(tmpDir, 'out');
     const screenPath = path.join(tmpDir, 'screen.webm');
@@ -1517,6 +1527,8 @@ describe('main/services/render-service', () => {
     await renderComposite(
       {
         outputFolder: outputDir,
+        // Take has NO start-offset shift; all three sources are anchored
+        // together, which is the common case we want to lock.
         takes: [{ id: 'take-1', screenPath, cameraPath }],
         sections,
         keyframes: [
@@ -1541,27 +1553,38 @@ describe('main/services/render-service', () => {
 
     const argString = execCalls[0].args.join(' ');
     for (let index = 0; index < sections.length; index += 1) {
-      const duration = (sections[index].sourceEnd - sections[index].sourceStart).toFixed(3);
-      // Screen video must end with `trim=duration=D,setpts=PTS-STARTPTS`.
-      expect(argString).toMatch(
-        new RegExp(
-          `\\[0:v\\][^;]*?trim=duration=${duration}[^,]*,setpts=PTS-STARTPTS[^;]*?\\[sv${index}\\]`
-        )
+      const start = sections[index].sourceStart.toFixed(3);
+      const end = sections[index].sourceEnd.toFixed(3);
+      // fps=N precedes the trim — NOT the other way around, NOT
+      // post-concat. Screen and camera video both get the same
+      // pre-trim CFR normalization.
+      expect(argString).toContain(
+        `[0:v]fps=30,trim=start=${start}:end=${end},setpts=PTS-STARTPTS,setsar=1[sv${index}]`
       );
-      // Camera video must end the same way.
-      expect(argString).toMatch(
-        new RegExp(
-          `\\[1:v\\][^;]*?trim=duration=${duration}[^,]*,setpts=PTS-STARTPTS\\[cv${index}\\]`
-        )
+      expect(argString).toContain(
+        `[1:v]fps=30,trim=start=${start}:end=${end},setpts=PTS-STARTPTS[cv${index}]`
       );
-      // Audio must end with `atrim=duration=D,asetpts=...` so it contributes
-      // exactly D seconds to the audio concat — matching the video length.
-      expect(argString).toMatch(
-        new RegExp(
-          `\\[0:a\\][^;]*?atrim=duration=${duration}[^,]*,asetpts=PTS-STARTPTS\\[sa${index}\\]`
-        )
+      // Plain sample-accurate audio trim — explicitly NO apad, NO
+      // atrim=duration. Audio is inherently CFR (sample-rate aligned)
+      // so no preamble is needed.
+      expect(argString).toContain(
+        `[0:a]atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS[sa${index}]`
       );
     }
+    // No per-section duration-cap chains (they introduced frame-grid
+    // rounding that drifted audio vs video).
+    expect(argString).not.toContain('tpad=');
+    expect(argString).not.toContain('trim=duration=');
+    expect(argString).not.toContain('apad=');
+    expect(argString).not.toContain('atrim=duration=');
+    // And NO post-concat fps filter — concat feeds [screen_raw] / [camera_raw]
+    // directly. Running fps after concat on an already-CFR stream is a
+    // no-op at best and the direct cause of the regressed drift before
+    // we moved fps pre-trim.
+    expect(argString).not.toContain('screen_concat');
+    expect(argString).not.toContain('camera_concat');
+    expect(argString).not.toContain('[screen_raw]fps=');
+    expect(argString).not.toContain('[camera_raw]fps=');
   });
 
   test('renderComposite keeps overlay filters bounded for long redundant camera timelines', async () => {

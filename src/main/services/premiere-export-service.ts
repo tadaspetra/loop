@@ -84,11 +84,11 @@ function sanitizeTakeIdForFileName(takeId: string): string {
 }
 
 function screenOutputName(takeId: string): string {
-  return `screen-${sanitizeTakeIdForFileName(takeId)}.mov`;
+  return `screen-${sanitizeTakeIdForFileName(takeId)}.mp4`;
 }
 
 function cameraOutputName(takeId: string): string {
-  return `camera-${sanitizeTakeIdForFileName(takeId)}.mov`;
+  return `camera-${sanitizeTakeIdForFileName(takeId)}.mp4`;
 }
 
 function audioOutputName(takeId: string): string {
@@ -101,9 +101,19 @@ function roundDownToEven(value: number): number {
   return rounded % 2 === 0 ? rounded : rounded - 1;
 }
 
-function buildScreenTranscodeArgs(inputPath: string, outputPath: string): string[] {
-  // Preserve native resolution and framerate; only re-encode to ProRes so Premiere
-  // imports natively. No scaling or cropping: user keeps full source pixels.
+// High-quality (visually lossless) H.264 MP4 is used as the Premiere
+// intermediate: Premiere imports it natively, scrubbing is smooth enough for
+// editing, and file sizes stay ~10-30x smaller than ProRes 422 LT. Every
+// transcode force-normalizes VFR WebM input to CFR (fps filter + -fps_mode)
+// so MediaRecorder's variable timestamps don't expand the camera file's
+// duration (e.g. 15 min becoming 48 min at 150+ GB) or make playback speed
+// fluctuate between "fast" and "slow-mo" regions.
+function buildScreenTranscodeArgs(
+  inputPath: string,
+  outputPath: string,
+  targetFps: number
+): string[] {
+  const gop = String(Math.max(2, Math.round(targetFps * 2)));
   return [
     '-progress',
     'pipe:1',
@@ -116,20 +126,30 @@ function buildScreenTranscodeArgs(inputPath: string, outputPath: string): string
     '0:v:0?',
     '-map',
     '0:a:0?',
+    '-vf',
+    `fps=${targetFps},setsar=1`,
+    '-fps_mode',
+    'cfr',
     '-c:v',
-    'prores_ks',
-    '-profile:v',
-    '1',
-    '-vendor',
-    'apl0',
+    'libx264',
+    '-crf',
+    '18',
+    '-preset',
+    'medium',
     '-pix_fmt',
-    'yuv422p10le',
+    'yuv420p',
+    '-g',
+    gop,
     '-c:a',
-    'pcm_s16le',
+    'aac',
+    '-b:a',
+    '192k',
     '-ar',
     '48000',
     '-ac',
     '2',
+    '-movflags',
+    '+faststart',
     '-y',
     outputPath
   ];
@@ -139,10 +159,11 @@ function buildCameraTranscodeArgs(
   inputPath: string,
   outputPath: string,
   cameraSyncOffsetMs: number,
-  includeAudio: boolean
+  includeAudio: boolean,
+  targetFps: number
 ): string[] {
-  // Mirror horizontally only; preserve native dimensions so the user can
-  // expand / re-crop the full camera frame in Premiere.
+  // Mirror horizontally + force CFR. Preserves native dimensions so the user
+  // can expand / re-crop the full camera frame in Premiere.
   const offsetSec = normalizeCameraSyncOffsetMs(cameraSyncOffsetMs) / 1000;
   const args = [
     '-progress',
@@ -154,32 +175,37 @@ function buildCameraTranscodeArgs(
   if (Math.abs(offsetSec) > 0.0005) {
     args.push('-itsoffset', (-offsetSec).toFixed(3));
   }
-  args.push('-i', inputPath, '-map', '0:v:0?', '-vf', 'hflip,setsar=1');
+  args.push(
+    '-i',
+    inputPath,
+    '-map',
+    '0:v:0?',
+    '-vf',
+    `hflip,fps=${targetFps},setsar=1`,
+    '-fps_mode',
+    'cfr'
+  );
   if (includeAudio) {
     // Camera file owns the mic for this take; preserve it so Premiere can
     // import the PiP clip with its built-in audio track.
-    args.push(
-      '-map',
-      '0:a:0?',
-      '-c:a',
-      'pcm_s16le',
-      '-ar',
-      '48000',
-      '-ac',
-      '2'
-    );
+    args.push('-map', '0:a:0?', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2');
   } else {
     args.push('-an');
   }
+  const gop = String(Math.max(2, Math.round(targetFps * 2)));
   args.push(
     '-c:v',
-    'prores_ks',
-    '-profile:v',
-    '1',
-    '-vendor',
-    'apl0',
+    'libx264',
+    '-crf',
+    '18',
+    '-preset',
+    'medium',
     '-pix_fmt',
-    'yuv422p10le',
+    'yuv420p',
+    '-g',
+    gop,
+    '-movflags',
+    '+faststart',
     '-y',
     outputPath
   );
@@ -345,13 +371,14 @@ export async function exportPremiereProject(
 
     let args: string[];
     if (job.kind === 'screen') {
-      args = buildScreenTranscodeArgs(job.inputPath, job.outputPath);
+      args = buildScreenTranscodeArgs(job.inputPath, job.outputPath, targetFps);
     } else if (job.kind === 'camera') {
       args = buildCameraTranscodeArgs(
         job.inputPath,
         job.outputPath,
         opts.cameraSyncOffsetMs,
-        job.includeCameraAudio === true
+        job.includeCameraAudio === true,
+        targetFps
       );
     } else {
       args = buildAudioTranscodeArgs(job.inputPath, job.outputPath);
@@ -389,6 +416,13 @@ export async function exportPremiereProject(
     });
     completedJobs += 1;
   }
+
+  onProgress?.({
+    phase: 'finalizing',
+    percent: 0.99,
+    status: 'Writing Premiere XML...',
+    durationSec: 0
+  });
 
   const exportTakes: PremiereTake[] = Array.from(referencedTakeIds).map((takeId) => {
     const take = takeMap.get(takeId);

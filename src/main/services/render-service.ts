@@ -263,53 +263,43 @@ function hasMeaningfulShift(shiftSec: number): boolean {
   return Number.isFinite(shiftSec) && Math.abs(shiftSec) >= 0.0005;
 }
 
-// Safety pad added to the end of every trimmed video section so the final
-// `trim=duration=D` can always hit the exact nominal section length. This
-// absorbs:
-//
-// 1. VFR frame-quantization loss — a naive `trim=X:Y` on a 29.25fps source
-//    can produce a stream whose actual last-frame PTS is a frame or two
-//    shy of Y. Audio `atrim=X:Y` is sample-accurate (no such loss), so
-//    without this pad the per-section video duration is <= audio duration
-//    and the mismatch accumulates into a visible audio-leads-video drift
-//    over multi-section exports.
-// 2. Future-shift shortfall when `shiftSec > 0` runs off the end of the
-//    source file; the `max(0, shiftSec)` term below covers that case on
-//    top of the baseline safety pad.
-const VIDEO_TRIM_SAFETY_STOP_PAD_SEC = 0.25;
-
 function buildShiftedVideoTrim(
   inputLabel: string,
   sectionStart: number,
   sectionEnd: number,
   shiftSec: number,
+  targetFps: number,
   outputLabel: string,
   tailFilter: string
 ): string {
   const suffix = tailFilter ? `,${tailFilter}` : '';
-  const shift = Number.isFinite(shiftSec) ? shiftSec : 0;
-  const meaningfulShift = hasMeaningfulShift(shift);
-  const baseWindow = meaningfulShift
-    ? computeShiftedTrimWindow(sectionStart, sectionEnd, shift)
-    : {
-        sampleStart: sectionStart,
-        sampleEnd: sectionEnd,
-        startPad: 0,
-        stopPad: 0,
-        duration: Math.max(0, sectionEnd - sectionStart)
-      };
-  const stopPad = baseWindow.stopPad + VIDEO_TRIM_SAFETY_STOP_PAD_SEC;
-  return `${inputLabel}trim=start=${baseWindow.sampleStart.toFixed(3)}:end=${baseWindow.sampleEnd.toFixed(3)},setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=${baseWindow.startPad.toFixed(3)}:stop_mode=clone:stop_duration=${stopPad.toFixed(3)},trim=duration=${baseWindow.duration.toFixed(3)},setpts=PTS-STARTPTS${suffix}${outputLabel}`;
+  // CFR-normalize the input BEFORE trim. This is critical for sources that
+  // contain large VFR gaps (e.g. desktop capture via getDisplayMedia only
+  // emits frames when the screen content changes — static-screen stretches
+  // show up as multi-second PTS gaps). Running `trim,setpts=PTS-STARTPTS`
+  // on such a source and THEN `fps=N` produced ~2% per-section duration
+  // overshoot (~780 ms on a 40-second section) because the fps filter's
+  // output timing gets confused once setpts has discarded the original
+  // PTS anchor and only gap-frames remain. Moving `fps=N` to BEFORE the
+  // trim gives the fps filter the original PTS to resample against, so
+  // each section contributes exactly its declared `end - start` seconds
+  // of video. Audio stays sample-accurate via atrim, and post-concat
+  // CFR normalization is no longer needed.
+  const fpsPrefix = `fps=${targetFps}`;
+  if (!hasMeaningfulShift(shiftSec)) {
+    return `${inputLabel}${fpsPrefix},trim=start=${sectionStart.toFixed(3)}:end=${sectionEnd.toFixed(3)},setpts=PTS-STARTPTS${suffix}${outputLabel}`;
+  }
+  // For a meaningful shift, we still need tpad + trim=duration so the
+  // shifted window can clone-pad across the source boundary it would
+  // otherwise fall off. This path is only taken when recorder-start
+  // offsets or the user's camera-sync offset are non-trivial.
+  const { sampleStart, sampleEnd, startPad, stopPad, duration } = computeShiftedTrimWindow(
+    sectionStart,
+    sectionEnd,
+    shiftSec
+  );
+  return `${inputLabel}${fpsPrefix},trim=start=${sampleStart.toFixed(3)}:end=${sampleEnd.toFixed(3)},setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=${startPad.toFixed(3)}:stop_mode=clone:stop_duration=${stopPad.toFixed(3)},trim=duration=${duration.toFixed(3)},setpts=PTS-STARTPTS${suffix}${outputLabel}`;
 }
-
-// Mirror of `VIDEO_TRIM_SAFETY_STOP_PAD_SEC` for audio: every section's
-// `atrim` is followed by a small `apad` + final-`atrim=duration` cap so the
-// per-section audio length is exactly the section's nominal duration. Audio
-// `atrim` is normally sample-accurate, but if a recording was cut short
-// (e.g. camera file ends a few frames before screen), the tail section's
-// audio would otherwise be shorter than its video, which would propagate
-// through `concat` into multi-section audio/video drift.
-const AUDIO_TRIM_SAFETY_STOP_PAD_SEC = 0.25;
 
 function buildShiftedAudioTrim(
   inputLabel: string,
@@ -318,31 +308,37 @@ function buildShiftedAudioTrim(
   shiftSec: number,
   outputLabel: string
 ): string {
-  const shift = Number.isFinite(shiftSec) ? shiftSec : 0;
-  const meaningfulShift = hasMeaningfulShift(shift);
-  const baseWindow = meaningfulShift
-    ? computeShiftedTrimWindow(sectionStart, sectionEnd, shift)
-    : {
-        sampleStart: sectionStart,
-        sampleEnd: sectionEnd,
-        startPad: 0,
-        stopPad: 0,
-        duration: Math.max(0, sectionEnd - sectionStart)
-      };
+  // Plain `atrim=X:Y,asetpts=PTS-STARTPTS` is sample-accurate and matches
+  // the plain-trim video path exactly. Adding `apad + atrim=duration` here
+  // (or introducing any other "safety" tail pad) only makes sense when
+  // there is a meaningful shift that could push the window past the source
+  // tail — in the common unshifted case it is pure overhead and, worse,
+  // must be kept in lockstep with the video-side padding or the export
+  // drifts audio against video per section.
+  if (!hasMeaningfulShift(shiftSec)) {
+    return `${inputLabel}atrim=start=${sectionStart.toFixed(3)}:end=${sectionEnd.toFixed(3)},asetpts=PTS-STARTPTS${outputLabel}`;
+  }
+  const { sampleStart, sampleEnd, startPad, stopPad, duration } = computeShiftedTrimWindow(
+    sectionStart,
+    sectionEnd,
+    shiftSec
+  );
   const filters: string[] = [
-    `atrim=start=${baseWindow.sampleStart.toFixed(3)}:end=${baseWindow.sampleEnd.toFixed(3)}`,
+    `atrim=start=${sampleStart.toFixed(3)}:end=${sampleEnd.toFixed(3)}`,
     'asetpts=PTS-STARTPTS'
   ];
-  if (baseWindow.startPad > 0) {
-    const startPadMs = Math.round(baseWindow.startPad * 1000);
+  // Prepend silence when the shifted window starts before t=0 in the source.
+  if (startPad > 0) {
+    const startPadMs = Math.round(startPad * 1000);
     filters.push(`adelay=${startPadMs}|${startPadMs}`);
   }
-  // Always `apad` so the downstream `atrim=duration` can guarantee the
-  // section's exact length even if the shifted window (or the source itself)
-  // ran short of the nominal end.
-  const stopPad = baseWindow.stopPad + AUDIO_TRIM_SAFETY_STOP_PAD_SEC;
-  filters.push(`apad=pad_dur=${stopPad.toFixed(3)}`);
-  filters.push(`atrim=duration=${baseWindow.duration.toFixed(3)}`);
+  // Pad end with silence so the final atrim=duration can hit the exact
+  // section length even when the shifted window runs past the source's
+  // tail.
+  if (stopPad > 0) {
+    filters.push(`apad=pad_dur=${stopPad.toFixed(3)}`);
+  }
+  filters.push(`atrim=duration=${duration.toFixed(3)}`);
   filters.push('asetpts=PTS-STARTPTS');
   return `${inputLabel}${filters.join(',')}${outputLabel}`;
 }
@@ -365,7 +361,7 @@ function buildShiftedAudioTrim(
 export function buildCameraTrimFilter(
   cameraIdx: number,
   section: RenderSectionInput,
-  _targetFps: number,
+  targetFps: number,
   index: number,
   cameraSyncOffsetMs: number,
   cameraStartOffsetMs = 0
@@ -378,6 +374,7 @@ export function buildCameraTrimFilter(
     Number(section.sourceStart),
     Number(section.sourceEnd),
     shiftSec,
+    targetFps,
     `[cv${index}]`,
     ''
   );
@@ -676,9 +673,12 @@ export async function renderComposite(
 
     // Screen video trim — for ordinary video sections we shift the source
     // window by (-screenStartOffsetMs) so the trim refers to the same
-    // real-world moment as other sources in this take; fps normalization
-    // happens once, after the screen concat, per the AGENTS.md guidance that
-    // per-section fps rounding can drift trimmed durations.
+    // real-world moment as other sources in this take. Each section's
+    // filter chain runs `fps=targetFps` on the source BEFORE trim so the
+    // trim operates on a CFR stream; that's what keeps multi-section
+    // exports byte-accurate even when the screen source is VFR with large
+    // gaps from static-screen capture (see buildShiftedVideoTrim comment
+    // for the drift mechanism we're avoiding).
     const screenShiftSec = -screenStartOffsetMs / 1000;
     if (imageIdx >= 0) {
       const imageScale =
@@ -696,6 +696,7 @@ export async function renderComposite(
           sectionStart,
           sectionEnd,
           screenShiftSec,
+          targetFps,
           `[sv${index}]`,
           tail
         )
@@ -707,6 +708,7 @@ export async function renderComposite(
           sectionStart,
           sectionEnd,
           screenShiftSec,
+          targetFps,
           `[sv${index}]`,
           'setsar=1'
         )
@@ -767,13 +769,16 @@ export async function renderComposite(
   }
 
   const screenLabels = sections.map((_, index) => `[sv${index}][sa${index}]`).join('');
-  // concat produces VFR output; normalize to a single post-concat fps so
-  // per-section trimmed durations stay matched instead of drifting by a few
-  // frames per section when the source is VFR (see AGENTS.md learned fact).
+  // Each [svN] was already CFR-normalized to `targetFps` by the per-section
+  // `fps=N,trim=...` chain, so concat'ing them yields a CFR stream directly
+  // — no post-concat fps filter required. Running fps here on an already-
+  // CFR concat output is a no-op at best and, when the per-section trim
+  // ran on VFR input without pre-trim CFR, extends each section's reported
+  // duration beyond its declared length and drifts audio against video
+  // (that was the "audio drifts later into the export" regression).
   filterParts.push(
-    `${screenLabels}concat=n=${sections.length}:v=1:a=1[screen_concat][audio_out]`
+    `${screenLabels}concat=n=${sections.length}:v=1:a=1[screen_raw][audio_out]`
   );
-  filterParts.push(`[screen_concat]fps=${targetFps},setsar=1[screen_raw]`);
   const exportAudioLabel = buildExportAudioLabel(exportAudioPreset);
   if (exportAudioLabel === 'audio_final') {
     filterParts.push(
@@ -803,8 +808,7 @@ export async function renderComposite(
     }
 
     const cameraLabels = sections.map((_, index) => `[cv${index}]`).join('');
-    filterParts.push(`${cameraLabels}concat=n=${sections.length}:v=1:a=0[camera_concat]`);
-    filterParts.push(`[camera_concat]fps=${targetFps},setsar=1[camera_raw]`);
+    filterParts.push(`${cameraLabels}concat=n=${sections.length}:v=1:a=0[camera_raw]`);
     const overlayFilter = buildFilterComplex(
       keyframes,
       pipSize,

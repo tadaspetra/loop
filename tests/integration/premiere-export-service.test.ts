@@ -107,44 +107,51 @@ describe('main/services/premiere-export-service', () => {
       },
       runFfmpeg: createRunFfmpegStub(calls, (call) => {
         const outPath = call.args[call.args.length - 1];
-        if (outPath && outPath.endsWith('.mov')) {
+        if (outPath && outPath.endsWith('.mp4')) {
           fs.mkdirSync(path.dirname(outPath), { recursive: true });
-          fs.writeFileSync(outPath, 'prores-data', 'utf8');
+          fs.writeFileSync(outPath, 'mp4-data', 'utf8');
         }
       })
     });
 
     expect(calls).toHaveLength(2);
     const allArgs = calls.map((c) => c.args.join(' '));
-    expect(allArgs.some((a) => a.includes('screen-take-1.mov'))).toBe(true);
-    expect(allArgs.some((a) => a.includes('camera-take-1.mov'))).toBe(true);
+    expect(allArgs.some((a) => a.includes('screen-take-1.mp4'))).toBe(true);
+    expect(allArgs.some((a) => a.includes('camera-take-1.mp4'))).toBe(true);
 
+    // Both transcodes must be H.264 MP4 (smaller than ProRes) and force CFR
+    // so VFR WebM sources don't balloon the output duration / file size.
     for (const call of calls) {
       const joined = call.args.join(' ');
-      expect(joined).toContain('-c:v prores_ks');
-      expect(joined).toContain('-profile:v 1');
-      expect(joined).toContain('-pix_fmt yuv422p10le');
+      expect(joined).toContain('-c:v libx264');
+      expect(joined).toContain('-crf 18');
+      expect(joined).toContain('-pix_fmt yuv420p');
+      expect(joined).toContain('-fps_mode cfr');
+      expect(joined).toContain('fps=30');
+      expect(joined).toContain('-movflags +faststart');
+      expect(joined).not.toContain('prores_ks');
     }
 
-    // Camera filter must only hflip (no center-crop) so native dims survive.
-    const cameraCall = calls.find((c) => c.args.join(' ').includes('camera-take-1.mov'));
+    // Camera filter hflip + fps + setsar (no center-crop so native dims survive).
+    const cameraCall = calls.find((c) => c.args.join(' ').includes('camera-take-1.mp4'));
     expect(cameraCall).toBeDefined();
     const cameraFilters = cameraCall!.args.join(' ');
-    expect(cameraFilters).toContain('hflip');
+    expect(cameraFilters).toContain('hflip,fps=30,setsar=1');
     expect(cameraFilters).not.toContain('crop=');
 
-    // Screen transcode must not apply any scaling filter (native resolution preserved).
-    const screenCall = calls.find((c) => c.args.join(' ').includes('screen-take-1.mov'));
+    // Screen transcode normalizes to CFR via fps filter (no scaling).
+    const screenCall = calls.find((c) => c.args.join(' ').includes('screen-take-1.mp4'));
     expect(screenCall).toBeDefined();
-    expect(screenCall!.args).not.toContain('-vf');
+    const screenJoined = screenCall!.args.join(' ');
+    expect(screenJoined).toContain('-vf fps=30,setsar=1');
 
     const xmlPath = path.join(opts.outputFolder, 'My Project.xml');
     expect(fs.existsSync(xmlPath)).toBe(true);
     const xml = fs.readFileSync(xmlPath, 'utf8');
     expect(xml).toContain('<xmeml version="5">');
     expect(xml).toContain('My Project');
-    expect(xml).toContain('screen-take-1.mov');
-    expect(xml).toContain('camera-take-1.mov');
+    expect(xml).toContain('screen-take-1.mp4');
+    expect(xml).toContain('camera-take-1.mp4');
     // Sequence adopts the probed native screen dimensions (3840x2160), not a cap.
     expect(xml).toContain('<width>3840</width>');
     expect(xml).toContain('<height>2160</height>');
@@ -177,7 +184,7 @@ describe('main/services/premiere-export-service', () => {
       probeVideoDimensionsWithFfmpeg: async () => ({ width: 1920, height: 1080 }),
       runFfmpeg: createRunFfmpegStub(calls, (call) => {
         const outPath = call.args[call.args.length - 1];
-        if (outPath && outPath.endsWith('.mov')) {
+        if (outPath && outPath.endsWith('.mp4')) {
           fs.mkdirSync(path.dirname(outPath), { recursive: true });
           fs.writeFileSync(outPath, 'prores-data', 'utf8');
         }
@@ -185,7 +192,7 @@ describe('main/services/premiere-export-service', () => {
     });
 
     expect(calls).toHaveLength(1);
-    expect(calls[0].args.join(' ')).toContain('screen-take-1.mov');
+    expect(calls[0].args.join(' ')).toContain('screen-take-1.mp4');
   });
 
   test('exportPremiereProject emits progress updates across transcodes', async () => {
@@ -212,7 +219,7 @@ describe('main/services/premiere-export-service', () => {
         });
         onProgress?.({ status: 'end', outTimeSec: 4, frame: null, speed: null, fps: null, raw: {} });
         const outPath = args[args.length - 1];
-        if (outPath && outPath.endsWith('.mov')) {
+        if (outPath && outPath.endsWith('.mp4')) {
           fs.mkdirSync(path.dirname(outPath), { recursive: true });
           fs.writeFileSync(outPath, 'prores-data', 'utf8');
         }
@@ -243,7 +250,7 @@ describe('main/services/premiere-export-service', () => {
       probeVideoDimensionsWithFfmpeg: async () => ({ width: 1920, height: 1080 }),
       runFfmpeg: createRunFfmpegStub(calls, (call) => {
         const outPath = call.args[call.args.length - 1];
-        if (outPath && outPath.endsWith('.mov')) {
+        if (outPath && outPath.endsWith('.mp4')) {
           fs.mkdirSync(path.dirname(outPath), { recursive: true });
           fs.writeFileSync(outPath, 'prores-data', 'utf8');
         }
