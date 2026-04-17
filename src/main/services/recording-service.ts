@@ -256,15 +256,16 @@ export function findOrphanRecordingParts(folder: string): string[] {
  */
 
 const ORPHAN_FILENAME_PATTERN =
-  /^\.recording-(.+)-(screen|camera)-([0-9a-f]{6})\.webm\.part$/;
+  /^\.recording-(.+)-(screen|camera|audio)-([0-9a-f]{6})\.webm\.part$/;
 
-type OrphanSuffix = 'screen' | 'camera';
+type OrphanSuffix = 'screen' | 'camera' | 'audio';
 
 export interface OrphanRecordingCandidate {
   takeId: string;
   createdAt: string;
   screen: { partPath: string; bytes: number } | null;
   camera: { partPath: string; bytes: number } | null;
+  audio: { partPath: string; bytes: number } | null;
 }
 
 export interface RecoveredOrphanRecording {
@@ -272,6 +273,12 @@ export interface RecoveredOrphanRecording {
   createdAt: string;
   screenPath: string | null;
   cameraPath: string | null;
+  audioPath: string | null;
+  // 'screen' for legacy (mic muxed into screen) or when nothing is known.
+  // 'camera' when the camera webm owns the mic audio.
+  // 'external' when recovery found a dedicated audio .webm next to the screen.
+  // null when no mic was detected for the orphan take.
+  audioSource: 'screen' | 'camera' | 'external' | null;
 }
 
 function parseOrphanPartFilename(filename: string): { takeId: string; suffix: OrphanSuffix } | null {
@@ -316,7 +323,8 @@ export function scanOrphanRecordings(folder: string): OrphanRecordingCandidate[]
         takeId: parsed.takeId,
         createdAt: inferOrphanCreatedAt(parsed.takeId),
         screen: null,
-        camera: null
+        camera: null,
+        audio: null
       };
       groups.set(parsed.takeId, group);
     }
@@ -348,9 +356,10 @@ export function recoverOrphanRecording(
   // timeline section that points at it.
   const screenBytes = candidate.screen?.bytes ?? 0;
   if (!candidate.screen || screenBytes <= 0) {
-    // Clean up orphaned camera-only .part files so the folder doesn't stay
-    // cluttered with unusable fragments.
+    // Clean up orphaned camera/audio-only .part files so the folder doesn't
+    // stay cluttered with unusable fragments.
     if (candidate.camera?.partPath) safeUnlink(candidate.camera.partPath);
+    if (candidate.audio?.partPath) safeUnlink(candidate.audio.partPath);
     return null;
   }
 
@@ -358,10 +367,12 @@ export function recoverOrphanRecording(
     takeId,
     createdAt: candidate.createdAt,
     screenPath: null,
-    cameraPath: null
+    cameraPath: null,
+    audioPath: null,
+    audioSource: null
   };
 
-  for (const suffix of ['screen', 'camera'] as const) {
+  for (const suffix of ['screen', 'camera', 'audio'] as const) {
     const entry = candidate[suffix];
     if (!entry) continue;
     if (!fs.existsSync(entry.partPath)) continue;
@@ -369,13 +380,25 @@ export function recoverOrphanRecording(
     try {
       fs.renameSync(entry.partPath, finalPath);
       if (suffix === 'screen') recovered.screenPath = finalPath;
-      else recovered.cameraPath = finalPath;
+      else if (suffix === 'camera') recovered.cameraPath = finalPath;
+      else recovered.audioPath = finalPath;
     } catch (error) {
       console.warn(`[recording] Failed to rename ${entry.partPath}:`, error);
     }
   }
 
   if (!recovered.screenPath) return null;
+  // Audio routing is inferred from what actually survived on disk: prefer the
+  // dedicated audio file (screen-only recordings), then the camera file
+  // (camera + mic recordings), falling back to the legacy "audio on screen"
+  // assumption so historical recordings keep their mic.
+  if (recovered.audioPath) {
+    recovered.audioSource = 'external';
+  } else if (recovered.cameraPath) {
+    recovered.audioSource = 'camera';
+  } else {
+    recovered.audioSource = 'screen';
+  }
   return recovered;
 }
 
@@ -386,7 +409,7 @@ export function discardOrphanRecording(
   const candidate = scanOrphanRecordings(folder).find((c) => c.takeId === takeId);
   if (!candidate) return { discarded: 0 };
   let discarded = 0;
-  for (const suffix of ['screen', 'camera'] as const) {
+  for (const suffix of ['screen', 'camera', 'audio'] as const) {
     const entry = candidate[suffix];
     if (!entry) continue;
     safeUnlink(entry.partPath);

@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest';
 import { vi } from 'vitest';
 
 import {
+  createAudioOnlyRecordingStream,
   createCameraRecordingStream,
   createScreenRecordingStream,
   finalizeStreamedRecording,
@@ -68,7 +69,7 @@ describe('recorder-utils', () => {
     expect(shouldRenderPreviewFrame(90, 20, true)).toBe(false);
   });
 
-  test('creates a camera-only recording stream with video tracks only', () => {
+  test('creates a camera-only recording stream with video tracks only when no mic is provided', () => {
     const videoTracks = [{ id: 'cam-video-1' }, { id: 'cam-video-2' }];
     const cameraStream = {
       getVideoTracks: () => videoTracks,
@@ -84,6 +85,7 @@ describe('recorder-utils', () => {
 
     const recordingStream = createCameraRecordingStream(
       cameraStream as unknown as MediaStream,
+      null,
       FakeMediaStream as unknown as typeof MediaStream
     );
     expect(recordingStream).toBeInstanceOf(FakeMediaStream);
@@ -92,12 +94,15 @@ describe('recorder-utils', () => {
     );
   });
 
-  test('creates a screen recording stream with screen video and microphone audio tracks', () => {
-    const screenVideoTracks = [{ id: 'screen-video-1' }];
+  test('merges microphone audio tracks into the camera recording stream when provided', () => {
+    const videoTracks = [{ id: 'cam-video-1' }];
     const audioTracks = [{ id: 'mic-audio-1' }, { id: 'mic-audio-2' }];
-    const screenStream = {
-      getVideoTracks: () => screenVideoTracks,
-      getAudioTracks: () => [{ id: 'screen-audio-ignored' }]
+    const cameraStream = {
+      // The camera stream's own (video-pipeline) audio tracks must be ignored
+      // so we never accidentally double-count or record device audio the user
+      // did not pick.
+      getVideoTracks: () => videoTracks,
+      getAudioTracks: () => [{ id: 'cam-builtin-audio-ignored' }]
     };
     const audioStream = {
       getAudioTracks: () => audioTracks
@@ -110,16 +115,81 @@ describe('recorder-utils', () => {
       }
     }
 
-    const recordingStream = createScreenRecordingStream(
-      screenStream as unknown as MediaStream,
+    const recordingStream = createCameraRecordingStream(
+      cameraStream as unknown as MediaStream,
+      audioStream as unknown as MediaStream,
+      FakeMediaStream as unknown as typeof MediaStream
+    );
+
+    expect((recordingStream as unknown as InstanceType<typeof FakeMediaStream>).tracks).toEqual([
+      ...videoTracks,
+      ...audioTracks
+    ]);
+  });
+
+  test('creates an audio-only recording stream from microphone audio tracks', () => {
+    const audioTracks = [{ id: 'mic-audio-1' }];
+    const audioStream = {
+      getAudioTracks: () => audioTracks
+    };
+
+    class FakeMediaStream {
+      tracks: unknown[];
+      constructor(tracks: unknown[]) {
+        this.tracks = tracks;
+      }
+    }
+
+    const recordingStream = createAudioOnlyRecordingStream(
       audioStream as unknown as MediaStream,
       FakeMediaStream as unknown as typeof MediaStream
     );
 
     expect(recordingStream).toBeInstanceOf(FakeMediaStream);
+    expect((recordingStream as unknown as InstanceType<typeof FakeMediaStream>).tracks).toEqual(
+      audioTracks
+    );
+  });
+
+  test('returns null for an audio-only recording stream when there are no audio tracks', () => {
+    const audioStream = { getAudioTracks: () => [] };
+    expect(createAudioOnlyRecordingStream(audioStream as unknown as MediaStream)).toBeNull();
+    expect(createAudioOnlyRecordingStream(null)).toBeNull();
+  });
+
+  test('audio-only recorder options keep mic bitrate without a video bitrate', () => {
+    expect(getRecorderOptions({ suffix: 'audio', hasAudio: true }, undefined)).toEqual({
+      audioBitsPerSecond: 192000
+    });
+    expect(getRecorderOptions({ suffix: 'audio', hasAudio: false }, undefined)).toEqual({});
+  });
+
+  test('keeps screen-stream audio tracks (for system audio loopback) in the screen recording stream', () => {
+    // getDisplayMedia with audio loopback attaches system audio to the screen
+    // stream itself, so createScreenRecordingStream must retain those tracks.
+    const screenVideoTracks = [{ id: 'screen-video-1' }];
+    const screenAudioTracks = [{ id: 'system-audio-1' }];
+    const screenStream = {
+      getVideoTracks: () => screenVideoTracks,
+      getAudioTracks: () => screenAudioTracks
+    };
+
+    class FakeMediaStream {
+      tracks: unknown[];
+      constructor(tracks: unknown[]) {
+        this.tracks = tracks;
+      }
+    }
+
+    const recordingStream = createScreenRecordingStream(
+      screenStream as unknown as MediaStream,
+      null,
+      FakeMediaStream as unknown as typeof MediaStream
+    );
+
     expect((recordingStream as unknown as InstanceType<typeof FakeMediaStream>).tracks).toEqual([
       ...screenVideoTracks,
-      ...audioTracks
+      ...screenAudioTracks
     ]);
   });
 

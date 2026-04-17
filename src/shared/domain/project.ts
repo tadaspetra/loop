@@ -62,7 +62,13 @@ export interface ProjectSettings {
   exportVideoPreset: ExportVideoPreset;
   cameraSyncOffsetMs: number;
   pipSize: number;
+  // Whether the user has asked to capture system/desktop audio alongside
+  // screen video. Sticky per project so toggling during editing does not
+  // silently disable system audio on the next recording.
+  systemAudioEnabled: boolean;
 }
+
+export type AudioSource = 'screen' | 'camera' | 'external';
 
 export interface Take {
   id: string;
@@ -70,6 +76,12 @@ export interface Take {
   duration: number;
   screenPath: string | null;
   cameraPath: string | null;
+  audioPath: string | null;
+  audioSource: AudioSource | null;
+  // True when the screen webm contains a captured system/desktop audio track.
+  // Independent of `audioSource` (which describes mic routing) so a single
+  // take can carry both mic and system audio and the export/editor can mix.
+  hasSystemAudio: boolean;
   proxyPath: string | null;
   sections: Section[];
 }
@@ -105,6 +117,9 @@ export interface RecoveryTake {
   createdAt: string;
   screenPath: string;
   cameraPath: string | null;
+  audioPath: string | null;
+  audioSource: AudioSource | null;
+  hasSystemAudio: boolean;
   recordedDuration: number;
   sections: Section[];
   trimSegments: RecoveryTrimSegment[];
@@ -271,6 +286,11 @@ export function normalizeExportVideoPreset(value: unknown): ExportVideoPreset {
     : EXPORT_VIDEO_PRESET_QUALITY;
 }
 
+export function normalizeAudioSource(value: unknown): AudioSource | null {
+  if (value === 'screen' || value === 'camera' || value === 'external') return value;
+  return null;
+}
+
 export function normalizePipSize(value: unknown): number {
   const size = Number(value);
   if (!Number.isFinite(size) || size <= 0) return DEFAULT_PIP_SIZE;
@@ -291,7 +311,8 @@ export function createDefaultProject(name: unknown = 'Untitled Project'): Projec
       exportAudioPreset: EXPORT_AUDIO_PRESET_COMPRESSED,
       exportVideoPreset: EXPORT_VIDEO_PRESET_QUALITY,
       cameraSyncOffsetMs: 0,
-      pipSize: DEFAULT_PIP_SIZE
+      pipSize: DEFAULT_PIP_SIZE,
+      systemAudioEnabled: false
     },
     takes: [],
     timeline: {
@@ -334,10 +355,22 @@ export function normalizeProjectData(rawProject: unknown, projectFolder?: string
       exportAudioPreset: normalizeExportAudioPreset(rawSettings.exportAudioPreset),
       exportVideoPreset: normalizeExportVideoPreset(rawSettings.exportVideoPreset),
       cameraSyncOffsetMs: normalizeCameraSyncOffsetMs(rawSettings.cameraSyncOffsetMs),
-      pipSize: normalizePipSize(rawSettings.pipSize)
+      pipSize: normalizePipSize(rawSettings.pipSize),
+      systemAudioEnabled: rawSettings.systemAudioEnabled === true
     },
     takes: rawTakes.map((rawTake, index) => {
       const take = isRecord(rawTake) ? (rawTake as PartialTakeInput) : ({} as PartialTakeInput);
+      const rawTakeRecord = take as Record<string, unknown>;
+      // Legacy takes predate the dedicated audio fields; the mic was always muxed
+      // into the screen file, so default to that when the persisted take omits
+      // audioSource. Only mark as "no audio" when the field is explicitly null.
+      const hasAudioSourceField = Object.prototype.hasOwnProperty.call(
+        rawTakeRecord,
+        'audioSource'
+      );
+      const normalizedAudioSource = hasAudioSourceField
+        ? normalizeAudioSource(rawTakeRecord.audioSource)
+        : 'screen';
 
       return {
         id: typeof take.id === 'string' && take.id ? take.id : `take-${index + 1}-${Date.now()}`,
@@ -353,6 +386,13 @@ export function normalizeProjectData(rawProject: unknown, projectFolder?: string
           : typeof take.cameraPath === 'string'
             ? take.cameraPath
             : null,
+        audioPath: projectFolder
+          ? toProjectAbsolutePath(projectFolder, rawTakeRecord.audioPath)
+          : typeof rawTakeRecord.audioPath === 'string'
+            ? (rawTakeRecord.audioPath as string)
+            : null,
+        audioSource: normalizedAudioSource,
+        hasSystemAudio: rawTakeRecord.hasSystemAudio === true,
         proxyPath: projectFolder
           ? toProjectAbsolutePath(projectFolder, take.proxyPath)
           : typeof take.proxyPath === 'string'

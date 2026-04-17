@@ -72,6 +72,7 @@ export interface OrphanRecordingCandidate {
   createdAt: string;
   screen: { partPath: string; bytes: number } | null;
   camera: { partPath: string; bytes: number } | null;
+  audio: { partPath: string; bytes: number } | null;
 }
 
 export interface RecoveredOrphanRecording {
@@ -79,6 +80,8 @@ export interface RecoveredOrphanRecording {
   createdAt: string;
   screenPath: string | null;
   cameraPath: string | null;
+  audioPath: string | null;
+  audioSource: 'screen' | 'camera' | 'external' | null;
 }
 
 export interface ProjectEnvelope {
@@ -127,6 +130,7 @@ export interface ElectronApi {
   projectSetLast: (projectFolder: string) => Promise<boolean>;
   setContentProtection: (enabled: boolean) => Promise<boolean>;
   getSources: () => Promise<Array<{ id: string; name: string }>>;
+  prepareDisplayMedia: (opts: { sourceId: string | null }) => Promise<boolean>;
   computeSections: (opts: {
     segments?: Array<{ start: number; end: number }>;
     paddingSeconds?: number;

@@ -46,7 +46,8 @@ export function registerIpcHandlers({
   computeSections,
   getScribeToken,
   proxyService,
-  recordingService
+  recordingService,
+  setPendingDisplayMediaSource
 }: {
   ipcMain: IpcMain;
   app: App;
@@ -61,6 +62,7 @@ export function registerIpcHandlers({
   getScribeToken: () => Promise<string>;
   proxyService: ProxyService;
   recordingService: RecordingService;
+  setPendingDisplayMediaSource: (sourceId: string | null) => void;
 }): void {
   async function showOpenDialog(opts: OpenDialogOptions) {
     const win = getWindow();
@@ -71,6 +73,18 @@ export function registerIpcHandlers({
     const win = getWindow();
     if (!win || win.isDestroyed()) return false;
     win.setContentProtection(Boolean(enabled));
+    return true;
+  });
+
+  ipcMain.handle('prepare-display-media', (_event, payload) => {
+    // Stash the chosen desktop source id so the display-media request handler
+    // can resolve the next getDisplayMedia call. Called just before the
+    // renderer's getDisplayMedia() when system audio is enabled.
+    const sourceId =
+      payload && typeof (payload as { sourceId?: unknown }).sourceId === 'string'
+        ? ((payload as { sourceId: string }).sourceId)
+        : null;
+    setPendingDisplayMediaSource(sourceId);
     return true;
   });
 

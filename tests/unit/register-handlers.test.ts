@@ -89,7 +89,8 @@ function registerWithHandlers() {
     computeSections: vi.fn(),
     getScribeToken: vi.fn(),
     proxyService,
-    recordingService
+    recordingService,
+    setPendingDisplayMediaSource: vi.fn()
   } as unknown as Parameters<typeof registerIpcHandlers>[0]);
 
   return { handlers, renderComposite, exportPremiereProject, proxyService, recordingService };

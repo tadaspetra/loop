@@ -1,8 +1,12 @@
 import 'dotenv/config';
 
-import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, session, shell } from 'electron';
 
 import { createWindow } from './main/app/create-window';
+import {
+  registerDisplayMediaHandler,
+  setPendingDisplayMediaSource
+} from './main/app/display-media-handler';
 import { registerIpcHandlers } from './main/ipc/register-handlers';
 import { createProjectService } from './main/services/project-service';
 import { renderComposite } from './main/services/render-service';
@@ -29,7 +33,8 @@ registerIpcHandlers({
   computeSections,
   getScribeToken,
   proxyService,
-  recordingService
+  recordingService,
+  setPendingDisplayMediaSource
 });
 
 function createMainWindow(): void {
@@ -44,7 +49,13 @@ function createMainWindow(): void {
   });
 }
 
-app.whenReady().then(createMainWindow);
+app.whenReady().then(() => {
+  registerDisplayMediaHandler({
+    session: session.defaultSession,
+    desktopCapturer
+  });
+  createMainWindow();
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();

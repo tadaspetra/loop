@@ -36,9 +36,11 @@ import {
   getRecorderOptions,
   getRecorderTimesliceMs,
   shouldRenderPreviewFrame,
+  createAudioOnlyRecordingStream,
   createCameraRecordingStream,
   createScreenRecordingStream
 } from './features/recording/recorder-utils';
+import { resolveTakeAudio } from '../shared/domain/take-audio';
 import { drawMirroredImage, getCenteredSquareCropRect } from './features/camera/camera-render';
 import { cleanupAllMedia } from './features/media-cleanup';
 
@@ -67,6 +69,7 @@ const cameraSyncOffsetInput = document.getElementById('cameraSyncOffsetMs');
 
 const screenSelect = document.getElementById('screenSource');
 const screenFitSelect = document.getElementById('screenFit');
+const systemAudioCheckbox = document.getElementById('systemAudioCheckbox');
 const cameraSelect = document.getElementById('cameraSource');
 const audioSelect = document.getElementById('audioSource');
 const canvas = document.getElementById('compositeCanvas');
@@ -75,6 +78,8 @@ const screenVideo = document.getElementById('screenVideo');
 const cameraVideo = document.getElementById('cameraVideo');
 const noPreview = document.getElementById('noPreview');
 const audioMeter = document.getElementById('audioMeter');
+const systemAudioMeter = document.getElementById('systemAudioMeter');
+const systemAudioMeterRow = document.getElementById('systemAudioMeterRow');
 const recordBtn = document.getElementById('recordBtn');
 const timerEl = document.getElementById('timer');
 const folderPathEl = document.getElementById('folderPath');
@@ -130,6 +135,27 @@ let audioStream = null;
 let recorders = [];
 let recording = false;
 let pendingRecordingTakeId = null;
+// System-audio metering + activity detection. We sample the screen stream's
+// audio tracks during recording and emit "keep" segments (aligned with the
+// speech-segment schema) whenever desktop sound is audible, so the auto-cut
+// section builder does not trim away regions that have system audio but no
+// mic speech. The meter visualization mirrors the mic meter alongside it.
+let systemAudioContext = null;
+let systemAudioAnalyser = null;
+let systemAudioSourceNode = null;
+let systemAudioRAF = null;
+let systemAudioActivitySegments = [];
+let systemAudioActivityOpen = null;
+let systemAudioLastActiveSec = 0;
+const SYSTEM_AUDIO_RMS_ACTIVE_THRESHOLD = 0.01;
+const SYSTEM_AUDIO_RELEASE_MS = 400;
+/**
+ * Route the mic is using for the in-flight recording: 'camera' when the mic
+ * is muxed into the camera webm, 'external' when it lives in a dedicated
+ * audio webm, or null when no mic was active. Finalize reads this to stamp
+ * the right audioSource / audioPath on the resulting Take.
+ */
+let pendingRecordingAudioSource = null;
 let screenRecInterval = null;
 let trackEndedCleanups = [];
 let timerInterval = null;
@@ -482,19 +508,45 @@ function getOrCreateTakeVideos(takeId) {
   const take = activeProject?.takes?.find((t) => t.id === takeId);
   if (!take) return null;
   const playbackSources = getTakePlaybackSources(take);
+  // The mic may live on the screen file (legacy takes), the camera file
+  // (new takes with a camera), or a dedicated audio file (screen-only + mic).
+  // Only the element that actually owns the audio track should play sound;
+  // the others must stay muted to avoid duplicate / doubled playback.
+  const audioResolution = resolveTakeAudio(take);
+  const audioSource = audioResolution.source;
+  // The screen webm may also carry a system audio track (independent of mic
+  // routing). When it does, we want its audio element to play sound so the
+  // editor preview matches what the export will contain.
+  const hasSystemAudio = take.hasSystemAudio === true;
+
   const screen = document.createElement('video');
   screen.playsInline = true;
   screen.preload = 'auto';
   screen.src = pathToFileUrl(playbackSources.screenPath);
+  // Unmute the screen element when it owns the mic OR when it carries a
+  // system audio track. Proxy playback has no audio track, so this is safe
+  // even while the proxy hot-swap is active.
+  screen.muted = audioSource !== 'screen' && !hasSystemAudio;
+
   let camera = null;
   if (playbackSources.cameraPath) {
     camera = document.createElement('video');
     camera.playsInline = true;
-    camera.muted = true;
     camera.preload = 'auto';
     camera.src = pathToFileUrl(playbackSources.cameraPath);
+    camera.muted = audioSource !== 'camera';
   }
-  const entry = { screen, camera };
+
+  // External audio-only takes need a dedicated HTMLAudioElement because
+  // there is no video element carrying the mic for them.
+  let audio = null;
+  if (audioSource === 'external' && audioResolution.path) {
+    audio = document.createElement('audio');
+    audio.preload = 'auto';
+    audio.src = pathToFileUrl(audioResolution.path);
+  }
+
+  const entry = { screen, camera, audio, audioSource };
   takeVideoPool.set(takeId, entry);
   return entry;
 }
@@ -506,6 +558,10 @@ function cleanupVideoPool() {
     if (videos.camera) {
       videos.camera.pause();
       videos.camera.src = '';
+    }
+    if (videos.audio) {
+      videos.audio.pause();
+      videos.audio.src = '';
     }
   }
   takeVideoPool.clear();
@@ -766,7 +822,8 @@ function buildProjectSavePayload() {
       exportAudioPreset: normalizeExportAudioPreset(exportAudioPresetSelect.value),
       exportVideoPreset: normalizeExportVideoPreset(exportVideoPresetSelect.value),
       cameraSyncOffsetMs: normalizeCameraSyncOffsetMs(cameraSyncOffsetInput.value),
-      pipSize: editorState?.pipSize || PIP_SIZE
+      pipSize: editorState?.pipSize || PIP_SIZE,
+      systemAudioEnabled: !!systemAudioCheckbox?.checked
     },
     timeline: getProjectTimelineSnapshot()
   };
@@ -1004,6 +1061,9 @@ async function activateProject(projectPath, project, preferredView = 'recording'
   openFolderBtn.classList.remove('hidden');
   screenFitSelect.value = project.settings?.screenFitMode === 'fit' ? 'fit' : 'fill';
   hideFromRecording = project.settings?.hideFromRecording === false ? 'false' : 'true';
+  if (systemAudioCheckbox) {
+    systemAudioCheckbox.checked = project.settings?.systemAudioEnabled === true;
+  }
   exportAudioPresetSelect.value = normalizeExportAudioPreset(project.settings?.exportAudioPreset);
   exportVideoPresetSelect.value = normalizeExportVideoPreset(project.settings?.exportVideoPreset);
   cameraSyncOffsetInput.value = String(
@@ -1377,8 +1437,10 @@ async function extractWaveformPeaks(numBuckets = 800) {
       if (!section.takeId || takeAudioBufferCache.has(section.takeId)) continue;
       const take = activeProject?.takes?.find((t) => t.id === section.takeId);
       if (!take) continue;
+      const { path: audioFilePath } = resolveTakeAudio(take);
+      if (!audioFilePath) continue;
       try {
-        const url = pathToFileUrl(take.screenPath);
+        const url = pathToFileUrl(audioFilePath);
         const response = await fetch(url);
         const arrayBuffer = await response.arrayBuffer();
         const offlineCtx = new OfflineAudioContext(1, 1, 44100);
@@ -1868,16 +1930,51 @@ async function updateScreenStream() {
     screenStream = null;
     screenVideo.srcObject = null;
   }
+  // Tear down the previous system audio meter; a new one is attached below
+  // if the fresh stream carries audio tracks.
+  stopSystemAudioMeter();
 
   const sourceId = screenSelect.value;
   if (!sourceId) return;
 
+  const wantsSystemAudio = !!systemAudioCheckbox?.checked;
+
   if (sourceId.startsWith('device:')) {
+    // Capture devices (e.g. HDMI capture cards) never expose desktop audio via
+    // the Chromium loopback path; fall back to the device's own audio input
+    // when the user enabled system audio on a capture device.
     const deviceId = sourceId.slice('device:'.length);
     screenStream = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: { deviceId: { exact: deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
     });
+  } else if (wantsSystemAudio) {
+    // Electron's display-media handler resolves this call to a desktop source
+    // plus a loopback audio track. We must register the pending source id in
+    // main before calling getDisplayMedia so the handler knows which screen
+    // the user picked.
+    try {
+      await window.electronAPI.prepareDisplayMedia({ sourceId });
+      screenStream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: true
+      });
+    } catch (error) {
+      console.warn(
+        '[Recorder] System audio capture failed; falling back to video-only screen stream:',
+        error
+      );
+      screenStream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          mandatory: {
+            chromeMediaSource: 'desktop',
+            chromeMediaSourceId: sourceId,
+            maxFrameRate: 30
+          }
+        }
+      });
+    }
   } else {
     screenStream = await navigator.mediaDevices.getUserMedia({
       audio: false,
@@ -1891,6 +1988,7 @@ async function updateScreenStream() {
     });
   }
   screenVideo.srcObject = screenStream;
+  startSystemAudioMeter(screenStream);
 }
 
 async function updateCameraStream() {
@@ -2090,6 +2188,111 @@ function stopAudioMeter() {
   audioMeter.style.width = '0%';
 }
 
+function closeSystemAudioActivityWindow() {
+  if (!systemAudioActivityOpen) return;
+  // Clamp the closing edge to the last time we actually heard audio to avoid
+  // bleeding silence into the kept region; fall back to the open time if we
+  // somehow never updated lastActive.
+  const end = Math.max(systemAudioActivityOpen.start, systemAudioLastActiveSec);
+  if (end > systemAudioActivityOpen.start) {
+    systemAudioActivitySegments.push({
+      start: systemAudioActivityOpen.start,
+      end,
+      text: ''
+    });
+  }
+  systemAudioActivityOpen = null;
+}
+
+function stopSystemAudioMeter() {
+  if (systemAudioRAF) cancelAnimationFrame(systemAudioRAF);
+  systemAudioRAF = null;
+  if (systemAudioSourceNode) {
+    try {
+      systemAudioSourceNode.disconnect();
+    } catch {
+      // Already disconnected or never connected; ignore.
+    }
+    systemAudioSourceNode = null;
+  }
+  systemAudioAnalyser = null;
+  if (systemAudioContext) {
+    try {
+      systemAudioContext.close();
+    } catch {
+      // AudioContext.close returns a promise in some platforms; swallow
+      // errors so teardown stays synchronous.
+    }
+    systemAudioContext = null;
+  }
+  closeSystemAudioActivityWindow();
+  if (systemAudioMeter) systemAudioMeter.style.width = '0%';
+}
+
+function startSystemAudioMeter(stream) {
+  stopSystemAudioMeter();
+  const audioTracks =
+    stream && typeof stream.getAudioTracks === 'function' ? stream.getAudioTracks() : [];
+  if (audioTracks.length === 0) {
+    if (systemAudioMeterRow) systemAudioMeterRow.classList.add('hidden');
+    return;
+  }
+  if (systemAudioMeterRow) systemAudioMeterRow.classList.remove('hidden');
+
+  try {
+    systemAudioContext = new AudioContext();
+    systemAudioAnalyser = systemAudioContext.createAnalyser();
+    systemAudioAnalyser.fftSize = 512;
+    systemAudioSourceNode = systemAudioContext.createMediaStreamSource(stream);
+    systemAudioSourceNode.connect(systemAudioAnalyser);
+  } catch (error) {
+    console.warn('[Recorder] Failed to start system audio meter:', error);
+    stopSystemAudioMeter();
+    return;
+  }
+
+  const timeData = new Uint8Array(systemAudioAnalyser.fftSize);
+
+  function tick() {
+    if (!systemAudioAnalyser) return;
+    systemAudioAnalyser.getByteTimeDomainData(timeData);
+    let sum = 0;
+    for (let i = 0; i < timeData.length; i += 1) {
+      const v = (timeData[i] - 128) / 128;
+      sum += v * v;
+    }
+    const rms = Math.sqrt(sum / timeData.length);
+    // The sky-500 meter goes red at clipping like the mic meter. Scale so that
+    // typical conversation/system sound lands in the amber/green band.
+    const pct = Math.min(100, rms * 400);
+    systemAudioMeter.style.width = pct + '%';
+    systemAudioMeter.className = `h-full rounded-full transition-all duration-75 ${
+      pct > 70 ? 'bg-red-500' : pct > 40 ? 'bg-amber-500' : 'bg-sky-500'
+    }`;
+
+    if (recording && startTime > 0) {
+      const nowSec = (Date.now() - startTime) / 1000;
+      if (rms >= SYSTEM_AUDIO_RMS_ACTIVE_THRESHOLD) {
+        systemAudioLastActiveSec = nowSec;
+        if (!systemAudioActivityOpen) {
+          systemAudioActivityOpen = { start: nowSec };
+        }
+      } else if (
+        systemAudioActivityOpen &&
+        (nowSec - systemAudioLastActiveSec) * 1000 >= SYSTEM_AUDIO_RELEASE_MS
+      ) {
+        // Extend release window before closing so short dips between sounds
+        // (e.g. short silence between spoken system-audio phrases) stay in
+        // the same kept section instead of fragmenting it.
+        closeSystemAudioActivityWindow();
+      }
+    }
+
+    systemAudioRAF = requestAnimationFrame(tick);
+  }
+  tick();
+}
+
 // Recording
 function toggleRecording() {
   if (!recording) startRecording();
@@ -2256,6 +2459,11 @@ async function startRecording() {
   if (!activeProjectPath) return;
   recorders = [];
   speechSegments = [];
+  // Fresh take: forget any activity windows captured before Record was
+  // pressed so only the actual recording window drives section keep logic.
+  systemAudioActivitySegments = [];
+  systemAudioActivityOpen = null;
+  systemAudioLastActiveSec = 0;
   audioChunkBuffer = [];
   scribeLastFailureReason = null;
   scribeManualClose = false;
@@ -2270,9 +2478,22 @@ async function startRecording() {
   const takeId = `take-${Date.now()}`;
   pendingRecordingTakeId = takeId;
 
-  // Individual screen (with audio)
+  // Microphone routing: attach the mic to the camera file when both are
+  // available so the screen capture stays video-only and the mic travels with
+  // the presenter. If there is no camera but there is a mic, write the mic
+  // into a dedicated audio-only file alongside the screen recording. The
+  // chosen route is recorded on the Take so export/waveform/Premiere paths
+  // can follow the same routing on finalize.
+  let audioRoute: 'camera' | 'external' | null = null;
+  if (audioStream) {
+    audioRoute = cameraStream ? 'camera' : 'external';
+  }
+  pendingRecordingAudioSource = audioRoute;
+
+  // Individual screen (video only; mic is routed to camera or an audio-only
+  // recorder below so the screen file stays a pure video asset)
   if (screenStream) {
-    const screenOnly = createScreenRecordingStream(screenStream, audioStream);
+    const screenOnly = createScreenRecordingStream(screenStream, null);
     if (screenOnly) {
       const [screenTrack] = screenOnly.getVideoTracks();
       console.log(
@@ -2288,14 +2509,17 @@ async function startRecording() {
           'error'
         );
         pendingRecordingTakeId = null;
+        pendingRecordingAudioSource = null;
         return;
       }
     }
   }
 
-  // Individual camera (video only; export uses screen audio)
+  // Individual camera. Mux the mic here whenever both camera and mic are
+  // active so the camera file owns the audio track.
   if (cameraStream) {
-    const cameraOnly = createCameraRecordingStream(cameraStream);
+    const cameraAudio = audioRoute === 'camera' ? audioStream : null;
+    const cameraOnly = createCameraRecordingStream(cameraStream, cameraAudio);
     if (cameraOnly) {
       const [cameraTrack] = cameraOnly.getVideoTracks();
       console.log(
@@ -2307,7 +2531,34 @@ async function startRecording() {
       } catch (err) {
         // Camera is best-effort: continue the recording with screen only so
         // one pipeline never blocks the other (see recording safety notes).
+        // If the camera recorder fails and it was supposed to own the mic,
+        // demote the route so the finalized Take still surfaces the mic via
+        // the screen file rather than silently dropping it.
         console.warn('[Recorder] Failed to prepare camera recorder; continuing without camera:', err);
+        if (audioRoute === 'camera') {
+          audioRoute = null;
+          pendingRecordingAudioSource = null;
+        }
+      }
+    }
+  }
+
+  // Mic-only (screen-only recording with a microphone): write the mic to its
+  // own .webm file so the screen video stays silent and audio still persists.
+  if (audioRoute === 'external' && audioStream) {
+    const audioOnly = createAudioOnlyRecordingStream(audioStream);
+    if (audioOnly) {
+      try {
+        recorders.push(await createRecorder(audioOnly, 'audio', takeId));
+      } catch (err) {
+        console.error('[Recorder] Failed to prepare audio-only recorder:', err);
+        setTranscriptStatus(
+          `Could not start microphone recording: ${err instanceof Error ? err.message : String(err)}`,
+          'error'
+        );
+        pendingRecordingTakeId = null;
+        pendingRecordingAudioSource = null;
+        return;
       }
     }
   }
@@ -2345,6 +2596,7 @@ async function startRecording() {
   recordBtn.classList.replace('bg-red-600', 'bg-neutral-700');
   recordBtn.classList.replace('hover:bg-red-700', 'hover:bg-neutral-600');
   screenSelect.disabled = true;
+  if (systemAudioCheckbox) systemAudioCheckbox.disabled = true;
   cameraSelect.disabled = true;
   audioSelect.disabled = true;
 
@@ -2735,6 +2987,14 @@ async function recoverOrphansForProject(projectPath) {
               duration,
               screenPath: recovered.screenPath,
               cameraPath: recovered.cameraPath,
+              audioPath: recovered.audioPath ?? null,
+              audioSource: recovered.audioSource ?? 'screen',
+              // Recovery cannot cheaply probe the screen file for a system
+              // audio track; conservatively default to false so export does
+              // not try to demux audio that isn't there. Users who crashed
+              // mid-recording with system audio enabled will lose that
+              // system audio track on recovery.
+              hasSystemAudio: false,
               proxyPath: null,
               sections
             });
@@ -3265,6 +3525,7 @@ async function stopRecording() {
   recordBtn.classList.replace('bg-neutral-700', 'bg-red-600');
   recordBtn.classList.replace('hover:bg-neutral-600', 'hover:bg-red-700');
   screenSelect.disabled = false;
+  if (systemAudioCheckbox) systemAudioCheckbox.disabled = false;
   cameraSelect.disabled = false;
   audioSelect.disabled = false;
   timerEl.textContent = '00:00';
@@ -3283,16 +3544,46 @@ async function stopRecording() {
     const takeCreatedAt = new Date().toISOString();
     const screenPath = results.screen.path;
     const cameraPath = results.camera?.path || null;
+    const audioOnlyPath = results.audio?.path || null;
+    // System audio may have been requested but the loopback capture can still
+    // silently fail (e.g. macOS without the right permission). Prefer the
+    // actual track presence on the live screen stream so the stamped Take
+    // reflects reality, not user intent.
+    const hasSystemAudio =
+      !!screenStream &&
+      typeof screenStream.getAudioTracks === 'function' &&
+      screenStream.getAudioTracks().length > 0;
+    // Reconcile the routing chosen at record start with what actually landed
+    // on disk. If the planned audio recorder failed to finalize (missing file
+    // after finalizeErrors), fall back to null so the Take does not point at a
+    // missing path. We still prefer the actual finalized camera/audio file
+    // over the planned route.
+    let audioSource = pendingRecordingAudioSource;
+    if (audioSource === 'camera' && !cameraPath) audioSource = null;
+    if (audioSource === 'external' && !audioOnlyPath) audioSource = null;
+    pendingRecordingAudioSource = null;
+    const audioPath = audioSource === 'external' ? audioOnlyPath : null;
     let sectionsForTimeline = buildDefaultSectionsForDuration(recordedDuration);
 
-    // Compute sections from speech segments (instant, no FFmpeg)
-    const activeSegments = speechSegments.filter((s) => !s.deleted);
+    // Compute sections from speech segments (instant, no FFmpeg). If any
+    // system audio activity was detected during the take, flush any still-
+    // open window and merge those "keep" regions alongside speech so the
+    // section builder never trims across audible system sound (e.g. music,
+    // screen narration, tutorial demos) just because the mic was quiet.
+    closeSystemAudioActivityWindow();
+    const activeSegments = [
+      ...speechSegments.filter((s) => !s.deleted),
+      ...systemAudioActivitySegments
+    ];
     const fallbackSections = buildRemappedSectionsFromSegments(activeSegments);
     await saveRecoveryTake({
       id: takeId,
       createdAt: takeCreatedAt,
       screenPath,
       cameraPath,
+      audioPath,
+      audioSource,
+      hasSystemAudio,
       recordedDuration,
       sections: sectionsForTimeline,
       trimSegments: activeSegments
@@ -3329,6 +3620,9 @@ async function stopRecording() {
         duration: recordedDuration,
         screenPath,
         cameraPath,
+        audioPath,
+        audioSource,
+        hasSystemAudio,
         proxyPath: null,
         sections: sectionsForTimeline
       });
@@ -3377,16 +3671,18 @@ async function stopRecording() {
     // clean. The user will have already seen this error surfaced in the
     // transcript status.
     if (pendingRecordingTakeId) {
-      for (const suffix of ['screen', 'camera']) {
+      for (const suffix of ['screen', 'camera', 'audio']) {
         window.electronAPI
           .recordingCancel({ takeId: pendingRecordingTakeId, suffix })
           .catch(() => {});
       }
     }
     pendingRecordingTakeId = null;
+    pendingRecordingAudioSource = null;
     showProjectHomeMessage(finalizeErrors.join(' '));
   } else {
     pendingRecordingTakeId = null;
+    pendingRecordingAudioSource = null;
   }
   updateWorkspaceHeader();
 }
@@ -3493,6 +3789,9 @@ function enterEditor(rawSections, opts = {}) {
           firstSection.sourceStart,
           editorState.cameraSyncOffsetMs
         );
+      }
+      if (videos.audio) {
+        videos.audio.currentTime = firstSection.sourceStart;
       }
     }
   }
@@ -3701,12 +4000,21 @@ function switchPlaybackSection(nextSection, opts = {}) {
         previousVideos.camera.pause();
         previousVideos.camera.playbackRate = 1;
       }
+      if (previousVideos.audio) {
+        previousVideos.audio.pause();
+        previousVideos.audio.playbackRate = 1;
+      }
     }
   }
 
   if (seekPlan.screenNeedsSeek) nextVideos.screen.currentTime = seekPlan.targetSourceTime;
   if (nextVideos.camera && seekPlan.cameraNeedsSeek)
     nextVideos.camera.currentTime = seekPlan.targetCameraTime;
+  // Audio-only track shares the screen's timeline since both are recorded
+  // concurrently with no configurable offset.
+  if (nextVideos.audio && seekPlan.screenNeedsSeek) {
+    nextVideos.audio.currentTime = seekPlan.targetSourceTime;
+  }
 
   activeTakeId = nextSection.takeId;
   activePlaybackSection = nextSection;
@@ -3725,9 +4033,18 @@ function switchPlaybackSection(nextSection, opts = {}) {
     const speed = editorState.playbackSpeed || 1;
     nextVideos.screen.playbackRate = speed;
     if (nextVideos.screen.paused) nextVideos.screen.play().catch(() => {});
-    if (editorState.hasCamera && nextVideos.camera && nextVideos.camera.paused) {
+    // Play the camera element when it provides the PiP video OR when it
+    // owns this take's audio (so playback stays audible even if no keyframe
+    // makes the camera visible).
+    const shouldPlayCamera =
+      nextVideos.camera && (editorState.hasCamera || nextVideos.audioSource === 'camera');
+    if (shouldPlayCamera && nextVideos.camera.paused) {
       nextVideos.camera.playbackRate = speed;
       nextVideos.camera.play().catch(() => {});
+    }
+    if (nextVideos.audio && nextVideos.audio.paused) {
+      nextVideos.audio.playbackRate = speed;
+      nextVideos.audio.play().catch(() => {});
     }
   }
 
@@ -3791,9 +4108,15 @@ function editorPlay() {
     if (videos) {
       videos.screen.playbackRate = speed;
       videos.screen.play().catch(() => {});
-      if (editorState.hasCamera && videos.camera) {
+      const shouldPlayCamera =
+        videos.camera && (editorState.hasCamera || videos.audioSource === 'camera');
+      if (shouldPlayCamera) {
         videos.camera.playbackRate = speed;
         videos.camera.play().catch(() => {});
+      }
+      if (videos.audio) {
+        videos.audio.playbackRate = speed;
+        videos.audio.play().catch(() => {});
       }
     }
   }
@@ -3809,6 +4132,10 @@ function editorPause() {
     if (videos.camera) {
       videos.camera.pause();
       videos.camera.playbackRate = 1;
+    }
+    if (videos.audio) {
+      videos.audio.pause();
+      videos.audio.playbackRate = 1;
     }
   }
   editorPlayBtn.textContent = 'Play';
@@ -3829,8 +4156,11 @@ function cyclePlaybackSpeed() {
     const videos = getOrCreateTakeVideos(activeTakeId);
     if (videos) {
       videos.screen.playbackRate = editorState.playbackSpeed;
-      if (editorState.hasCamera && videos.camera) {
+      if (videos.camera && (editorState.hasCamera || videos.audioSource === 'camera')) {
         videos.camera.playbackRate = editorState.playbackSpeed;
+      }
+      if (videos.audio) {
+        videos.audio.playbackRate = editorState.playbackSpeed;
       }
     }
   }
@@ -4554,7 +4884,14 @@ async function renderVideo() {
     for (const takeId of referencedTakeIds) {
       const take = activeProject?.takes?.find((t) => t.id === takeId);
       if (take) {
-        takes.push({ id: take.id, screenPath: take.screenPath, cameraPath: take.cameraPath });
+        takes.push({
+          id: take.id,
+          screenPath: take.screenPath,
+          cameraPath: take.cameraPath,
+          audioPath: take.audioPath ?? null,
+          audioSource: take.audioSource ?? 'screen',
+          hasSystemAudio: take.hasSystemAudio === true
+        });
       }
     }
 
@@ -4665,6 +5002,9 @@ async function exportPremiere() {
           id: take.id,
           screenPath: take.screenPath,
           cameraPath: take.cameraPath,
+          audioPath: take.audioPath ?? null,
+          audioSource: take.audioSource ?? 'screen',
+          hasSystemAudio: take.hasSystemAudio === true,
           duration: take.duration || 0
         });
       }
@@ -4901,6 +5241,24 @@ screenSelect.addEventListener('change', async () => {
   }
   updatePreview();
 });
+
+if (systemAudioCheckbox) {
+  systemAudioCheckbox.addEventListener('change', async () => {
+    // Persist the preference on the active project so it stays sticky, then
+    // rebuild the screen stream so the change takes effect for the next
+    // recording without requiring a picker re-selection.
+    if (activeProject?.settings) {
+      activeProject.settings.systemAudioEnabled = !!systemAudioCheckbox.checked;
+      scheduleProjectSave();
+    }
+    try {
+      await updateScreenStream();
+    } catch (e) {
+      console.error(e);
+    }
+    updatePreview();
+  });
+}
 
 cameraSelect.addEventListener('change', async () => {
   try {

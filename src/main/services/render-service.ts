@@ -5,11 +5,13 @@ import ffmpegStatic from 'ffmpeg-static';
 import { ensureDirectory, fs } from '../infra/file-system';
 import {
   EXPORT_AUDIO_PRESET_COMPRESSED,
+  normalizeAudioSource,
   normalizeBackgroundPan,
   normalizeBackgroundZoom,
   normalizeCameraSyncOffsetMs,
   normalizeExportAudioPreset,
   normalizeExportVideoPreset,
+  type AudioSource,
   type ExportAudioPreset,
   type ExportVideoPreset,
   type Keyframe,
@@ -34,6 +36,11 @@ export interface RenderTakeInput {
   id: string;
   screenPath: string | null;
   cameraPath: string | null;
+  audioPath?: string | null;
+  audioSource?: AudioSource | null;
+  // True when the screen webm contains a captured system-audio track. Mixed
+  // with the mic track (when present) via ffmpeg amix during export.
+  hasSystemAudio?: boolean;
 }
 
 export interface RenderCompositeOptions {
@@ -227,15 +234,31 @@ export function buildCameraTrimFilter(
   return `[${cameraIdx}:v]trim=start=${sampleStart.toFixed(3)}:end=${sampleEnd.toFixed(3)},setpts=PTS-STARTPTS,fps=${targetFps},tpad=start_mode=clone:start_duration=${startPad.toFixed(3)}:stop_mode=clone:stop_duration=${stopPad.toFixed(3)},trim=duration=${duration.toFixed(3)},setpts=PTS-STARTPTS${label}`;
 }
 
+interface TakeInputPlan {
+  screenIdx: number;
+  cameraIdx: number;
+  audioIdx: number;
+  audioSource: AudioSource;
+  hasSystemAudio: boolean;
+}
+
+interface TakePlanEntry {
+  screenPath: string | null;
+  cameraPath: string | null;
+  audioPath: string | null;
+  audioSource: AudioSource;
+  hasSystemAudio: boolean;
+}
+
 function buildInputPlan(
   sections: RenderSectionInput[],
-  takeMap: Map<string, { screenPath: string | null; cameraPath: string | null }>,
+  takeMap: Map<string, TakePlanEntry>,
   hasCamera: boolean
 ) {
   const fpsProbePaths = new Set<string>();
-  const sectionInputs: Array<{ screenIdx: number; cameraIdx: number; imageIdx: number }> = [];
+  const sectionInputs: Array<TakeInputPlan & { imageIdx: number }> = [];
   const args = ['-progress', 'pipe:1', '-nostats'];
-  const takeInputs = new Map<string, { screenIdx: number; cameraIdx: number }>();
+  const takeInputs = new Map<string, TakeInputPlan>();
   let inputIndex = 0;
 
   for (const section of sections) {
@@ -253,16 +276,36 @@ function buildInputPlan(
       const screenIdx = inputIndex;
       inputIndex += 1;
 
+      // Camera input is added whenever the camera file is referenced for
+      // video (hasCamera) OR when the camera file owns this take's audio
+      // track (audioSource='camera'). Otherwise an audio-on-camera recording
+      // would lose its mic if the user had no keyframe toggling the PiP on.
+      const needsCameraForVideo = hasCamera && !!take.cameraPath;
+      const needsCameraForAudio = take.audioSource === 'camera' && !!take.cameraPath;
       let cameraIdx = -1;
-      if (hasCamera && take.cameraPath) {
+      if (needsCameraForVideo || needsCameraForAudio) {
         assertFilePath(take.cameraPath, 'Camera');
-        args.push('-fflags', '+genpts', '-i', take.cameraPath);
-        fpsProbePaths.add(take.cameraPath);
+        args.push('-fflags', '+genpts', '-i', take.cameraPath as string);
+        fpsProbePaths.add(take.cameraPath as string);
         cameraIdx = inputIndex;
         inputIndex += 1;
       }
 
-      inputPlan = { screenIdx, cameraIdx };
+      let audioIdx = -1;
+      if (take.audioSource === 'external' && take.audioPath) {
+        assertFilePath(take.audioPath, 'Audio');
+        args.push('-fflags', '+genpts', '-i', take.audioPath);
+        audioIdx = inputIndex;
+        inputIndex += 1;
+      }
+
+      inputPlan = {
+        screenIdx,
+        cameraIdx,
+        audioIdx,
+        audioSource: take.audioSource,
+        hasSystemAudio: take.hasSystemAudio
+      };
       takeInputs.set(takeId, inputPlan);
     }
 
@@ -398,12 +441,25 @@ export async function renderComposite(
   const outputPath = path.join(outputFolder, `recording-${now()}-edited.mp4`);
   const { canvasW, canvasH } = deriveRenderCanvasSize(sourceWidth, sourceHeight, exportVideoPreset);
 
-  const takeMap = new Map<string, { screenPath: string | null; cameraPath: string | null }>();
+  const takeMap = new Map<string, TakePlanEntry>();
   for (const take of takes) {
     if (!take || typeof take.id !== 'string' || !take.id) continue;
+    // Default missing/invalid audioSource to 'screen' so legacy takes (mic
+    // muxed into the screen file) keep exporting correctly after the audio
+    // routing change. Older recordings that never captured a mic also fall
+    // back to 'screen' here; the ffmpeg filter graph stays uniform because
+    // [screenIdx:a] has always been referenced unconditionally.
+    const audioSource: AudioSource = normalizeAudioSource(take.audioSource) ?? 'screen';
     takeMap.set(take.id, {
       screenPath: take.screenPath,
-      cameraPath: take.cameraPath
+      cameraPath: take.cameraPath,
+      audioPath: take.audioPath ?? null,
+      audioSource,
+      // If the screen file's system audio track also carries the mic (legacy
+      // takes where audioSource === 'screen'), we already pull audio from
+      // screen — there's no second stream to mix. Only mark hasSystemAudio
+      // as an additional track when the mic lives elsewhere.
+      hasSystemAudio: take.hasSystemAudio === true && audioSource !== 'screen'
     });
   }
 
@@ -437,7 +493,7 @@ export async function renderComposite(
   const filterParts: string[] = [];
   for (let index = 0; index < sections.length; index += 1) {
     const section = sections[index];
-    const { screenIdx, imageIdx } = sectionInputs[index];
+    const { screenIdx, cameraIdx, audioIdx, audioSource, imageIdx } = sectionInputs[index];
     const start = section.sourceStart.toFixed(3);
     const end = section.sourceEnd.toFixed(3);
 
@@ -459,9 +515,35 @@ export async function renderComposite(
         `[${screenIdx}:v]trim=start=${start}:end=${end},setpts=PTS-STARTPTS,fps=${targetFps},trim=duration=${sectionDur},setpts=PTS-STARTPTS,setsar=1[sv${index}]`
       );
     }
-    filterParts.push(
-      `[${screenIdx}:a]atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS[sa${index}]`
-    );
+    // Pull audio from whichever input actually owns the mic for this take.
+    // Legacy takes report 'screen' and behave exactly like before; new takes
+    // with a camera report 'camera'; screen-only takes with a mic report
+    // 'external' and have a dedicated audio input.
+    let micInputIdx = screenIdx;
+    if (audioSource === 'camera' && cameraIdx >= 0) {
+      micInputIdx = cameraIdx;
+    } else if (audioSource === 'external' && audioIdx >= 0) {
+      micInputIdx = audioIdx;
+    }
+    const { hasSystemAudio } = sectionInputs[index];
+    if (hasSystemAudio) {
+      // Mix mic + system audio so viewers hear both the presenter and the
+      // system/desktop sound at the same time. amix normalizes levels by
+      // default (1/n scaling); we keep that to avoid clipping.
+      filterParts.push(
+        `[${micInputIdx}:a]atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS[sa${index}m]`
+      );
+      filterParts.push(
+        `[${screenIdx}:a]atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS[sa${index}s]`
+      );
+      filterParts.push(
+        `[sa${index}m][sa${index}s]amix=inputs=2:duration=longest:dropout_transition=0[sa${index}]`
+      );
+    } else {
+      filterParts.push(
+        `[${micInputIdx}:a]atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS[sa${index}]`
+      );
+    }
   }
 
   const screenLabels = sections.map((_, index) => `[sv${index}][sa${index}]`).join('');

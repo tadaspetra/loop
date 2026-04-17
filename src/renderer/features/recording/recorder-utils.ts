@@ -52,6 +52,10 @@ export function getRecorderOptions(
   } else if (suffix === 'screen') {
     options.videoBitsPerSecond = 30000000;
     if (hasAudio) options.audioBitsPerSecond = 192000;
+  } else if (suffix === 'audio') {
+    // Audio-only recorder: no video payload, keep the mic bitrate in line with
+    // the muxed-audio paths so Premiere/export comparisons stay consistent.
+    if (hasAudio) options.audioBitsPerSecond = 192000;
   }
 
   return options;
@@ -77,6 +81,7 @@ export function shouldRenderPreviewFrame(
 
 export function createCameraRecordingStream(
   cameraStream: MediaStream | null | undefined,
+  audioStream: MediaStream | null | undefined = null,
   MediaStreamCtor: MediaStreamCtorLike = globalThis.MediaStream
 ): MediaStream | null {
   if (!cameraStream || typeof cameraStream.getVideoTracks !== 'function') {
@@ -85,7 +90,26 @@ export function createCameraRecordingStream(
 
   const videoTracks = cameraStream.getVideoTracks();
   if (!videoTracks.length) return null;
-  return new MediaStreamCtor(videoTracks);
+
+  const audioTracks =
+    audioStream && typeof audioStream.getAudioTracks === 'function'
+      ? audioStream.getAudioTracks()
+      : [];
+
+  return new MediaStreamCtor([...videoTracks, ...audioTracks]);
+}
+
+export function createAudioOnlyRecordingStream(
+  audioStream: MediaStream | null | undefined,
+  MediaStreamCtor: MediaStreamCtorLike = globalThis.MediaStream
+): MediaStream | null {
+  if (!audioStream || typeof audioStream.getAudioTracks !== 'function') {
+    return null;
+  }
+
+  const audioTracks = audioStream.getAudioTracks();
+  if (!audioTracks.length) return null;
+  return new MediaStreamCtor(audioTracks);
 }
 
 export function createScreenRecordingStream(
@@ -100,10 +124,19 @@ export function createScreenRecordingStream(
   const videoTracks = screenStream.getVideoTracks();
   if (!videoTracks.length) return null;
 
-  const audioTracks =
-    audioStream && typeof audioStream.getAudioTracks === 'function' ? audioStream.getAudioTracks() : [];
+  // System audio captured via getDisplayMedia loopback arrives on the screen
+  // stream itself; preserve those tracks so the screen webm carries desktop
+  // audio when the user opted in. Mic (from the separate audioStream) is
+  // intentionally NOT added here: it now routes to the camera file or a
+  // dedicated audio-only file.
+  const screenAudioTracks =
+    typeof screenStream.getAudioTracks === 'function' ? screenStream.getAudioTracks() : [];
+  const extraAudioTracks =
+    audioStream && typeof audioStream.getAudioTracks === 'function'
+      ? audioStream.getAudioTracks()
+      : [];
 
-  return new MediaStreamCtor([...videoTracks, ...audioTracks]);
+  return new MediaStreamCtor([...videoTracks, ...screenAudioTracks, ...extraAudioTracks]);
 }
 
 export interface FinalizeStreamedRecordingDeps {

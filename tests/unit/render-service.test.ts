@@ -818,6 +818,284 @@ describe('main/services/render-service', () => {
     );
   });
 
+  test('renderComposite pulls audio from the camera input when audioSource is camera', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-audio-camera-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    const cameraPath = path.join(tmpDir, 'camera.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+    fs.writeFileSync(cameraPath, 'camera', 'utf8');
+
+    const execCalls: { bin: string; args: string[] }[] = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        takes: [
+          {
+            id: 'take-1',
+            screenPath,
+            cameraPath,
+            audioPath: null,
+            audioSource: 'camera'
+          }
+        ],
+        sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.5 }],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: true, cameraFullscreen: false }
+        ] as Keyframe[],
+        pipSize: 300,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill'
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 998,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
+          execCalls.push({ bin: ffmpegPath, args });
+        })
+      }
+    );
+
+    const argString = execCalls[0].args.join(' ');
+    // Audio must now be trimmed from the camera input (index 1), not the
+    // screen input (index 0) for takes whose mic is muxed into the camera.
+    expect(argString).toContain('[1:a]atrim=start=0.000:end=1.500');
+    expect(argString).not.toContain('[0:a]atrim=start=0.000:end=1.500');
+  });
+
+  test('renderComposite adds a dedicated audio input when audioSource is external', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-audio-external-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    const audioPath = path.join(tmpDir, 'audio.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+    fs.writeFileSync(audioPath, 'audio', 'utf8');
+
+    const execCalls: { bin: string; args: string[] }[] = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        takes: [
+          {
+            id: 'take-1',
+            screenPath,
+            cameraPath: null,
+            audioPath,
+            audioSource: 'external'
+          }
+        ],
+        sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.0 }],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }
+        ] as Keyframe[],
+        pipSize: 300,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill'
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 997,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
+          execCalls.push({ bin: ffmpegPath, args });
+        })
+      }
+    );
+
+    const args = execCalls[0].args;
+    // Both the screen and the dedicated mic file must be registered as ffmpeg
+    // inputs; audio trim must target the second input.
+    expect(args.filter((value) => value === '-i')).toHaveLength(2);
+    expect(args).toEqual(expect.arrayContaining([screenPath, audioPath]));
+    const argString = args.join(' ');
+    expect(argString).toContain('[1:a]atrim=start=0.000:end=1.000');
+    expect(argString).not.toContain('[0:a]atrim=start=0.000:end=1.000');
+  });
+
+  test('renderComposite keeps legacy takes (audioSource omitted) reading screen audio', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-audio-legacy-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+
+    const execCalls: { bin: string; args: string[] }[] = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        // Intentionally omit audioPath / audioSource to simulate a take saved
+        // before the routing change was introduced.
+        takes: [{ id: 'take-1', screenPath, cameraPath: null }],
+        sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.0 }],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }
+        ] as Keyframe[],
+        pipSize: 300,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill'
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 996,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
+          execCalls.push({ bin: ffmpegPath, args });
+        })
+      }
+    );
+
+    const argString = execCalls[0].args.join(' ');
+    expect(argString).toContain('[0:a]atrim=start=0.000:end=1.000');
+  });
+
+  test('renderComposite keeps camera input for audio even when PiP is not visible', async () => {
+    const tmpDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'video-render-audio-camera-hidden-')
+    );
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    const cameraPath = path.join(tmpDir, 'camera.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+    fs.writeFileSync(cameraPath, 'camera', 'utf8');
+
+    const execCalls: { bin: string; args: string[] }[] = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        takes: [
+          {
+            id: 'take-1',
+            screenPath,
+            cameraPath,
+            audioPath: null,
+            audioSource: 'camera'
+          }
+        ],
+        sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.0 }],
+        // No keyframe shows the PiP — camera video is not rendered, but its
+        // audio must still be wired in because that's where the mic lives.
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }
+        ] as Keyframe[],
+        pipSize: 300,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill'
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 995,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
+          execCalls.push({ bin: ffmpegPath, args });
+        })
+      }
+    );
+
+    const args = execCalls[0].args;
+    expect(args.filter((value) => value === '-i')).toHaveLength(2);
+    expect(args).toEqual(expect.arrayContaining([screenPath, cameraPath]));
+    const argString = args.join(' ');
+    expect(argString).toContain('[1:a]atrim=start=0.000:end=1.000');
+  });
+
+  test('renderComposite mixes mic and system audio via amix when both exist', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-amix-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    const cameraPath = path.join(tmpDir, 'camera.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+    fs.writeFileSync(cameraPath, 'camera', 'utf8');
+
+    const execCalls: { bin: string; args: string[] }[] = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        takes: [
+          {
+            id: 'take-1',
+            screenPath,
+            cameraPath,
+            audioPath: null,
+            audioSource: 'camera',
+            hasSystemAudio: true
+          }
+        ],
+        sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.0 }],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: true, cameraFullscreen: false }
+        ] as Keyframe[],
+        pipSize: 300,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill'
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 700,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
+          execCalls.push({ bin: ffmpegPath, args });
+        })
+      }
+    );
+
+    const argString = execCalls[0].args.join(' ');
+    // Both audio sources must be trimmed separately then mixed.
+    expect(argString).toContain('[1:a]atrim=start=0.000:end=1.000');
+    expect(argString).toContain('[0:a]atrim=start=0.000:end=1.000');
+    expect(argString).toContain('amix=inputs=2:duration=longest:dropout_transition=0[sa0]');
+  });
+
+  test('renderComposite skips amix when hasSystemAudio is true but the mic is already muxed into screen', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-legacy-sys-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+
+    const execCalls: { bin: string; args: string[] }[] = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        // Legacy shape: mic is on screen file AND hasSystemAudio is true.
+        // Mixing would duplicate the single on-disk audio track, so the
+        // filter graph should fall back to a single-source trim.
+        takes: [
+          {
+            id: 'take-1',
+            screenPath,
+            cameraPath: null,
+            audioSource: 'screen',
+            hasSystemAudio: true
+          }
+        ],
+        sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.0 }],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }
+        ] as Keyframe[],
+        pipSize: 300,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill'
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 701,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
+          execCalls.push({ bin: ffmpegPath, args });
+        })
+      }
+    );
+
+    const argString = execCalls[0].args.join(' ');
+    expect(argString).not.toContain('amix');
+    expect(argString).toContain('[0:a]atrim=start=0.000:end=1.000');
+  });
+
   test('renderComposite keeps overlay filters bounded for long redundant camera timelines', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-long-keyframes-'));
     const outputDir = path.join(tmpDir, 'out');

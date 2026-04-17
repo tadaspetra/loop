@@ -183,6 +183,14 @@
               id="screenSource"
               class="w-full bg-neutral-900 border border-neutral-800 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-neutral-600 transition-colors"
             ></select>
+            <label class="mt-1.5 flex items-center gap-2 text-xs text-neutral-400 cursor-pointer">
+              <input
+                type="checkbox"
+                id="systemAudioCheckbox"
+                class="accent-neutral-400"
+              />
+              <span>Include system audio</span>
+            </label>
           </div>
           <div>
             <label class="block text-xs font-medium text-neutral-500 uppercase tracking-wider mb-1"
@@ -293,6 +301,18 @@
             <div
               id="audioMeter"
               class="bg-emerald-500 h-full rounded-full transition-all duration-75"
+              style="width: 0%"
+            ></div>
+          </div>
+        </div>
+        <div id="systemAudioMeterRow" class="hidden flex items-center gap-3">
+          <span class="text-xs font-medium text-neutral-500 uppercase tracking-wider w-10"
+            >System</span
+          >
+          <div class="flex-1 bg-neutral-900 rounded-full h-2 overflow-hidden">
+            <div
+              id="systemAudioMeter"
+              class="bg-sky-500 h-full rounded-full transition-all duration-75"
               style="width: 0%"
             ></div>
           </div>

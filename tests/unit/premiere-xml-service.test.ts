@@ -27,6 +27,9 @@ function baseInput(overrides: Partial<PremiereXmlInput> = {}): PremiereXmlInput 
         id: 'take-1',
         screenPath: '/tmp/proj/media/screen-take-1.mov',
         cameraPath: '/tmp/proj/media/camera-take-1.mov',
+        audioPath: null,
+        audioSource: 'screen',
+        hasSystemAudio: false,
         screenDurationSec: 10,
         cameraDurationSec: 10,
         screenWidth: 1920,
@@ -102,6 +105,9 @@ describe('main/services/premiere-xml-service', () => {
           id: 'take-1',
           screenPath: '/tmp/proj/media/screen-take-1.mov',
           cameraPath: '/tmp/proj/media/camera-take-1.mov',
+          audioPath: null,
+          audioSource: 'screen',
+          hasSystemAudio: false,
           screenDurationSec: 10,
           cameraDurationSec: 10,
           screenWidth: 3840,
@@ -129,6 +135,9 @@ describe('main/services/premiere-xml-service', () => {
           id: 'take-1',
           screenPath: '/tmp/proj/media/screen-take-1.mov',
           cameraPath: '/tmp/proj/media/camera-take-1.mov',
+          audioPath: null,
+          audioSource: 'screen',
+          hasSystemAudio: false,
           screenDurationSec: 15,
           cameraDurationSec: 15,
           screenWidth: 1920,
@@ -173,6 +182,9 @@ describe('main/services/premiere-xml-service', () => {
           id: 'take-1',
           screenPath: '/tmp/proj/media/screen-take-1.mov',
           cameraPath: '/tmp/proj/media/camera-take-1.mov',
+          audioPath: null,
+          audioSource: 'screen',
+          hasSystemAudio: false,
           screenDurationSec: 10,
           cameraDurationSec: 10,
           screenWidth: 3840,
@@ -225,6 +237,9 @@ describe('main/services/premiere-xml-service', () => {
           id: 'take-1',
           screenPath: '/tmp/proj/media/screen-take-1.mov',
           cameraPath: null,
+          audioPath: null,
+          audioSource: 'screen',
+          hasSystemAudio: false,
           screenDurationSec: 5,
           cameraDurationSec: 0,
           screenWidth: 1920,
@@ -401,6 +416,9 @@ describe('main/services/premiere-xml-service', () => {
           id: 'take-1',
           screenPath: '/tmp/proj/media/screen-take-1.mov',
           cameraPath: null,
+          audioPath: null,
+          audioSource: 'screen',
+          hasSystemAudio: false,
           screenDurationSec: 5,
           cameraDurationSec: 0,
           screenWidth: 1920,
@@ -667,6 +685,9 @@ describe('main/services/premiere-xml-service', () => {
           id: 'take-1',
           screenPath: '/tmp/proj/media/screen-take-1.mov',
           cameraPath: '/tmp/proj/media/camera-take-1.mov',
+          audioPath: null,
+          audioSource: 'screen',
+          hasSystemAudio: false,
           screenDurationSec: 10,
           cameraDurationSec: 10,
           screenWidth: 3840,
@@ -770,6 +791,266 @@ describe('main/services/premiere-xml-service', () => {
     expect(leftValues.some((v) => Math.abs(v) < 0.001)).toBe(true);
   });
 
+  function getSequenceAudioTrack(doc: Document): Element {
+    // File assets can contain nested <audio> blocks, so reach into
+    // sequence > media > audio directly instead of grabbing the first
+    // document-order match.
+    const sequence = doc.getElementsByTagName('sequence')[0];
+    const media = Array.from(sequence.childNodes).find(
+      (n) => (n as Element).tagName === 'media'
+    ) as Element;
+    const audioEl = Array.from(media.childNodes).find(
+      (n) => (n as Element).tagName === 'audio'
+    ) as Element;
+    return Array.from(audioEl.childNodes).find(
+      (n) => (n as Element).tagName === 'track'
+    ) as Element;
+  }
+
+  test('buildPremiereXml points the audio clip at the camera file when audioSource is camera', () => {
+    const input = baseInput({
+      hasCamera: true,
+      takes: [
+        {
+          id: 'take-1',
+          screenPath: '/tmp/proj/media/screen-take-1.mov',
+          cameraPath: '/tmp/proj/media/camera-take-1.mov',
+          audioPath: null,
+          audioSource: 'camera',
+          hasSystemAudio: false,
+          screenDurationSec: 10,
+          cameraDurationSec: 10,
+          screenWidth: 1920,
+          screenHeight: 1080,
+          cameraWidth: 1920,
+          cameraHeight: 1080
+        }
+      ]
+    });
+    const xml = buildPremiereXml(input);
+    const doc = parseXml(xml);
+
+    const audioTrack = getSequenceAudioTrack(doc);
+    const audioClips = audioTrack.getElementsByTagName('clipitem');
+    expect(audioClips).toHaveLength(1);
+    // The audio clip must reference the camera asset id (not the screen one).
+    const audioClip = audioClips[0];
+    const fileEl = audioClip.getElementsByTagName('file')[0];
+    expect(fileEl.getAttribute('id')).toBe('file-camera-take-1');
+    // The full camera asset is emitted elsewhere (e.g. the V2 camera clip);
+    // the audio clip may reference it with the short-form `<file id="..."/>`.
+    // Verify the path lives on whichever emission carries the pathurl.
+    const files = getAllByTag(doc, 'file');
+    const cameraAssetWithPath = files.find(
+      (f) =>
+        f.getAttribute('id') === 'file-camera-take-1' &&
+        f.getElementsByTagName('pathurl').length > 0
+    );
+    expect(cameraAssetWithPath).toBeDefined();
+    const pathUrl =
+      cameraAssetWithPath!.getElementsByTagName('pathurl')[0]?.textContent ?? '';
+    expect(pathUrl).toContain('camera-take-1.mov');
+    // And that full emission must now advertise an audio stream because the
+    // mic is muxed into the camera webm for this take.
+    const cameraMedia = Array.from(cameraAssetWithPath!.childNodes).find(
+      (n) => (n as Element).tagName === 'media'
+    ) as Element;
+    const cameraAudioBlocks = Array.from(cameraMedia.childNodes).filter(
+      (n) => (n as Element).tagName === 'audio'
+    );
+    expect(cameraAudioBlocks).toHaveLength(1);
+
+    // The screen asset must advertise no audio now — the mic has moved.
+    const screenAsset = files.find(
+      (f) =>
+        f.getAttribute('id') === 'file-screen-take-1' &&
+        f.getElementsByTagName('pathurl').length > 0
+    );
+    expect(screenAsset).toBeDefined();
+    const screenMedia = Array.from(screenAsset!.childNodes).find(
+      (n) => (n as Element).tagName === 'media'
+    ) as Element;
+    const screenAudioBlocks = Array.from(screenMedia.childNodes).filter(
+      (n) => (n as Element).tagName === 'audio'
+    );
+    expect(screenAudioBlocks).toHaveLength(0);
+  });
+
+  test('buildPremiereXml points the audio clip at a dedicated audio file when audioSource is external', () => {
+    const input = baseInput({
+      hasCamera: false,
+      takes: [
+        {
+          id: 'take-1',
+          screenPath: '/tmp/proj/media/screen-take-1.mov',
+          cameraPath: null,
+          audioPath: '/tmp/proj/media/audio-take-1.wav',
+          audioSource: 'external',
+          hasSystemAudio: false,
+          screenDurationSec: 10,
+          cameraDurationSec: 0,
+          screenWidth: 1920,
+          screenHeight: 1080,
+          cameraWidth: null,
+          cameraHeight: null
+        }
+      ]
+    });
+    const xml = buildPremiereXml(input);
+    const doc = parseXml(xml);
+
+    const audioTrack = getSequenceAudioTrack(doc);
+    const audioClips = audioTrack.getElementsByTagName('clipitem');
+    expect(audioClips).toHaveLength(1);
+    const fileEl = audioClips[0].getElementsByTagName('file')[0];
+    expect(fileEl.getAttribute('id')).toBe('file-audio-take-1');
+    const pathUrl = fileEl.getElementsByTagName('pathurl')[0]?.textContent ?? '';
+    expect(pathUrl).toContain('audio-take-1.wav');
+
+    // No audio stream should be registered on the screen asset anymore.
+    const files = getAllByTag(doc, 'file');
+    const screenAsset = files.find(
+      (f) =>
+        f.getAttribute('id') === 'file-screen-take-1' &&
+        f.getElementsByTagName('pathurl').length > 0
+    );
+    expect(screenAsset).toBeDefined();
+    const screenMedia = Array.from(screenAsset!.childNodes).find(
+      (n) => (n as Element).tagName === 'media'
+    ) as Element;
+    const screenAudioBlocks = Array.from(screenMedia.childNodes).filter(
+      (n) => (n as Element).tagName === 'audio'
+    );
+    expect(screenAudioBlocks).toHaveLength(0);
+  });
+
+  test('buildPremiereXml keeps legacy takes emitting audio from the screen asset', () => {
+    const input = baseInput({
+      hasCamera: false,
+      takes: [
+        {
+          id: 'take-1',
+          screenPath: '/tmp/proj/media/screen-take-1.mov',
+          cameraPath: null,
+          audioPath: null,
+          audioSource: 'screen',
+          hasSystemAudio: false,
+          screenDurationSec: 10,
+          cameraDurationSec: 0,
+          screenWidth: 1920,
+          screenHeight: 1080,
+          cameraWidth: null,
+          cameraHeight: null
+        }
+      ]
+    });
+    const doc = parseXml(buildPremiereXml(input));
+    const audioTrack = getSequenceAudioTrack(doc);
+    const audioClip = audioTrack.getElementsByTagName('clipitem')[0];
+    const fileEl = audioClip.getElementsByTagName('file')[0];
+    expect(fileEl.getAttribute('id')).toBe('file-screen-take-1');
+  });
+
+  test('buildPremiereXml emits a second audio track for system audio when hasSystemAudio is true', () => {
+    const input = baseInput({
+      hasCamera: true,
+      takes: [
+        {
+          id: 'take-1',
+          screenPath: '/tmp/proj/media/screen-take-1.mov',
+          cameraPath: '/tmp/proj/media/camera-take-1.mov',
+          audioPath: null,
+          audioSource: 'camera',
+          hasSystemAudio: true,
+          screenDurationSec: 10,
+          cameraDurationSec: 10,
+          screenWidth: 1920,
+          screenHeight: 1080,
+          cameraWidth: 1920,
+          cameraHeight: 1080
+        }
+      ]
+    });
+    const doc = parseXml(buildPremiereXml(input));
+
+    // Sequence should now carry two <audio> <track> children: mic (camera)
+    // on track 1, system audio (screen) on track 2.
+    const sequence = doc.getElementsByTagName('sequence')[0];
+    const media = Array.from(sequence.childNodes).find(
+      (n) => (n as Element).tagName === 'media'
+    ) as Element;
+    const audioEl = Array.from(media.childNodes).find(
+      (n) => (n as Element).tagName === 'audio'
+    ) as Element;
+    const audioTracks = Array.from(audioEl.childNodes).filter(
+      (n) => (n as Element).tagName === 'track'
+    ) as Element[];
+    expect(audioTracks).toHaveLength(2);
+
+    const micClip = audioTracks[0].getElementsByTagName('clipitem')[0];
+    const sysClip = audioTracks[1].getElementsByTagName('clipitem')[0];
+    expect(micClip.getElementsByTagName('file')[0]?.getAttribute('id')).toBe(
+      'file-camera-take-1'
+    );
+    expect(sysClip.getElementsByTagName('file')[0]?.getAttribute('id')).toBe(
+      'file-screen-take-1'
+    );
+    expect(sysClip.getAttribute('id')).toMatch(/^clipitem-sysaudio/);
+
+    // Screen asset must advertise audio now that system audio is present.
+    const files = getAllByTag(doc, 'file');
+    const screenAsset = files.find(
+      (f) =>
+        f.getAttribute('id') === 'file-screen-take-1' &&
+        f.getElementsByTagName('pathurl').length > 0
+    );
+    expect(screenAsset).toBeDefined();
+    const screenMedia = Array.from(screenAsset!.childNodes).find(
+      (n) => (n as Element).tagName === 'media'
+    ) as Element;
+    const screenAudioBlocks = Array.from(screenMedia.childNodes).filter(
+      (n) => (n as Element).tagName === 'audio'
+    );
+    expect(screenAudioBlocks).toHaveLength(1);
+  });
+
+  test('buildPremiereXml does NOT duplicate the audio track when legacy take reports hasSystemAudio', () => {
+    // Legacy takes with mic muxed into the screen file should not get an
+    // extra "system audio" clip pointing at the same asset — that would
+    // double the same audio in Premiere.
+    const input = baseInput({
+      hasCamera: false,
+      takes: [
+        {
+          id: 'take-1',
+          screenPath: '/tmp/proj/media/screen-take-1.mov',
+          cameraPath: null,
+          audioPath: null,
+          audioSource: 'screen',
+          hasSystemAudio: true,
+          screenDurationSec: 10,
+          cameraDurationSec: 0,
+          screenWidth: 1920,
+          screenHeight: 1080,
+          cameraWidth: null,
+          cameraHeight: null
+        }
+      ]
+    });
+    const doc = parseXml(buildPremiereXml(input));
+    const sequence = doc.getElementsByTagName('sequence')[0];
+    const media = Array.from(sequence.childNodes).find(
+      (n) => (n as Element).tagName === 'media'
+    ) as Element;
+    const audioEl = Array.from(media.childNodes).find(
+      (n) => (n as Element).tagName === 'audio'
+    ) as Element;
+    const audioTracks = Array.from(audioEl.childNodes).filter(
+      (n) => (n as Element).tagName === 'track'
+    );
+    expect(audioTracks).toHaveLength(1);
+  });
+
   test('buildPremiereXml escapes special characters in project name and paths', () => {
     const xml = buildPremiereXml(
       baseInput({
@@ -779,6 +1060,9 @@ describe('main/services/premiere-xml-service', () => {
             id: 'take-1',
             screenPath: '/tmp/proj/media/screen & <1>.mov',
             cameraPath: '/tmp/proj/media/camera-take-1.mov',
+            audioPath: null,
+            audioSource: 'screen',
+            hasSystemAudio: false,
             screenDurationSec: 10,
             cameraDurationSec: 10,
             screenWidth: 1920,

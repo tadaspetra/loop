@@ -13,6 +13,7 @@ import {
 } from '../infra/file-system';
 import {
   createDefaultProject,
+  normalizeAudioSource,
   normalizeProjectData,
   normalizeSections,
   sanitizeProjectName,
@@ -73,7 +74,11 @@ export function createProjectService({ app }: { app: Pick<App, 'getPath'> }) {
   function normalizeRecoveryTake(rawTake: unknown, projectFolder: string): RecoveryTake | null {
     if (!isRecord(rawTake)) return null;
 
-    const take = rawTake as RecoveryTakeInput;
+    const take = rawTake as RecoveryTakeInput & {
+      audioPath?: unknown;
+      audioSource?: unknown;
+      hasSystemAudio?: unknown;
+    };
     const screenPath = projectFolder
       ? toProjectAbsolutePath(projectFolder, take.screenPath)
       : typeof take.screenPath === 'string'
@@ -84,6 +89,18 @@ export function createProjectService({ app }: { app: Pick<App, 'getPath'> }) {
       : typeof take.cameraPath === 'string'
         ? take.cameraPath
         : null;
+    const rawAudioPath = projectFolder
+      ? toProjectAbsolutePath(projectFolder, take.audioPath)
+      : typeof take.audioPath === 'string'
+        ? take.audioPath
+        : null;
+    // Legacy recovery records did not serialize audioSource; assume mic was
+    // muxed into the screen file so finalize does not lose audio mapping.
+    const hasAudioSourceField = Object.prototype.hasOwnProperty.call(
+      rawTake as Record<string, unknown>,
+      'audioSource'
+    );
+    const audioSource = hasAudioSourceField ? normalizeAudioSource(take.audioSource) : 'screen';
     const recordedDuration = Number(take.recordedDuration);
     const sections = normalizeSections(take.sections);
     const trimSegments: RecoveryTrimSegment[] = Array.isArray(take.trimSegments)
@@ -107,16 +124,21 @@ export function createProjectService({ app }: { app: Pick<App, 'getPath'> }) {
 
     // Screen is the essential recovery asset — without it we cannot recover.
     if (!screenPath || !fs.existsSync(screenPath)) return null;
-    // Camera is optional: if the camera file was never saved (or was moved/
-    // deleted) we still recover the screen take rather than discarding
-    // everything. Dropping the reference here prevents a broken pointer.
+    // Camera / external audio are optional: if either file was never saved
+    // (or was moved/deleted) we still recover the screen take rather than
+    // discarding everything. Dropping the reference here prevents a broken
+    // pointer from wedging recovery.
     const cameraPath = rawCameraPath && fs.existsSync(rawCameraPath) ? rawCameraPath : null;
+    const audioPath = rawAudioPath && fs.existsSync(rawAudioPath) ? rawAudioPath : null;
 
     return {
       id: typeof take.id === 'string' && take.id ? take.id : `recovery-${Date.now()}`,
       createdAt: typeof take.createdAt === 'string' ? take.createdAt : new Date().toISOString(),
       screenPath,
       cameraPath,
+      audioPath,
+      audioSource,
+      hasSystemAudio: take.hasSystemAudio === true,
       recordedDuration: Number.isFinite(recordedDuration) ? recordedDuration : 0,
       sections,
       trimSegments
@@ -142,7 +164,8 @@ export function createProjectService({ app }: { app: Pick<App, 'getPath'> }) {
     const serializable = {
       ...normalized,
       screenPath: toProjectRelativePath(projectFolder, normalized.screenPath),
-      cameraPath: toProjectRelativePath(projectFolder, normalized.cameraPath)
+      cameraPath: toProjectRelativePath(projectFolder, normalized.cameraPath),
+      audioPath: toProjectRelativePath(projectFolder, normalized.audioPath)
     };
     writeJsonFile(getProjectRecoveryFilePath(projectFolder), serializable);
     return normalized;
@@ -188,6 +211,7 @@ export function createProjectService({ app }: { app: Pick<App, 'getPath'> }) {
       ...take,
       screenPath: toProjectRelativePath(projectFolder, take.screenPath),
       cameraPath: toProjectRelativePath(projectFolder, take.cameraPath),
+      audioPath: toProjectRelativePath(projectFolder, take.audioPath),
       proxyPath: toProjectRelativePath(projectFolder, take.proxyPath)
     }));
     serializable.timeline.sections = serializable.timeline.sections.map((section) => ({

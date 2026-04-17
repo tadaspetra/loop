@@ -1,4 +1,4 @@
-import type { Keyframe } from '../../shared/domain/project';
+import type { AudioSource, Keyframe } from '../../shared/domain/project';
 import { TRANSITION_DURATION } from './render-filter-service';
 
 export { TRANSITION_DURATION };
@@ -7,6 +7,16 @@ export interface PremiereTake {
   id: string;
   screenPath: string;
   cameraPath: string | null;
+  // Dedicated audio-only file path, populated when audioSource === 'external'.
+  audioPath: string | null;
+  // Which file physically owns the mic for this take. Legacy takes default to
+  // 'screen' (mic muxed into screen webm). New takes with a camera report
+  // 'camera'; screen-only recordings report 'external'. null means no audio.
+  audioSource: AudioSource | null;
+  // True when the screen file carries a system/desktop audio track separate
+  // from the mic (the mic routes via `audioSource`). Drives a second audio
+  // track in the Premiere XML so editors can balance the two manually.
+  hasSystemAudio: boolean;
   screenDurationSec: number;
   cameraDurationSec: number;
   screenWidth: number;
@@ -627,7 +637,10 @@ function emitScreenClip(params: {
       durationFrames,
       width: take.screenWidth,
       height: take.screenHeight,
-      hasAudio: true
+      // Screen file carries audio either for legacy takes (mic muxed into
+      // screen) or for new takes with captured system audio. New camera/
+      // external takes without system audio have a silent screen webm.
+      hasAudio: take.audioSource === 'screen' || take.hasSystemAudio
     },
     fps,
     emittedFiles
@@ -688,7 +701,9 @@ function emitCameraClip(params: {
       durationFrames,
       width: cameraW,
       height: cameraH,
-      hasAudio: false
+      // Camera file owns the mic when audioSource === 'camera' (new default
+      // for camera+mic takes). Legacy camera files were always silent.
+      hasAudio: take.audioSource === 'camera'
     },
     fps,
     emittedFiles
@@ -720,14 +735,63 @@ function emitCameraClip(params: {
   );
 }
 
-function emitAudioClip(params: {
+interface ResolvedAudioSource {
+  fileId: string;
+  path: string;
+  durationFrames: number;
+  width: number;
+  height: number;
+}
+
+function resolvePremiereAudioSource(
+  take: PremiereTake,
+  fps: number
+): ResolvedAudioSource | null {
+  if (take.audioSource === 'camera' && take.cameraPath) {
+    return {
+      fileId: `file-camera-${take.id}`,
+      path: take.cameraPath,
+      durationFrames: secondsToFrames(take.cameraDurationSec, fps),
+      width: take.cameraWidth ?? AUTHORING_CANVAS_W,
+      height: take.cameraHeight ?? AUTHORING_CANVAS_H
+    };
+  }
+  if (take.audioSource === 'external' && take.audioPath) {
+    return {
+      fileId: `file-audio-${take.id}`,
+      path: take.audioPath,
+      // Audio-only assets mirror the screen duration since they are recorded
+      // concurrently with the screen and share the same timeline window.
+      durationFrames: secondsToFrames(take.screenDurationSec, fps),
+      width: 0,
+      height: 0
+    };
+  }
+  if (take.audioSource === 'screen' && take.screenPath) {
+    return {
+      fileId: `file-screen-${take.id}`,
+      path: take.screenPath,
+      durationFrames: secondsToFrames(take.screenDurationSec, fps),
+      width: 0,
+      height: 0
+    };
+  }
+  return null;
+}
+
+function emitSystemAudioClip(params: {
   clipIndex: number;
   section: PremiereSection;
   take: PremiereTake;
   fps: number;
   emittedFiles: Set<string>;
-}): string {
+}): string | null {
   const { clipIndex, section, take, fps, emittedFiles } = params;
+  if (!take.hasSystemAudio || !take.screenPath) return null;
+  // When the mic already lives on the screen file (legacy), the primary audio
+  // clip covers it — a second identical clip would just duplicate playback.
+  if (take.audioSource === 'screen') return null;
+
   const fileId = `file-screen-${take.id}`;
   const durationFrames = secondsToFrames(take.screenDurationSec, fps);
   const inFrames = secondsToFrames(section.sourceStart, fps);
@@ -741,8 +805,62 @@ function emitAudioClip(params: {
       name: basename(take.screenPath),
       pathUrl: pathToFileUrl(take.screenPath),
       durationFrames,
-      width: 0,
-      height: 0,
+      width: take.screenWidth,
+      height: take.screenHeight,
+      hasAudio: true
+    },
+    fps,
+    emittedFiles
+  );
+
+  return (
+    `  <clipitem id="clipitem-sysaudio-${clipIndex}">\n` +
+    `    <name>${escapeXml(basename(take.screenPath))}</name>\n` +
+    `    <enabled>TRUE</enabled>\n` +
+    `    <duration>${durationFrames}</duration>\n` +
+    `    <rate>\n` +
+    `      <timebase>${fps}</timebase>\n` +
+    `      <ntsc>FALSE</ntsc>\n` +
+    `    </rate>\n` +
+    `    <in>${inFrames}</in>\n` +
+    `    <out>${outFrames}</out>\n` +
+    `    <start>${startFrames}</start>\n` +
+    `    <end>${endFrames}</end>\n` +
+    `${fileAsset}\n` +
+    `    <sourcetrack>\n` +
+    `      <mediatype>audio</mediatype>\n` +
+    `      <trackindex>1</trackindex>\n` +
+    `    </sourcetrack>\n` +
+    `  </clipitem>`
+  );
+}
+
+function emitAudioClip(params: {
+  clipIndex: number;
+  section: PremiereSection;
+  take: PremiereTake;
+  fps: number;
+  emittedFiles: Set<string>;
+}): string | null {
+  const { clipIndex, section, take, fps, emittedFiles } = params;
+  const source = resolvePremiereAudioSource(take, fps);
+  // Takes recorded without a mic (audioSource === null / missing file) have
+  // nothing to emit on the audio track; skipping keeps Premiere from trying
+  // to reference a missing file.
+  if (!source) return null;
+  const inFrames = secondsToFrames(section.sourceStart, fps);
+  const outFrames = secondsToFrames(section.sourceEnd, fps);
+  const startFrames = secondsToFrames(section.timelineStart, fps);
+  const endFrames = secondsToFrames(section.timelineEnd, fps);
+
+  const fileAsset = emitFileAsset(
+    {
+      id: source.fileId,
+      name: basename(source.path),
+      pathUrl: pathToFileUrl(source.path),
+      durationFrames: source.durationFrames,
+      width: source.width,
+      height: source.height,
       hasAudio: true
     },
     fps,
@@ -751,9 +869,9 @@ function emitAudioClip(params: {
 
   return (
     `  <clipitem id="clipitem-audio-${clipIndex}">\n` +
-    `    <name>${escapeXml(basename(take.screenPath))}</name>\n` +
+    `    <name>${escapeXml(basename(source.path))}</name>\n` +
     `    <enabled>TRUE</enabled>\n` +
-    `    <duration>${durationFrames}</duration>\n` +
+    `    <duration>${source.durationFrames}</duration>\n` +
     `    <rate>\n` +
     `      <timebase>${fps}</timebase>\n` +
     `      <ntsc>FALSE</ntsc>\n` +
@@ -794,6 +912,7 @@ export function buildPremiereXml(input: PremiereXmlInput): string {
   const screenClips: string[] = [];
   const cameraClips: string[] = [];
   const audioClips: string[] = [];
+  const systemAudioClips: string[] = [];
 
   input.sections.forEach((section, index) => {
     const take = takeMap.get(section.takeId);
@@ -805,7 +924,16 @@ export function buildPremiereXml(input: PremiereXmlInput): string {
       const cam = emitCameraClip({ clipIndex: index, section, take, fps, emittedFiles, input });
       if (cam) cameraClips.push(cam);
     }
-    audioClips.push(emitAudioClip({ clipIndex: index, section, take, fps, emittedFiles }));
+    const audioClip = emitAudioClip({ clipIndex: index, section, take, fps, emittedFiles });
+    if (audioClip) audioClips.push(audioClip);
+    const sysAudioClip = emitSystemAudioClip({
+      clipIndex: index,
+      section,
+      take,
+      fps,
+      emittedFiles
+    });
+    if (sysAudioClip) systemAudioClips.push(sysAudioClip);
   });
 
   const videoTracks: string[] = [];
@@ -826,12 +954,26 @@ export function buildPremiereXml(input: PremiereXmlInput): string {
     );
   }
 
-  const audioTrack =
+  const audioTracks: string[] = [];
+  audioTracks.push(
     `      <track>\n` +
-    `        <enabled>TRUE</enabled>\n` +
-    `        <locked>FALSE</locked>\n` +
-    `${indent(audioClips.join('\n'), '      ')}\n` +
-    `      </track>`;
+      `        <enabled>TRUE</enabled>\n` +
+      `        <locked>FALSE</locked>\n` +
+      `${indent(audioClips.join('\n'), '      ')}\n` +
+      `      </track>`
+  );
+  if (systemAudioClips.length > 0) {
+    // System audio lives on its own track so editors can mute/level it
+    // independently of the mic.
+    audioTracks.push(
+      `      <track>\n` +
+        `        <enabled>TRUE</enabled>\n` +
+        `        <locked>FALSE</locked>\n` +
+        `${indent(systemAudioClips.join('\n'), '      ')}\n` +
+        `      </track>`
+    );
+  }
+  const audioTrack = audioTracks.join('\n');
 
   const sequenceName = escapeXml(input.projectName || 'Loop Sequence');
   const sequenceId = `sequence-1`;

@@ -3,7 +3,12 @@ import path from 'node:path';
 import ffmpegStatic from 'ffmpeg-static';
 
 import { atomicWriteFileSync, ensureDirectory, fs } from '../infra/file-system';
-import { normalizeCameraSyncOffsetMs, type Keyframe } from '../../shared/domain/project';
+import {
+  normalizeAudioSource,
+  normalizeCameraSyncOffsetMs,
+  type AudioSource,
+  type Keyframe
+} from '../../shared/domain/project';
 import type { RenderProgressUpdate } from '../../shared/electron-api';
 import {
   chooseRenderFps,
@@ -22,6 +27,9 @@ export interface PremiereExportTakeInput {
   id: string;
   screenPath: string;
   cameraPath: string | null;
+  audioPath?: string | null;
+  audioSource?: AudioSource | null;
+  hasSystemAudio?: boolean;
   duration: number;
 }
 
@@ -61,11 +69,14 @@ export interface PremiereExportDeps {
 }
 
 interface TranscodeJob {
-  kind: 'screen' | 'camera';
+  kind: 'screen' | 'camera' | 'audio';
   takeId: string;
   inputPath: string;
   outputPath: string;
   sourceDurationSec: number;
+  // Whether to keep the source audio track when transcoding camera video.
+  // True when the camera file owns the mic (audioSource === 'camera').
+  includeCameraAudio?: boolean;
 }
 
 function sanitizeTakeIdForFileName(takeId: string): string {
@@ -78,6 +89,10 @@ function screenOutputName(takeId: string): string {
 
 function cameraOutputName(takeId: string): string {
   return `camera-${sanitizeTakeIdForFileName(takeId)}.mov`;
+}
+
+function audioOutputName(takeId: string): string {
+  return `audio-${sanitizeTakeIdForFileName(takeId)}.wav`;
 }
 
 function roundDownToEven(value: number): number {
@@ -123,7 +138,8 @@ function buildScreenTranscodeArgs(inputPath: string, outputPath: string): string
 function buildCameraTranscodeArgs(
   inputPath: string,
   outputPath: string,
-  cameraSyncOffsetMs: number
+  cameraSyncOffsetMs: number,
+  includeAudio: boolean
 ): string[] {
   // Mirror horizontally only; preserve native dimensions so the user can
   // expand / re-crop the full camera frame in Premiere.
@@ -138,14 +154,24 @@ function buildCameraTranscodeArgs(
   if (Math.abs(offsetSec) > 0.0005) {
     args.push('-itsoffset', (-offsetSec).toFixed(3));
   }
+  args.push('-i', inputPath, '-map', '0:v:0?', '-vf', 'hflip,setsar=1');
+  if (includeAudio) {
+    // Camera file owns the mic for this take; preserve it so Premiere can
+    // import the PiP clip with its built-in audio track.
+    args.push(
+      '-map',
+      '0:a:0?',
+      '-c:a',
+      'pcm_s16le',
+      '-ar',
+      '48000',
+      '-ac',
+      '2'
+    );
+  } else {
+    args.push('-an');
+  }
   args.push(
-    '-i',
-    inputPath,
-    '-map',
-    '0:v:0?',
-    '-vf',
-    'hflip,setsar=1',
-    '-an',
     '-c:v',
     'prores_ks',
     '-profile:v',
@@ -158,6 +184,31 @@ function buildCameraTranscodeArgs(
     outputPath
   );
   return args;
+}
+
+function buildAudioTranscodeArgs(inputPath: string, outputPath: string): string[] {
+  // Audio-only takes are written as 48kHz stereo PCM wav so Premiere imports
+  // them without needing to decode WebM/Opus on the editor's Import path.
+  return [
+    '-progress',
+    'pipe:1',
+    '-nostats',
+    '-fflags',
+    '+genpts',
+    '-i',
+    inputPath,
+    '-vn',
+    '-map',
+    '0:a:0?',
+    '-c:a',
+    'pcm_s16le',
+    '-ar',
+    '48000',
+    '-ac',
+    '2',
+    '-y',
+    outputPath
+  ];
 }
 
 export async function exportPremiereProject(
@@ -203,6 +254,12 @@ export async function exportPremiereProject(
     if (!take.screenPath || !fs.existsSync(take.screenPath)) {
       throw new Error(`Screen file not found for take ${takeId}`);
     }
+    const takeAudioSource = normalizeAudioSource(take.audioSource) ?? 'screen';
+    const cameraOwnsAudio = takeAudioSource === 'camera';
+    // Transcode the camera file whenever its video is visible OR when it
+    // owns the mic; otherwise skip (matches legacy behavior for hidden camera).
+    const needsCameraJob =
+      (hasCamera || cameraOwnsAudio) && !!take.cameraPath && fs.existsSync(take.cameraPath);
     jobs.push({
       kind: 'screen',
       takeId,
@@ -210,12 +267,26 @@ export async function exportPremiereProject(
       outputPath: path.join(mediaFolder, screenOutputName(takeId)),
       sourceDurationSec: Number.isFinite(take.duration) ? take.duration : 0
     });
-    if (hasCamera && take.cameraPath && fs.existsSync(take.cameraPath)) {
+    if (needsCameraJob) {
       jobs.push({
         kind: 'camera',
         takeId,
-        inputPath: take.cameraPath,
+        inputPath: take.cameraPath as string,
         outputPath: path.join(mediaFolder, cameraOutputName(takeId)),
+        sourceDurationSec: Number.isFinite(take.duration) ? take.duration : 0,
+        includeCameraAudio: cameraOwnsAudio
+      });
+    }
+    if (
+      takeAudioSource === 'external' &&
+      take.audioPath &&
+      fs.existsSync(take.audioPath)
+    ) {
+      jobs.push({
+        kind: 'audio',
+        takeId,
+        inputPath: take.audioPath,
+        outputPath: path.join(mediaFolder, audioOutputName(takeId)),
         sourceDurationSec: Number.isFinite(take.duration) ? take.duration : 0
       });
     }
@@ -272,10 +343,19 @@ export async function exportPremiereProject(
   for (const job of jobs) {
     if (deps.signal?.aborted) throw new Error('Premiere export aborted');
 
-    const args =
-      job.kind === 'screen'
-        ? buildScreenTranscodeArgs(job.inputPath, job.outputPath)
-        : buildCameraTranscodeArgs(job.inputPath, job.outputPath, opts.cameraSyncOffsetMs);
+    let args: string[];
+    if (job.kind === 'screen') {
+      args = buildScreenTranscodeArgs(job.inputPath, job.outputPath);
+    } else if (job.kind === 'camera') {
+      args = buildCameraTranscodeArgs(
+        job.inputPath,
+        job.outputPath,
+        opts.cameraSyncOffsetMs,
+        job.includeCameraAudio === true
+      );
+    } else {
+      args = buildAudioTranscodeArgs(job.inputPath, job.outputPath);
+    }
 
     const jobDuration = Math.max(0.001, job.sourceDurationSec || 0);
     await runFfmpegProcess({
@@ -313,16 +393,39 @@ export async function exportPremiereProject(
   const exportTakes: PremiereTake[] = Array.from(referencedTakeIds).map((takeId) => {
     const take = takeMap.get(takeId);
     if (!take) throw new Error(`Take ${takeId} not found`);
-    const hasCam = hasCamera && !!take.cameraPath;
+    const takeAudioSource = normalizeAudioSource(take.audioSource) ?? 'screen';
+    const cameraOwnsAudio = takeAudioSource === 'camera';
+    // Camera appears in the XML whenever its ProRes output was produced — so
+    // video-only camera takes (hasCamera) and audio-routing camera takes both
+    // show up; silent camera takes with no hasCamera stay omitted.
+    const hasCam =
+      (hasCamera || cameraOwnsAudio) && !!take.cameraPath && fs.existsSync(take.cameraPath);
     const durationSec = Number.isFinite(take.duration) ? take.duration : 0;
 
     const screenDims = dimsByPath.get(take.screenPath) ?? null;
     const cameraDims = take.cameraPath ? (dimsByPath.get(take.cameraPath) ?? null) : null;
 
+    const resolvedAudioSource: AudioSource | null = (() => {
+      if (takeAudioSource === 'camera' && hasCam) return 'camera';
+      if (takeAudioSource === 'external' && take.audioPath) return 'external';
+      if (takeAudioSource === 'screen') return 'screen';
+      return null;
+    })();
+
+    const audioPath =
+      takeAudioSource === 'external' && take.audioPath
+        ? path.join(mediaFolder, audioOutputName(takeId))
+        : null;
+
     return {
       id: takeId,
       screenPath: path.join(mediaFolder, screenOutputName(takeId)),
       cameraPath: hasCam ? path.join(mediaFolder, cameraOutputName(takeId)) : null,
+      audioPath,
+      audioSource: resolvedAudioSource,
+      // Screen transcode keeps the source audio track (`-map 0:a:0?`), so if
+      // the take advertised system audio it survives the ProRes pass.
+      hasSystemAudio: take.hasSystemAudio === true,
       screenDurationSec: durationSec,
       cameraDurationSec: hasCam ? durationSec : 0,
       screenWidth: screenDims?.width ?? canvasW,
