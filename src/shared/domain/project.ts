@@ -19,6 +19,12 @@ export const EXPORT_VIDEO_PRESET_QUALITY = 'quality';
 export const DEFAULT_PIP_SIZE = 422;
 export const MIN_PIP_SIZE = 64;
 export const MAX_PIP_SIZE = 1920;
+// Upper bound for per-recorder start-offset values (non-negative ms). Recorders
+// that take longer than this to emit their first chunk are almost certainly
+// broken, and accepting absurd values here would produce nonsensical ffmpeg
+// trims. 10 seconds is far beyond any real startup skew between concurrent
+// MediaRecorders we have observed.
+export const MAX_RECORDER_START_OFFSET_MS = 10000;
 
 export type ScreenFitMode = 'fill' | 'fit';
 export type ExportAudioPreset =
@@ -83,6 +89,21 @@ export interface Take {
   // take can carry both mic and system audio and the export/editor can mix.
   hasSystemAudio: boolean;
   proxyPath: string | null;
+  // Smaller H.264 proxy of the camera WebM, used by the editor so playback
+  // does not have to software-decode two full-resolution VP8 streams at
+  // once on long recordings. Never used in export — export always reads
+  // the raw camera file for fidelity.
+  cameraProxyPath: string | null;
+  // Per-recorder delay (ms, non-negative) between the anchor recorder's first
+  // data chunk and this file's first data chunk. The anchor is whichever
+  // recorder delivered data first; anchor itself is 0. Export uses these to
+  // shift each file's trim window so the section windows refer to the same
+  // real-world moment, not the same file-relative second, even when the
+  // screen/camera/audio MediaRecorders produce their first frame at slightly
+  // different wall times.
+  screenStartOffsetMs: number;
+  cameraStartOffsetMs: number;
+  audioStartOffsetMs: number;
   sections: Section[];
 }
 
@@ -291,6 +312,13 @@ export function normalizeAudioSource(value: unknown): AudioSource | null {
   return null;
 }
 
+export function normalizeRecorderStartOffsetMs(value: unknown): number {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return 0;
+  const clamped = Math.min(MAX_RECORDER_START_OFFSET_MS, num);
+  return Math.round(clamped);
+}
+
 export function normalizePipSize(value: unknown): number {
   const size = Number(value);
   if (!Number.isFinite(size) || size <= 0) return DEFAULT_PIP_SIZE;
@@ -398,6 +426,14 @@ export function normalizeProjectData(rawProject: unknown, projectFolder?: string
           : typeof take.proxyPath === 'string'
             ? take.proxyPath
             : null,
+        cameraProxyPath: projectFolder
+          ? toProjectAbsolutePath(projectFolder, rawTakeRecord.cameraProxyPath)
+          : typeof rawTakeRecord.cameraProxyPath === 'string'
+            ? (rawTakeRecord.cameraProxyPath as string)
+            : null,
+        screenStartOffsetMs: normalizeRecorderStartOffsetMs(rawTakeRecord.screenStartOffsetMs),
+        cameraStartOffsetMs: normalizeRecorderStartOffsetMs(rawTakeRecord.cameraStartOffsetMs),
+        audioStartOffsetMs: normalizeRecorderStartOffsetMs(rawTakeRecord.audioStartOffsetMs),
         sections: normalizeSections(take.sections)
       };
     }),

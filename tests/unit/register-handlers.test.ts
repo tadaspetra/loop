@@ -232,8 +232,11 @@ describe('main/ipc/register-handlers', () => {
     );
 
     expect(result).toBe('/project/screen-proxy.mp4');
+    // Events now include `kind` so the renderer can route screen-proxy vs
+    // camera-proxy completion to the correct fields on the Take.
     expect(sender.send).toHaveBeenCalledWith('proxy:progress', {
       takeId: 'take-1',
+      kind: 'screen',
       status: 'started',
       percent: 0
     });
@@ -242,6 +245,7 @@ describe('main/ipc/register-handlers', () => {
     await vi.waitFor(() => {
       expect(sender.send).toHaveBeenCalledWith('proxy:progress', {
         takeId: 'take-1',
+        kind: 'screen',
         status: 'done',
         proxyPath: '/project/screen-proxy.mp4'
       });
@@ -266,8 +270,50 @@ describe('main/ipc/register-handlers', () => {
     await vi.waitFor(() => {
       expect(sender.send).toHaveBeenCalledWith('proxy:progress', {
         takeId: 'take-1',
+        kind: 'screen',
         status: 'error',
         error: 'encode failed'
+      });
+    });
+  });
+
+  test('proxy:generate with kind=camera emits camera-tagged events', async () => {
+    // The renderer relies on `kind` to distinguish screen-proxy completion
+    // from camera-proxy completion so it can set take.proxyPath vs
+    // take.cameraProxyPath. Exercising the kind='camera' branch protects
+    // that routing from silently regressing.
+    const { handlers } = registerWithHandlers();
+    const sender = {
+      send: vi.fn(),
+      isDestroyed: vi.fn().mockReturnValue(false),
+      once: vi.fn(),
+      removeListener: vi.fn()
+    };
+
+    const result = handlers.get('proxy:generate')!(
+      { sender },
+      {
+        takeId: 'take-1',
+        inputPath: '/project/camera.webm',
+        projectFolder: '/project',
+        durationSec: 10,
+        kind: 'camera'
+      }
+    );
+
+    expect(result).toBe('/project/camera-proxy.mp4');
+    expect(sender.send).toHaveBeenCalledWith('proxy:progress', {
+      takeId: 'take-1',
+      kind: 'camera',
+      status: 'started',
+      percent: 0
+    });
+    await vi.waitFor(() => {
+      expect(sender.send).toHaveBeenCalledWith('proxy:progress', {
+        takeId: 'take-1',
+        kind: 'camera',
+        status: 'done',
+        proxyPath: '/project/camera-proxy.mp4'
       });
     });
   });

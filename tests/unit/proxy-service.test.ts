@@ -3,6 +3,7 @@ import { describe, expect, test, vi, beforeEach } from 'vitest';
 import {
   deriveProxyPath,
   generateProxy,
+  isCurrentProxyPath,
   _getQueueState,
   _resetQueue
 } from '../../src/main/services/proxy-service';
@@ -12,17 +13,28 @@ describe('main/services/proxy-service', () => {
     _resetQueue();
   });
 
-  test('deriveProxyPath replaces extension with -proxy.mp4', () => {
+  test('deriveProxyPath uses the versioned -proxy-v2.mp4 suffix so older proxies are treated as cache misses', () => {
     expect(deriveProxyPath('/project/recording-123-screen.webm')).toBe(
-      '/project/recording-123-screen-proxy.mp4'
+      '/project/recording-123-screen-proxy-v2.mp4'
     );
   });
 
   test('deriveProxyPath handles paths without extension', () => {
-    expect(deriveProxyPath('/project/recording')).toBe('/project/recording-proxy.mp4');
+    expect(deriveProxyPath('/project/recording')).toBe('/project/recording-proxy-v2.mp4');
   });
 
-  test('generateProxy calls runFfmpeg with correct args and renames on success', async () => {
+  test('isCurrentProxyPath distinguishes v2 proxies from legacy -proxy.mp4 files', () => {
+    expect(isCurrentProxyPath('/project/screen-proxy-v2.mp4')).toBe(true);
+    // Legacy proxies (pre-v2) are the ones that did CFR timestamp
+    // normalization and therefore cannot be mixed with raw camera playback;
+    // treat them as outdated so the renderer schedules a fresh proxy.
+    expect(isCurrentProxyPath('/project/screen-proxy.mp4')).toBe(false);
+    expect(isCurrentProxyPath(null)).toBe(false);
+    expect(isCurrentProxyPath(undefined)).toBe(false);
+    expect(isCurrentProxyPath('')).toBe(false);
+  });
+
+  test('generateProxy produces a PTS-preserving scale-only H.264 proxy (no CFR normalization)', async () => {
     const runFfmpeg = vi.fn().mockResolvedValue({ stderr: '' });
     const fsStub = {
       existsSync: vi.fn().mockReturnValue(false),
@@ -31,7 +43,7 @@ describe('main/services/proxy-service', () => {
     };
 
     await generateProxy(
-      { screenPath: '/project/screen.webm', proxyPath: '/project/screen-proxy.mp4' },
+      { screenPath: '/project/screen.webm', proxyPath: '/project/screen-proxy-v2.mp4' },
       { runFfmpeg, fs: fsStub, ffmpegPath: '/usr/bin/ffmpeg' }
     );
 
@@ -40,21 +52,26 @@ describe('main/services/proxy-service', () => {
     expect(callArgs.ffmpegPath).toBe('/usr/bin/ffmpeg');
     expect(callArgs.args).toContain('-i');
     expect(callArgs.args).toContain('/project/screen.webm');
-    expect(callArgs.args).toContain('/project/screen-proxy.mp4.tmp');
+    expect(callArgs.args).toContain('/project/screen-proxy-v2.mp4.tmp');
     expect(callArgs.args).toContain('libx264');
     expect(callArgs.args).toContain('-fflags');
     expect(callArgs.args).toContain('+genpts');
-    expect(callArgs.args).toContain('-r');
-    expect(callArgs.args).toContain('30');
+    // The proxy must pass input timestamps straight through so its
+    // currentTime axis matches the raw camera WebM in the editor loop.
+    // Anything that forces CFR here (fps=N, -r N, fps_mode=cfr, setpts)
+    // would reintroduce the drift the editor had on long recordings.
     expect(callArgs.args).toContain('-fps_mode');
-    expect(callArgs.args).toContain('cfr');
-    expect(callArgs.args[callArgs.args.indexOf('-vf') + 1]).toBe(
-      'fps=30,scale=960:540,setpts=N/(30*TB)'
-    );
+    expect(callArgs.args).toContain('passthrough');
+    expect(callArgs.args).not.toContain('-r');
+    expect(callArgs.args).not.toContain('cfr');
+    expect(callArgs.args[callArgs.args.indexOf('-vf') + 1]).toBe('scale=960:540');
+    // Double-check we didn't leave the CFR normalization filters in place.
+    expect(callArgs.args.join(' ')).not.toContain('fps=30');
+    expect(callArgs.args.join(' ')).not.toContain('setpts=N/(30*TB)');
 
     expect(fsStub.renameSync).toHaveBeenCalledWith(
-      '/project/screen-proxy.mp4.tmp',
-      '/project/screen-proxy.mp4'
+      '/project/screen-proxy-v2.mp4.tmp',
+      '/project/screen-proxy-v2.mp4'
     );
   });
 

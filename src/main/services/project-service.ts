@@ -212,7 +212,8 @@ export function createProjectService({ app }: { app: Pick<App, 'getPath'> }) {
       screenPath: toProjectRelativePath(projectFolder, take.screenPath),
       cameraPath: toProjectRelativePath(projectFolder, take.cameraPath),
       audioPath: toProjectRelativePath(projectFolder, take.audioPath),
-      proxyPath: toProjectRelativePath(projectFolder, take.proxyPath)
+      proxyPath: toProjectRelativePath(projectFolder, take.proxyPath),
+      cameraProxyPath: toProjectRelativePath(projectFolder, take.cameraProxyPath)
     }));
     serializable.timeline.sections = serializable.timeline.sections.map((section) => ({
       ...section,

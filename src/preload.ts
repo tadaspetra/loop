@@ -38,6 +38,7 @@ const electronApi: ElectronApi = {
   prepareDisplayMedia: (opts) => ipcRenderer.invoke('prepare-display-media', opts),
   computeSections: (opts) => ipcRenderer.invoke('compute-sections', opts),
   renderComposite: (opts) => ipcRenderer.invoke('render-composite', opts),
+  generatePreview: (opts) => ipcRenderer.invoke('generate-preview', opts),
   onRenderProgress: (listener) => {
     if (typeof listener !== 'function') return () => {};
     const handler = (_event: unknown, payload: RenderProgressUpdate) => listener(payload);

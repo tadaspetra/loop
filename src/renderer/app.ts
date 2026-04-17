@@ -26,6 +26,7 @@ import {
 import {
   computePlaybackSeekPlan,
   computeCameraPlaybackDrift,
+  decideCameraSyncAction,
   normalizeCameraSyncOffsetMs,
   resolveCameraPlaybackTargetTime
 } from './features/timeline/camera-sync';
@@ -298,22 +299,57 @@ if (typeof window.electronAPI.onExportPremiereProgress === 'function') {
 if (typeof window.electronAPI.onProxyProgress === 'function') {
   window.electronAPI.onProxyProgress((payload) => {
     if (!payload || !payload.takeId) return;
-    if (payload.status === 'progress') {
+    const kind = payload.kind === 'camera' ? 'camera' : 'screen';
+    // Only the screen-proxy pipeline drives the UI progress indicator; the
+    // camera proxy is a transparent performance optimization and should not
+    // show its own progress bar (otherwise recording-in-progress UI gets
+    // confusing with two parallel bars for the same take).
+    if (kind === 'screen' && payload.status === 'progress') {
       const current = proxyStatus.get(payload.takeId);
       if (current && current.status === 'pending') {
         current.percent = payload.percent || 0;
         updateProxyProgressBars(payload.takeId, current.percent);
       }
     } else if (payload.status === 'done' && payload.proxyPath) {
-      proxyStatus.set(payload.takeId, { status: 'done', percent: 1 });
       const take = activeProject?.takes?.find((t) => t.id === payload.takeId);
+      if (kind === 'camera') {
+        if (take) {
+          take.cameraProxyPath = payload.proxyPath;
+          persistProjectNow().catch((err) =>
+            console.warn('[Proxy] Failed to persist cameraProxyPath:', err)
+          );
+        }
+        // Hot-swap the cached camera video element to use the proxy so the
+        // decoder starts running cheaply for the rest of the session.
+        const cached = takeVideoPool.get(payload.takeId);
+        if (cached?.camera) {
+          const wasPlaying = !cached.camera.paused;
+          const currentTime = cached.camera.currentTime;
+          const rate = cached.camera.playbackRate;
+          cached.camera.src = pathToFileUrl(payload.proxyPath);
+          cached.camera.addEventListener(
+            'loadedmetadata',
+            () => {
+              cached.camera.currentTime = currentTime;
+              if (wasPlaying) {
+                cached.camera.playbackRate = rate;
+                cached.camera.play().catch(() => {});
+                if (!hasPendingEditorDraw()) scheduleEditorDrawLoop();
+              }
+            },
+            { once: true }
+          );
+        }
+        return;
+      }
+      proxyStatus.set(payload.takeId, { status: 'done', percent: 1 });
       if (take) {
         take.proxyPath = payload.proxyPath;
         persistProjectNow().catch((err) =>
           console.warn('[Proxy] Failed to persist proxyPath:', err)
         );
       }
-      // Hot-swap the cached video element to use the proxy
+      // Hot-swap the cached screen video element to use the proxy
       const cached = takeVideoPool.get(payload.takeId);
       if (cached) {
         const wasPlaying = !cached.screen.paused;
@@ -335,9 +371,19 @@ if (typeof window.electronAPI.onProxyProgress === 'function') {
       }
       renderSectionMarkers();
     } else if (payload.status === 'error') {
-      proxyStatus.set(payload.takeId, { status: 'error', percent: 0 });
-      console.warn('[Proxy] Generation failed for take', payload.takeId, payload.error);
-      renderSectionMarkers();
+      // Only surface screen-proxy errors; camera-proxy failures silently
+      // fall back to raw camera playback so the editor is still usable.
+      if (kind === 'screen') {
+        proxyStatus.set(payload.takeId, { status: 'error', percent: 0 });
+        console.warn('[Proxy] Generation failed for take', payload.takeId, payload.error);
+        renderSectionMarkers();
+      } else {
+        console.warn(
+          '[Proxy] Camera proxy generation failed for take',
+          payload.takeId,
+          payload.error
+        );
+      }
     }
   });
 }
@@ -437,11 +483,21 @@ function focusToPanCoord(zoom, focus, defaultPan = 0) {
 }
 
 const TRANSITION_DURATION = 0.3;
-const CAMERA_DRIFT_SOFT_THRESHOLD = 0.015;
-const CAMERA_DRIFT_HARD_THRESHOLD = 0.18;
-const CAMERA_DRIFT_LOG_THRESHOLD = 0.08;
-const CAMERA_DRIFT_LOG_INTERVAL_MS = 1000;
-const CAMERA_RESYNC_COOLDOWN_MS = 500;
+// Camera drift correction is "best effort" compensation for the two separate
+// MediaRecorder timelines drifting during editor playback. Thresholds are
+// deliberately loose: the visible damage of a hard resync (camera decoder
+// stall + visible jump) is worse than carrying 100–200ms of residual drift,
+// so we only resync when drift is both large and stable.
+const CAMERA_DRIFT_SOFT_THRESHOLD = 0.05;
+const CAMERA_DRIFT_HARD_THRESHOLD = 0.3;
+const CAMERA_DRIFT_LOG_THRESHOLD = 0.12;
+const CAMERA_DRIFT_LOG_INTERVAL_MS = 2000;
+const CAMERA_RESYNC_COOLDOWN_MS = 1500;
+// After a seek / section switch the camera decoder needs time to catch up to
+// the new currentTime. During that window any drift we observe is seek
+// latency, not a real desync, so both soft rate-nudging and hard resync are
+// suppressed.
+const CAMERA_POST_SEEK_GRACE_MS = 600;
 
 canvas.width = CANVAS_W;
 canvas.height = CANVAS_H;
@@ -480,6 +536,23 @@ let activeTakeId = null;
 let activePlaybackSection = null;
 let cameraResyncCooldownUntil = 0;
 let lastCameraDriftLogAt = 0;
+// Set any time we seek or cross a section boundary: camera sync is fully
+// suppressed until this timestamp so we don't thrash during seek recovery.
+let cameraSyncSuppressedUntil = 0;
+// Soft-drift logs are quiet by default so a normal run does not spam the
+// console on every keyframe worth of residual drift. Set the URL flag
+// `?debugCameraSync=1` (or toggle window.__LOOP_DEBUG_CAMERA_SYNC__ in
+// DevTools) while diagnosing sync issues to restore the chatty version.
+function isCameraSyncDebugEnabled() {
+  try {
+    if (typeof window === 'undefined') return false;
+    if (window.__LOOP_DEBUG_CAMERA_SYNC__ === true) return true;
+    const search = window.location?.search || '';
+    return /[?&]debugCameraSync=1\b/.test(search);
+  } catch (_error) {
+    return false;
+  }
+}
 const editorZoomBuffer = document.createElement('canvas');
 editorZoomBuffer.width = CANVAS_W;
 editorZoomBuffer.height = CANVAS_H;
@@ -906,6 +979,10 @@ function scheduleProjectSave() {
       console.error('Failed to save project:', error);
     });
   }, 250);
+  // The timeline changed: any previously rendered preview is stale. Drop
+  // it immediately and schedule a fresh render after the debounce window.
+  invalidatePreviewCache();
+  schedulePreviewRender();
 }
 
 async function flushScheduledProjectSave() {
@@ -914,6 +991,188 @@ async function flushScheduledProjectSave() {
     saveDebounceTimer = null;
   }
   await persistProjectNow();
+}
+
+// ===== Preview proxy (Phase 3) =====
+//
+// When the timeline settles, kick off a background ffmpeg render that stitches
+// the current sections + camera PiP into a single MP4 keyed by a deterministic
+// content hash. Subsequent edits invalidate the cache (hash changes) and
+// retrigger the render. Opt-in via `?preview=1` (or window.__LOOP_PREVIEW__)
+// so the heavy ffmpeg pass does not fire for every cosmetic keystroke on
+// users that did not ask for it — the editor's live dual-video playback
+// (Phase 2) already covers the common case.
+let previewDebounceTimer = null;
+let currentPreviewPath = null;
+let currentPreviewHash = null;
+let previewGenerationInFlight = false;
+
+function isPreviewRenderEnabled() {
+  try {
+    if (typeof window === 'undefined') return false;
+    if (window.__LOOP_PREVIEW__ === true) return true;
+    const search = window.location?.search || '';
+    return /[?&]preview=1\b/.test(search);
+  } catch (_error) {
+    return false;
+  }
+}
+
+function buildPreviewInputs() {
+  if (!editorState || !activeProject || !activeProjectPath) return null;
+  const referencedTakeIds = new Set(
+    editorState.sections.map((s) => s.takeId).filter(Boolean)
+  );
+  if (referencedTakeIds.size === 0) return null;
+  const takes = [];
+  const hashTakes = [];
+  for (const takeId of referencedTakeIds) {
+    const take = activeProject.takes?.find((t) => t.id === takeId);
+    if (!take) continue;
+    takes.push({
+      id: take.id,
+      screenPath: take.screenPath,
+      cameraPath: take.cameraPath,
+      audioPath: take.audioPath ?? null,
+      audioSource: take.audioSource ?? 'screen',
+      hasSystemAudio: take.hasSystemAudio === true,
+      screenStartOffsetMs: Number(take.screenStartOffsetMs) || 0,
+      cameraStartOffsetMs: Number(take.cameraStartOffsetMs) || 0,
+      audioStartOffsetMs: Number(take.audioStartOffsetMs) || 0
+    });
+    hashTakes.push({
+      id: take.id,
+      screenStartOffsetMs: Number(take.screenStartOffsetMs) || 0,
+      cameraStartOffsetMs: Number(take.cameraStartOffsetMs) || 0,
+      audioStartOffsetMs: Number(take.audioStartOffsetMs) || 0,
+      audioSource: take.audioSource ?? 'screen',
+      hasSystemAudio: take.hasSystemAudio === true,
+      // We don't have direct fs access from the renderer; use the path string
+      // as a proxy for identity. If the user replaces the underlying file
+      // with the same path, the cache will go stale — but that's an edge
+      // case well outside the intended editor workflow.
+      screenMtimeMs: take.screenPath ? take.screenPath.length : null,
+      cameraMtimeMs: take.cameraPath ? take.cameraPath.length : null,
+      audioMtimeMs: take.audioPath ? take.audioPath.length : null
+    });
+  }
+  return {
+    projectFolder: activeProjectPath,
+    takes,
+    hashTakes,
+    sections: editorState.sections.map((s) => ({
+      takeId: s.takeId,
+      sourceStart: s.sourceStart,
+      sourceEnd: s.sourceEnd,
+      backgroundZoom: s.backgroundZoom,
+      backgroundPanX: s.backgroundPanX,
+      backgroundPanY: s.backgroundPanY,
+      imagePath: s.imagePath ?? null
+    })),
+    keyframes: editorState.keyframes.map((kf) => ({
+      time: kf.time,
+      pipX: kf.pipX,
+      pipY: kf.pipY,
+      pipVisible: kf.pipVisible,
+      cameraFullscreen: kf.cameraFullscreen,
+      backgroundZoom: kf.backgroundZoom,
+      backgroundPanX: kf.backgroundPanX,
+      backgroundPanY: kf.backgroundPanY
+    })),
+    pipSize: editorState.pipSize,
+    screenFitMode: editorState.screenFitMode,
+    cameraSyncOffsetMs: editorState.cameraSyncOffsetMs,
+    sourceWidth: editorState.sourceWidth || CANVAS_W,
+    sourceHeight: editorState.sourceHeight || CANVAS_H
+  };
+}
+
+function schedulePreviewRender() {
+  if (!isPreviewRenderEnabled()) return;
+  if (previewDebounceTimer) clearTimeout(previewDebounceTimer);
+  previewDebounceTimer = setTimeout(async () => {
+    previewDebounceTimer = null;
+    if (previewGenerationInFlight) return;
+    const inputs = buildPreviewInputs();
+    if (!inputs) return;
+    // Hash computation lives on the renderer here because it must match
+    // what the main process will use to name the cache file. Keep the
+    // payload identical to the preview-render-service normalization.
+    let hash;
+    try {
+      const payload = JSON.stringify({
+        takes: inputs.hashTakes,
+        sections: inputs.sections.map((s) => ({
+          takeId: s.takeId,
+          start: Number(s.sourceStart.toFixed(6)),
+          end: Number(s.sourceEnd.toFixed(6)),
+          bgZoom: Number((s.backgroundZoom ?? 1).toFixed(4)),
+          bgPanX: Number((s.backgroundPanX ?? 0).toFixed(4)),
+          bgPanY: Number((s.backgroundPanY ?? 0).toFixed(4)),
+          image: s.imagePath ?? null
+        })),
+        keyframes: inputs.keyframes.map((kf) => ({
+          t: Number((kf.time || 0).toFixed(4)),
+          x: Math.round(kf.pipX || 0),
+          y: Math.round(kf.pipY || 0),
+          v: kf.pipVisible !== false,
+          fs: kf.cameraFullscreen === true,
+          bgZ: Number((kf.backgroundZoom ?? 1).toFixed(4)),
+          bgX: Number((kf.backgroundPanX ?? 0).toFixed(4)),
+          bgY: Number((kf.backgroundPanY ?? 0).toFixed(4))
+        })),
+        pipSize: Math.round(inputs.pipSize || 0),
+        fit: inputs.screenFitMode === 'fit' ? 'fit' : 'fill',
+        camSync: Math.round(inputs.cameraSyncOffsetMs || 0),
+        w: Math.round(inputs.sourceWidth || 0),
+        h: Math.round(inputs.sourceHeight || 0)
+      });
+      const buffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(payload));
+      const hex = Array.from(new Uint8Array(buffer))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
+      hash = hex.slice(0, 16);
+    } catch (err) {
+      console.warn('[Preview] hash failed, skipping render:', err);
+      return;
+    }
+    // If hash matches what we already have cached in the editor, skip.
+    if (hash === currentPreviewHash && currentPreviewPath) return;
+    previewGenerationInFlight = true;
+    try {
+      const result = await window.electronAPI.generatePreview({
+        projectFolder: inputs.projectFolder,
+        timelineHash: hash,
+        takes: inputs.takes,
+        sections: inputs.sections,
+        keyframes: inputs.keyframes,
+        pipSize: inputs.pipSize,
+        screenFitMode: inputs.screenFitMode,
+        cameraSyncOffsetMs: inputs.cameraSyncOffsetMs,
+        sourceWidth: inputs.sourceWidth,
+        sourceHeight: inputs.sourceHeight
+      });
+      // Only accept the result if the timeline has not been edited again
+      // in the meantime (i.e. another schedulePreviewRender has queued).
+      if (result && !previewDebounceTimer) {
+        currentPreviewPath = result.path;
+        currentPreviewHash = result.hash;
+      }
+    } catch (err) {
+      console.warn('[Preview] generation failed:', err);
+    } finally {
+      previewGenerationInFlight = false;
+    }
+  }, 800);
+}
+
+function invalidatePreviewCache() {
+  currentPreviewPath = null;
+  currentPreviewHash = null;
+  if (previewDebounceTimer) {
+    clearTimeout(previewDebounceTimer);
+    previewDebounceTimer = null;
+  }
 }
 
 function clearEditorState() {
@@ -1104,10 +1363,35 @@ async function activateProject(projectPath, project, preferredView = 'recording'
   await window.electronAPI.projectSetLast(projectPath);
   updateWorkspaceHeader();
 
-  // Queue background proxy generation for any takes missing a proxy
+  // Queue background proxy generation for any takes missing a proxy OR
+  // still carrying a legacy `-proxy.mp4` (pre-v2) file. Legacy proxies were
+  // CFR-normalized and drift against the raw camera stream on long
+  // recordings, which is the root cause of the freeze-and-desync behavior
+  // we observed in editor playback before switching to PTS-preserving
+  // proxies. Clearing the stored path here forces the main process to
+  // produce a fresh v2 proxy next time the editor plays the take.
   if (Array.isArray(project.takes)) {
     let needsMarkerUpdate = false;
+    let needsProjectSave = false;
     for (const take of project.takes) {
+      // Drop any legacy (pre-v2) screen proxy so the editor does not pick
+      // up a CFR-normalized file that would drift against the raw camera.
+      const hasLegacyScreenProxy =
+        typeof take.proxyPath === 'string' &&
+        take.proxyPath.length > 0 &&
+        !take.proxyPath.endsWith('-proxy-v2.mp4');
+      if (hasLegacyScreenProxy) {
+        take.proxyPath = null;
+        needsProjectSave = true;
+      }
+      const hasLegacyCameraProxy =
+        typeof take.cameraProxyPath === 'string' &&
+        take.cameraProxyPath.length > 0 &&
+        !take.cameraProxyPath.endsWith('-proxy-v2.mp4');
+      if (hasLegacyCameraProxy) {
+        take.cameraProxyPath = null;
+        needsProjectSave = true;
+      }
       if (!take.proxyPath && take.screenPath) {
         proxyStatus.set(take.id, { status: 'pending', percent: 0 });
         needsMarkerUpdate = true;
@@ -1116,12 +1400,29 @@ async function activateProject(projectPath, project, preferredView = 'recording'
             takeId: take.id,
             screenPath: take.screenPath,
             projectFolder: projectPath,
-            durationSec: take.duration || 0
+            durationSec: take.duration || 0,
+            kind: 'screen'
           })
           .catch((err) => console.warn('[Proxy] Failed to start proxy generation:', err));
       }
+      // Independently kick off the camera proxy so the editor decode load
+      // drops to two lightweight H.264 streams once both proxies land.
+      if (!take.cameraProxyPath && take.cameraPath) {
+        window.electronAPI
+          .generateProxy({
+            takeId: take.id,
+            inputPath: take.cameraPath,
+            projectFolder: projectPath,
+            durationSec: take.duration || 0,
+            kind: 'camera'
+          })
+          .catch((err) =>
+            console.warn('[Proxy] Failed to start camera proxy generation:', err)
+          );
+      }
     }
     if (needsMarkerUpdate) renderSectionMarkers();
+    if (needsProjectSave) scheduleProjectSave();
   }
 }
 
@@ -2409,6 +2710,13 @@ async function createRecorder(stream, suffix, takeId) {
 
   recorder.ondataavailable = (e) => {
     if (!e?.data || e.data.size <= 0) return;
+    // Record wall time (ms) of the first non-empty chunk. Comparing the
+    // per-recorder firstDataAt against the earliest recorder's firstDataAt
+    // gives us the start-skew between files, which export applies as a
+    // trim offset so screen/camera/audio stay in A/V sync.
+    if (recorder.firstDataAt === null) {
+      recorder.firstDataAt = Date.now();
+    }
     // Capture the blob synchronously so the subsequent awaits can happen on
     // the chained promise without racing future dataavailable events.
     const chunk = e.data;
@@ -2486,7 +2794,38 @@ async function createRecorder(stream, suffix, takeId) {
 
   recorder.suffix = suffix;
   recorder.takeId = takeId;
+  recorder.firstDataAt = null;
   return recorder;
+}
+
+/**
+ * Compute per-recorder start offsets (ms) relative to the earliest recorder's
+ * first data chunk. Missing or malformed firstDataAt values produce a 0
+ * offset for that suffix, which matches legacy take behavior where no timing
+ * information was persisted.
+ */
+function computeRecorderStartOffsetsMs(recorderList) {
+  const firstDataAts = {};
+  for (const r of recorderList || []) {
+    if (!r || typeof r.suffix !== 'string') continue;
+    const value = Number(r.firstDataAt);
+    if (Number.isFinite(value)) firstDataAts[r.suffix] = value;
+  }
+  const values = Object.values(firstDataAts);
+  if (values.length === 0) {
+    return { screen: 0, camera: 0, audio: 0 };
+  }
+  const anchor = values.reduce((min, v) => (v < min ? v : min), Infinity);
+  const offset = (suffix) => {
+    const value = firstDataAts[suffix];
+    if (!Number.isFinite(value)) return 0;
+    return Math.max(0, Math.round(value - anchor));
+  };
+  return {
+    screen: offset('screen'),
+    camera: offset('camera'),
+    audio: offset('audio')
+  };
 }
 
 function mergeInt16Arrays(arrays) {
@@ -3071,6 +3410,7 @@ async function recoverOrphansForProject(projectPath) {
               // system audio track on recovery.
               hasSystemAudio: false,
               proxyPath: null,
+              cameraProxyPath: null,
               sections
             });
           }
@@ -3098,10 +3438,24 @@ async function recoverOrphansForProject(projectPath) {
                   takeId,
                   screenPath: recovered.screenPath,
                   projectFolder: projectPath,
-                  durationSec: duration
+                  durationSec: duration,
+                  kind: 'screen'
                 })
                 .catch((err) =>
                   console.warn('[Recovery] Failed to queue proxy generation:', err)
+                );
+            }
+            if (recovered.cameraPath) {
+              window.electronAPI
+                .generateProxy({
+                  takeId,
+                  inputPath: recovered.cameraPath,
+                  projectFolder: projectPath,
+                  durationSec: duration,
+                  kind: 'camera'
+                })
+                .catch((err) =>
+                  console.warn('[Recovery] Failed to queue camera proxy generation:', err)
                 );
             }
           }
@@ -3572,6 +3926,11 @@ async function stopRecording() {
     r.stop();
   });
 
+  // Snapshot the per-recorder first-chunk timestamps BEFORE awaiting any
+  // blobPromises, because the recorders array is cleared below and we need
+  // these values to compute start-offset metadata for the finalized take.
+  const recorderStartOffsetsMs = computeRecorderStartOffsetsMs(recorders);
+
   // Await each recorder independently so one finalize failure cannot wedge the whole stop flow.
   const results = {};
   const finalizeErrors = [];
@@ -3699,6 +4058,10 @@ async function stopRecording() {
         audioSource,
         hasSystemAudio,
         proxyPath: null,
+        cameraProxyPath: null,
+        screenStartOffsetMs: recorderStartOffsetsMs.screen,
+        cameraStartOffsetMs: recorderStartOffsetsMs.camera,
+        audioStartOffsetMs: recorderStartOffsetsMs.audio,
         sections: sectionsForTimeline
       });
     }
@@ -3721,7 +4084,11 @@ async function stopRecording() {
           take.sections = appendResult.takeSections;
         }
         await persistProjectNow();
-        // Trigger background proxy generation for the new take
+        // Trigger background proxy generation for the new take. Both the
+        // screen and camera proxies are generated so editor playback can
+        // hot-swap to the cheaper H.264 decode path as soon as each
+        // proxy lands, keeping long-recording playback from saturating
+        // the VP8 software decoder.
         if (activeProjectPath && screenPath) {
           proxyStatus.set(takeId, { status: 'pending', percent: 0 });
           renderSectionMarkers();
@@ -3730,9 +4097,23 @@ async function stopRecording() {
               takeId,
               screenPath,
               projectFolder: activeProjectPath,
-              durationSec: recordedDuration
+              durationSec: recordedDuration,
+              kind: 'screen'
             })
             .catch((err) => console.warn('[Proxy] Failed to start proxy generation:', err));
+        }
+        if (activeProjectPath && cameraPath) {
+          window.electronAPI
+            .generateProxy({
+              takeId,
+              inputPath: cameraPath,
+              projectFolder: activeProjectPath,
+              durationSec: recordedDuration,
+              kind: 'camera'
+            })
+            .catch((err) =>
+              console.warn('[Proxy] Failed to start camera proxy generation:', err)
+            );
         }
       }
       await completeRecoveryTake();
@@ -4091,6 +4472,20 @@ function switchPlaybackSection(nextSection, opts = {}) {
     nextVideos.audio.currentTime = seekPlan.targetSourceTime;
   }
 
+  // Silence camera drift correction briefly after any seek or take switch.
+  // WebM VP8/VP9 seeks are slow; during the recovery window the reported
+  // camera.currentTime lags screen.currentTime and we'd otherwise hard-resync
+  // in a loop (see [Editor] Camera hard resync thrash on long timelines).
+  const causesSeek = !sameTake || seekPlan.needsSeek;
+  if (causesSeek) {
+    const now = performance.now();
+    cameraSyncSuppressedUntil = now + CAMERA_POST_SEEK_GRACE_MS;
+    cameraResyncCooldownUntil = Math.max(
+      cameraResyncCooldownUntil,
+      now + CAMERA_RESYNC_COOLDOWN_MS
+    );
+  }
+
   activeTakeId = nextSection.takeId;
   activePlaybackSection = nextSection;
 
@@ -4130,47 +4525,71 @@ function syncCameraPlayback(videos) {
   if (!editorState?.hasCamera || !videos?.camera) return;
 
   const baseRate = editorState.playbackSpeed || 1;
+  const now = performance.now();
   const drift = computeCameraPlaybackDrift(
     videos.screen.currentTime,
     videos.camera.currentTime,
     editorState.cameraSyncOffsetMs
   );
-  const absDrift = Math.abs(drift);
-  const now = performance.now();
-
-  if (absDrift >= CAMERA_DRIFT_HARD_THRESHOLD && now >= cameraResyncCooldownUntil) {
-    videos.camera.currentTime = resolveCameraPlaybackTargetTime(
-      videos.screen.currentTime,
-      editorState.cameraSyncOffsetMs
-    );
-    videos.camera.playbackRate = baseRate;
-    cameraResyncCooldownUntil = now + CAMERA_RESYNC_COOLDOWN_MS;
-    console.debug('[Editor] Camera hard resync', {
-      drift: Number(drift.toFixed(3)),
-      threshold: CAMERA_DRIFT_HARD_THRESHOLD
-    });
-    return;
-  }
-
-  if (absDrift >= CAMERA_DRIFT_SOFT_THRESHOLD) {
-    const correction = Math.min(0.06, absDrift * 0.5);
-    const targetRate = drift > 0 ? baseRate + correction : baseRate - correction;
-    const clampedRate = Math.max(baseRate - 0.08, Math.min(baseRate + 0.08, targetRate));
-    if (Math.abs(videos.camera.playbackRate - clampedRate) > 0.004) {
-      videos.camera.playbackRate = clampedRate;
+  const targetCameraTime = resolveCameraPlaybackTargetTime(
+    videos.screen.currentTime,
+    editorState.cameraSyncOffsetMs
+  );
+  const action = decideCameraSyncAction({
+    drift,
+    baseRate,
+    currentPlaybackRate: videos.camera.playbackRate,
+    targetCameraTime,
+    nowMs: now,
+    resyncCooldownUntil: cameraResyncCooldownUntil,
+    suppressedUntil: cameraSyncSuppressedUntil,
+    thresholds: {
+      softThreshold: CAMERA_DRIFT_SOFT_THRESHOLD,
+      hardThreshold: CAMERA_DRIFT_HARD_THRESHOLD,
+      resyncCooldownMs: CAMERA_RESYNC_COOLDOWN_MS
     }
-    if (
-      absDrift >= CAMERA_DRIFT_LOG_THRESHOLD &&
-      now - lastCameraDriftLogAt >= CAMERA_DRIFT_LOG_INTERVAL_MS
-    ) {
-      console.debug('[Editor] Camera drift', {
+  });
+
+  switch (action.kind) {
+    case 'hardResync':
+      if (typeof action.targetCameraTime === 'number') {
+        videos.camera.currentTime = action.targetCameraTime;
+      }
+      if (typeof action.targetPlaybackRate === 'number') {
+        videos.camera.playbackRate = action.targetPlaybackRate;
+      }
+      if (typeof action.nextResyncCooldownUntil === 'number') {
+        cameraResyncCooldownUntil = action.nextResyncCooldownUntil;
+      }
+      console.debug('[Editor] Camera hard resync', {
         drift: Number(drift.toFixed(3)),
-        playbackRate: Number(clampedRate.toFixed(3))
+        threshold: CAMERA_DRIFT_HARD_THRESHOLD
       });
-      lastCameraDriftLogAt = now;
-    }
-  } else if (Math.abs(videos.camera.playbackRate - baseRate) > 0.001) {
-    videos.camera.playbackRate = baseRate;
+      return;
+    case 'softRate':
+      if (typeof action.targetPlaybackRate === 'number') {
+        videos.camera.playbackRate = action.targetPlaybackRate;
+      }
+      if (
+        Math.abs(drift) >= CAMERA_DRIFT_LOG_THRESHOLD &&
+        now - lastCameraDriftLogAt >= CAMERA_DRIFT_LOG_INTERVAL_MS &&
+        isCameraSyncDebugEnabled()
+      ) {
+        console.debug('[Editor] Camera drift', {
+          drift: Number(drift.toFixed(3)),
+          playbackRate: Number((action.targetPlaybackRate || baseRate).toFixed(3))
+        });
+        lastCameraDriftLogAt = now;
+      }
+      return;
+    case 'rateReset':
+      if (typeof action.targetPlaybackRate === 'number') {
+        videos.camera.playbackRate = action.targetPlaybackRate;
+      }
+      return;
+    case 'none':
+    default:
+      return;
   }
 }
 
@@ -4318,7 +4737,15 @@ function editorDrawLoop() {
     editorState.hasCamera && activeVideos?.camera && activeVideos.camera.videoWidth > 0;
   const state = getStateAtTime(editorState.currentTime);
 
-  const currentSection = findSectionForTime(editorState.currentTime);
+  // During playback the active section is already tracked by
+  // switchPlaybackSection, so we can skip the per-frame linear scan of all
+  // sections that findSectionForTime otherwise performs. Fall back to the
+  // linear scan only when we don't have an active section yet (paused /
+  // freshly opened timeline).
+  const currentSection =
+    editorState.playing && activePlaybackSection
+      ? activePlaybackSection
+      : findSectionForTime(editorState.currentTime);
   const sectionImage = currentSection?.imagePath
     ? sectionImageCache.get(currentSection.imagePath)
     : null;
@@ -4772,16 +5199,32 @@ function applyTimelineZoom(newZoom, pivotClientX) {
   wrapper.scrollLeft = pivotFraction * newContentWidth - (pivotX - rect.left);
 }
 
+// Reading clientWidth in the playback loop forces a synchronous layout every
+// frame; cache it and let a ResizeObserver invalidate the cache so we only
+// pay for layout when the timeline actually resizes.
+let cachedTimelineWrapperWidth = 0;
+
+function getTimelineWrapperWidth() {
+  if (cachedTimelineWrapperWidth > 0) return cachedTimelineWrapperWidth;
+  cachedTimelineWrapperWidth = editorTimelineWrapper.clientWidth;
+  return cachedTimelineWrapperWidth;
+}
+
 function scrollTimelineToPlayhead() {
   if (!editorState || editorState.duration <= 0 || timelineZoom <= 1) return;
   const wrapper = editorTimelineWrapper;
-  const wrapperWidth = wrapper.clientWidth;
+  const wrapperWidth = getTimelineWrapperWidth();
+  if (wrapperWidth <= 0) return;
   const contentWidth = wrapperWidth * timelineZoom;
   const playheadX = (editorState.currentTime / editorState.duration) * contentWidth;
   const margin = wrapperWidth * 0.2;
-  if (playheadX < wrapper.scrollLeft + margin) {
+  const scrollLeft = wrapper.scrollLeft;
+  // Only touch scrollLeft when the playhead is actually near (or past) the
+  // viewport edge. Skipping the assignment when the playhead is comfortably
+  // inside the viewport avoids spurious layout work every frame.
+  if (playheadX < scrollLeft + margin) {
     wrapper.scrollLeft = playheadX - margin;
-  } else if (playheadX > wrapper.scrollLeft + wrapperWidth - margin) {
+  } else if (playheadX > scrollLeft + wrapperWidth - margin) {
     wrapper.scrollLeft = playheadX - wrapperWidth + margin;
   }
 }
@@ -4869,7 +5312,12 @@ editorImageBtn.addEventListener('click', async () => {
 
 // ===== Editor button handlers =====
 
-new ResizeObserver(() => renderWaveform()).observe(editorTimelineWrapper);
+new ResizeObserver(() => {
+  // Invalidate the cached width so the next scrollTimelineToPlayhead picks
+  // up the new layout, then re-render the waveform.
+  cachedTimelineWrapperWidth = 0;
+  renderWaveform();
+}).observe(editorTimelineWrapper);
 
 editorTimelineWrapper.addEventListener(
   'wheel',
@@ -4967,7 +5415,13 @@ async function renderVideo() {
           cameraPath: take.cameraPath,
           audioPath: take.audioPath ?? null,
           audioSource: take.audioSource ?? 'screen',
-          hasSystemAudio: take.hasSystemAudio === true
+          hasSystemAudio: take.hasSystemAudio === true,
+          // Forward measured per-recorder start offsets so the export shifts
+          // each source's trim window to the same real-world moment even if
+          // MediaRecorder start skew was non-zero for this take.
+          screenStartOffsetMs: Number(take.screenStartOffsetMs) || 0,
+          cameraStartOffsetMs: Number(take.cameraStartOffsetMs) || 0,
+          audioStartOffsetMs: Number(take.audioStartOffsetMs) || 0
         });
       }
     }

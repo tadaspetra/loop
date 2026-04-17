@@ -6,6 +6,7 @@ import { describe, expect, test } from 'vitest';
 
 import {
   assertFilePath,
+  computeShiftedTrimWindow,
   normalizeSectionInput,
   renderComposite,
   type RenderCompositeDeps
@@ -263,7 +264,11 @@ describe('main/services/render-service', () => {
     );
 
     const argString = execCalls[0].args.join(' ');
-    expect(argString).toContain('[screen_raw][audio_out]');
+    // Concat now emits [screen_concat][audio_out]; the fps=N step after the
+    // concat promotes it to [screen_raw]. The 'off' audio preset still maps
+    // audio_out directly to the output (no compressor).
+    expect(argString).toContain('[screen_concat][audio_out]');
+    expect(argString).toContain('[screen_concat]fps=30,setsar=1[screen_raw]');
     expect(argString).toContain('-map [audio_out]');
     expect(argString).not.toContain('acompressor=');
     expect(argString).not.toContain('[audio_final]');
@@ -351,7 +356,17 @@ describe('main/services/render-service', () => {
     expect(argString).toContain(
       "[screen_raw]scale=1920:1080:flags=lanczos:force_original_aspect_ratio=increase,crop=1920:1080[screen_base];[screen_base]zoompan=z='2.000'"
     );
-    expect(argString).toContain('[1:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,fps=30,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]');
+    // Every section's video trim ends with a tpad safety-pad + trim=duration
+    // cap so the section's video length is EXACTLY the section's nominal
+    // duration, even if the VFR source produced a few frames fewer than
+    // expected. Without this, multi-section exports drifted audio-ahead
+    // of video over time because `atrim` is sample-accurate while bare
+    // `trim` on VFR quietly loses a frame-or-two per section.
+    expect(argString).toContain(
+      '[1:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]'
+    );
+    expect(argString).toContain('[cv0]concat=n=1:v=1:a=0[camera_concat]');
+    expect(argString).toContain('[camera_concat]fps=30,setsar=1[camera_raw]');
     expect(argString).not.toContain('scale=3840:2160,crop=1920:1080:960:540[cv0]');
   });
 
@@ -466,8 +481,13 @@ describe('main/services/render-service', () => {
     );
 
     const argString = execCalls[0].args.join(' ');
+    // User camera sync offset shifts the sample window (no per-section fps
+    // anymore — that's applied once after the concat so multi-section
+    // trimmed durations do not drift). The tail stop_duration is the shift
+    // (0.120s) PLUS the constant 0.250s safety pad that locks every
+    // section's video length to the nominal section duration.
     expect(argString).toContain(
-      '[1:v]trim=start=0.120:end=1.120,setpts=PTS-STARTPTS,fps=30,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.120,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]'
+      '[1:v]trim=start=0.120:end=1.120,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.370,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]'
     );
   });
 
@@ -638,14 +658,26 @@ describe('main/services/render-service', () => {
     expect(args.filter((value) => value === cameraPath)).toHaveLength(1);
 
     const argString = args.join(' ');
+    // Every section trim locks its output to the nominal duration via a
+    // tpad safety pad + trim=duration cap. Without this, VFR sources
+    // quietly produce shorter-than-nominal video per section, causing
+    // multi-section exports to drift audio against video over time.
     expect(argString).toContain(
-      '[0:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,fps=30,trim=duration=1.000,setpts=PTS-STARTPTS,setsar=1[sv0]'
+      '[0:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS,setsar=1[sv0]'
     );
     expect(argString).toContain(
-      '[0:v]trim=start=1.000:end=2.000,setpts=PTS-STARTPTS,fps=30,trim=duration=1.000,setpts=PTS-STARTPTS,setsar=1[sv1]'
+      '[0:v]trim=start=1.000:end=2.000,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS,setsar=1[sv1]'
     );
-    expect(argString).toContain('[1:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,fps=30,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]');
-    expect(argString).toContain('[1:v]trim=start=1.000:end=2.000,setpts=PTS-STARTPTS,fps=30,trim=duration=1.000,setpts=PTS-STARTPTS[cv1]');
+    expect(argString).toContain(
+      '[1:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]'
+    );
+    expect(argString).toContain(
+      '[1:v]trim=start=1.000:end=2.000,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS[cv1]'
+    );
+    expect(argString).toContain('concat=n=2:v=1:a=1[screen_concat][audio_out]');
+    expect(argString).toContain('[screen_concat]fps=30,setsar=1[screen_raw]');
+    expect(argString).toContain('[cv0][cv1]concat=n=2:v=1:a=0[camera_concat]');
+    expect(argString).toContain('[camera_concat]fps=30,setsar=1[camera_raw]');
   });
 
   test('renderComposite keeps reused input indexes stable across mixed take ordering', async () => {
@@ -694,21 +726,32 @@ describe('main/services/render-service', () => {
     const argString = execCalls[0].args.join(' ');
     expect(execCalls[0].args.filter((value) => value === '-i')).toHaveLength(4);
     expect(argString).toContain(
-      '[0:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,fps=30,trim=duration=1.000,setpts=PTS-STARTPTS,setsar=1[sv0]'
+      '[0:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS,setsar=1[sv0]'
     );
     expect(argString).toContain(
-      '[2:v]trim=start=1.000:end=2.000,setpts=PTS-STARTPTS,fps=30,trim=duration=1.000,setpts=PTS-STARTPTS,setsar=1[sv1]'
+      '[2:v]trim=start=1.000:end=2.000,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS,setsar=1[sv1]'
     );
     expect(argString).toContain(
-      '[0:v]trim=start=2.000:end=3.000,setpts=PTS-STARTPTS,fps=30,trim=duration=1.000,setpts=PTS-STARTPTS,setsar=1[sv2]'
+      '[0:v]trim=start=2.000:end=3.000,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS,setsar=1[sv2]'
     );
-    expect(argString).toContain('[1:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,fps=30,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]');
-    expect(argString).toContain('[3:v]trim=start=1.000:end=2.000,setpts=PTS-STARTPTS,fps=30,trim=duration=1.000,setpts=PTS-STARTPTS[cv1]');
-    expect(argString).toContain('[1:v]trim=start=2.000:end=3.000,setpts=PTS-STARTPTS,fps=30,trim=duration=1.000,setpts=PTS-STARTPTS[cv2]');
+    expect(argString).toContain(
+      '[1:v]trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]'
+    );
+    expect(argString).toContain(
+      '[3:v]trim=start=1.000:end=2.000,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS[cv1]'
+    );
+    expect(argString).toContain(
+      '[1:v]trim=start=2.000:end=3.000,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS[cv2]'
+    );
   });
 
-  test('renderComposite normalizes VFR to CFR per-section before concat so sparse regions get filled', async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-fps-per-section-'));
+  test('renderComposite normalizes VFR to CFR once after concat, not per-section', async () => {
+    // Per the AGENTS.md learned fact: per-section `fps=N,trim=duration=D`
+    // drifts trimmed durations by a few frames over multi-section exports
+    // because each section's trim is rounded independently. Applying the
+    // fps filter a single time after concat keeps the exported durations
+    // aligned with the per-section trim windows.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-fps-post-concat-'));
     const outputDir = path.join(tmpDir, 'out');
     const screenPath = path.join(tmpDir, 'screen.webm');
     fs.writeFileSync(screenPath, 'screen', 'utf8');
@@ -742,15 +785,26 @@ describe('main/services/render-service', () => {
     );
 
     const argString = execCalls[0].args.join(' ');
+    // Per-section trims must NOT apply fps per section (that caused multi-
+    // section exports to drift a frame or two per section), but each section
+    // MUST still lock its output duration via tpad + trim=duration so
+    // VFR source quirks do not quietly shorten any section's video.
     expect(argString).toContain(
-      '[0:v]trim=start=0.000:end=61.113,setpts=PTS-STARTPTS,fps=30,trim=duration=61.113,setpts=PTS-STARTPTS,setsar=1[sv0]'
+      '[0:v]trim=start=0.000:end=61.113,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=61.113,setpts=PTS-STARTPTS,setsar=1[sv0]'
     );
     expect(argString).toContain(
-      '[0:v]trim=start=90.017:end=143.531,setpts=PTS-STARTPTS,fps=30,trim=duration=53.514,setpts=PTS-STARTPTS,setsar=1[sv1]'
+      '[0:v]trim=start=90.017:end=143.531,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=53.514,setpts=PTS-STARTPTS,setsar=1[sv1]'
     );
     expect(argString).toContain(
-      '[0:v]trim=start=200.201:end=271.889,setpts=PTS-STARTPTS,fps=30,trim=duration=71.688,setpts=PTS-STARTPTS,setsar=1[sv2]'
+      '[0:v]trim=start=200.201:end=271.889,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=71.688,setpts=PTS-STARTPTS,setsar=1[sv2]'
     );
+    // And the single fps normalization step runs after the concat once.
+    expect(argString).toContain('[screen_concat]fps=30,setsar=1[screen_raw]');
+    // Exactly one post-concat fps filter per branch: screen only here
+    // (single-branch export), so 'fps=30' appears exactly once in the
+    // filter graph when the overlay/zoompan path is not active.
+    const fps30Matches = (argString.match(/fps=30/g) || []).length;
+    expect(fps30Matches).toBe(1);
     expect(execCalls[0].args).not.toContain('-r');
   });
 
@@ -1094,6 +1148,420 @@ describe('main/services/render-service', () => {
     const argString = execCalls[0].args.join(' ');
     expect(argString).not.toContain('amix');
     expect(argString).toContain('[0:a]atrim=start=0.000:end=1.000');
+  });
+
+  test('computeShiftedTrimWindow preserves section duration via start/stop padding', () => {
+    // No shift: window unchanged, no padding required.
+    expect(computeShiftedTrimWindow(0, 1.0, 0)).toMatchObject({
+      sampleStart: 0,
+      startPad: 0,
+      stopPad: 0,
+      duration: 1.0
+    });
+
+    // Negative shift (sample earlier): the effective start lands below 0, so
+    // the trim is clamped to 0 and the prefix gap is filled by clone/silence
+    // padding so the downstream trim=duration still hits the section length.
+    const earlier = computeShiftedTrimWindow(0, 1.0, -0.2);
+    expect(earlier.sampleStart).toBe(0);
+    expect(earlier.startPad).toBeCloseTo(0.2, 6);
+    expect(earlier.stopPad).toBe(0);
+    expect(earlier.duration).toBeCloseTo(1.0, 6);
+
+    // Positive shift (sample later): window pushes past the section end, so
+    // we get stop padding to keep the output duration correct even if the
+    // source clip is a bit short.
+    const later = computeShiftedTrimWindow(0, 1.0, 0.12);
+    expect(later.sampleStart).toBeCloseTo(0.12, 6);
+    expect(later.sampleEnd).toBeCloseTo(1.12, 6);
+    expect(later.startPad).toBe(0);
+    expect(later.stopPad).toBeCloseTo(0.12, 6);
+
+    // Interior-section negative shift: sampleStart > 0, no padding needed.
+    const interior = computeShiftedTrimWindow(5.0, 6.0, -0.05);
+    expect(interior.sampleStart).toBeCloseTo(4.95, 6);
+    expect(interior.sampleEnd).toBeCloseTo(5.95, 6);
+    expect(interior.startPad).toBe(0);
+    expect(interior.stopPad).toBe(0);
+  });
+
+  test('renderComposite shifts screen trim by measured screenStartOffsetMs', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-screen-offset-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    const cameraPath = path.join(tmpDir, 'camera.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+    fs.writeFileSync(cameraPath, 'camera', 'utf8');
+
+    const execCalls: { bin: string; args: string[] }[] = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        // Camera is the anchor; screen first-chunk arrived 150ms later. The
+        // screen trim window must slide earlier by 150ms so the exported
+        // section represents the same real-world moment as the camera trim.
+        takes: [
+          {
+            id: 'take-1',
+            screenPath,
+            cameraPath,
+            screenStartOffsetMs: 150,
+            cameraStartOffsetMs: 0
+          }
+        ],
+        sections: [{ takeId: 'take-1', sourceStart: 2.0, sourceEnd: 3.0 }],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: true, cameraFullscreen: false }
+        ] as Keyframe[],
+        pipSize: 300,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill'
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 111,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
+          execCalls.push({ bin: ffmpegPath, args });
+        })
+      }
+    );
+
+    const argString = execCalls[0].args.join(' ');
+    // Interior section: shifting start by -0.15 lands on 1.85/2.85 cleanly
+    // (no shift-driven stop-pad needed), but the constant 0.250s safety pad
+    // is always present so the per-section video duration is locked to the
+    // nominal length even for VFR sources that otherwise lose a few frames.
+    expect(argString).toContain(
+      '[0:v]trim=start=1.850:end=2.850,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS,setsar=1[sv0]'
+    );
+    // Camera has no auto/user offset for this take, but still gets the same
+    // safety pad + trim=duration so audio/video stay locked in lockstep.
+    expect(argString).toContain(
+      '[1:v]trim=start=2.000:end=3.000,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]'
+    );
+    // Screen mic audio rides with the screen file, so it must be shifted by
+    // the same -150ms. Audio always gets apad+atrim=duration so each
+    // section's audio length matches its video exactly.
+    expect(argString).toContain(
+      '[0:a]atrim=start=1.850:end=2.850,asetpts=PTS-STARTPTS,apad=pad_dur=0.250,atrim=duration=1.000,asetpts=PTS-STARTPTS[sa0]'
+    );
+  });
+
+  test('renderComposite shifts camera trim by auto offset and adds user offset on top', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-camera-auto-offset-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    const cameraPath = path.join(tmpDir, 'camera.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+    fs.writeFileSync(cameraPath, 'camera', 'utf8');
+
+    const execCalls: { bin: string; args: string[] }[] = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        // Screen is the anchor; camera first-chunk arrived 120ms later. A
+        // user-dialed +30ms fine-tune is additive (sample even later than
+        // the auto correction). Expected net camera shift = -0.12 + 0.03 =
+        // -0.09, so the trim window slides 90ms earlier.
+        takes: [
+          {
+            id: 'take-1',
+            screenPath,
+            cameraPath,
+            screenStartOffsetMs: 0,
+            cameraStartOffsetMs: 120
+          }
+        ],
+        sections: [{ takeId: 'take-1', sourceStart: 2.0, sourceEnd: 3.0 }],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: true, cameraFullscreen: false }
+        ] as Keyframe[],
+        pipSize: 300,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill',
+        cameraSyncOffsetMs: 30
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 222,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
+          execCalls.push({ bin: ffmpegPath, args });
+        })
+      }
+    );
+
+    const argString = execCalls[0].args.join(' ');
+    // Interior section (sectionStart >> 0) with net negative shift: no
+    // start-pad (effectiveStart > 0), no shift-driven stop-pad (we're
+    // pulling from a still-valid range), but the 0.250s safety pad is
+    // always present for duration locking.
+    expect(argString).toContain(
+      '[1:v]trim=start=1.910:end=2.910,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]'
+    );
+  });
+
+  test('renderComposite clone-pads camera prefix when shifted window is before t=0', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-camera-prefix-pad-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    const cameraPath = path.join(tmpDir, 'camera.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+    fs.writeFileSync(cameraPath, 'camera', 'utf8');
+
+    const execCalls: { bin: string; args: string[] }[] = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        takes: [
+          {
+            id: 'take-1',
+            screenPath,
+            cameraPath,
+            screenStartOffsetMs: 0,
+            cameraStartOffsetMs: 200
+          }
+        ],
+        // Section at t=0 means the shifted camera window starts at -0.2s;
+        // the trim is clamped to 0 and the missing 200ms is filled with
+        // clone-padded frames so trim=duration still yields the full 1s.
+        sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.0 }],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: true, cameraFullscreen: false }
+        ] as Keyframe[],
+        pipSize: 300,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill'
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 333,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
+          execCalls.push({ bin: ffmpegPath, args });
+        })
+      }
+    );
+
+    const argString = execCalls[0].args.join(' ');
+    // start_duration=0.200 fills the 200ms missing prefix with clone frames;
+    // stop_duration=0.250 is the constant safety pad that locks every
+    // section's output to its nominal length (so VFR sources can't shorten
+    // it). trim=duration caps the final stream to exactly the section size.
+    expect(argString).toContain(
+      '[1:v]trim=start=0.000:end=0.800,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.200:stop_mode=clone:stop_duration=0.250,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]'
+    );
+  });
+
+  test('renderComposite shifts audio for external audio files and uses silence padding', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-audio-offset-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    const audioPath = path.join(tmpDir, 'audio.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+    fs.writeFileSync(audioPath, 'audio', 'utf8');
+
+    const execCalls: { bin: string; args: string[] }[] = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        // Screen is the anchor; the dedicated mic file started recording
+        // 90ms late, so sections must trim the audio file 90ms earlier
+        // (clamped to 0 with silence prefix) to stay aligned with the
+        // screen video at the same timeline moment.
+        takes: [
+          {
+            id: 'take-1',
+            screenPath,
+            cameraPath: null,
+            audioPath,
+            audioSource: 'external',
+            screenStartOffsetMs: 0,
+            audioStartOffsetMs: 90
+          }
+        ],
+        sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.0 }],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }
+        ] as Keyframe[],
+        pipSize: 300,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill'
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 444,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
+          execCalls.push({ bin: ffmpegPath, args });
+        })
+      }
+    );
+
+    const argString = execCalls[0].args.join(' ');
+    // adelay prepends 90ms of silence so the audio lines up with the video
+    // section; apad then adds the 0.250s silence safety pad, and the final
+    // atrim=duration caps to exactly 1.000s.
+    expect(argString).toContain(
+      '[1:a]atrim=start=0.000:end=0.910,asetpts=PTS-STARTPTS,adelay=90|90,apad=pad_dur=0.250,atrim=duration=1.000,asetpts=PTS-STARTPTS[sa0]'
+    );
+  });
+
+  test('renderComposite multi-section + camera + offsets applies fps=N exactly once per concat branch', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-multi-offset-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    const cameraPath = path.join(tmpDir, 'camera.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+    fs.writeFileSync(cameraPath, 'camera', 'utf8');
+
+    const execCalls: { bin: string; args: string[] }[] = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        takes: [
+          {
+            id: 'take-1',
+            screenPath,
+            cameraPath,
+            screenStartOffsetMs: 0,
+            cameraStartOffsetMs: 120
+          }
+        ],
+        sections: [
+          { takeId: 'take-1', sourceStart: 2, sourceEnd: 6.04 },
+          { takeId: 'take-1', sourceStart: 9, sourceEnd: 11.22 },
+          { takeId: 'take-1', sourceStart: 15, sourceEnd: 18.04 }
+        ],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: true, cameraFullscreen: false }
+        ] as Keyframe[],
+        pipSize: 300,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill'
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 555,
+        probeVideoFpsWithFfmpeg: async () => 29.97,
+        runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
+          execCalls.push({ bin: ffmpegPath, args });
+        })
+      }
+    );
+
+    const argString = execCalls[0].args.join(' ');
+    // Both concat branches get fps normalized once, AFTER the concat, not
+    // once per section — that is the whole point of the AGENTS.md rule.
+    expect(argString).toContain('concat=n=3:v=1:a=1[screen_concat][audio_out]');
+    expect(argString).toContain('[screen_concat]fps=30,setsar=1[screen_raw]');
+    expect(argString).toContain('[cv0][cv1][cv2]concat=n=3:v=1:a=0[camera_concat]');
+    expect(argString).toContain('[camera_concat]fps=30,setsar=1[camera_raw]');
+    // Exactly one fps step per branch — screen + camera + the zoompan path
+    // would add more only if background animation is enabled (not here).
+    const fps30Matches = (argString.match(/fps=30/g) || []).length;
+    expect(fps30Matches).toBe(2);
+    // Each section's camera trim window is shifted 120ms earlier; interior
+    // sections (start >= 2s) need no start-pad and no shift-driven
+    // stop-pad, but every section still gets the constant 0.250s safety
+    // pad so `trim=duration=D` always hits D exactly even on VFR sources.
+    expect(argString).toContain(
+      '[1:v]trim=start=1.880:end=5.920,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=4.040,setpts=PTS-STARTPTS[cv0]'
+    );
+    expect(argString).toContain(
+      '[1:v]trim=start=8.880:end=11.100,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=2.220,setpts=PTS-STARTPTS[cv1]'
+    );
+    expect(argString).toContain(
+      '[1:v]trim=start=14.880:end=17.920,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.250,trim=duration=3.040,setpts=PTS-STARTPTS[cv2]'
+    );
+  });
+
+  test('every section trim locks its output duration via tpad+trim=duration so VFR sources cannot drift audio against video', async () => {
+    // Regression guard. The original export pipeline wrapped each
+    // per-section `trim` with `fps=N,trim=duration=D` so any frame lost to
+    // VFR quantization on `trim=X:Y` was replaced by a duplicate/adjacent
+    // frame, keeping video section length exactly equal to audio section
+    // length. Phase 1c moved `fps=N` to a single post-concat filter, but
+    // it dropped the per-section `trim=duration=D` in the process, which
+    // let VFR sources quietly shorten per-section video by up to a frame.
+    // Over a many-section export that produced a growing audio-ahead-of-
+    // video offset — reported as "camera + audio drift" on long exports.
+    //
+    // This test pins the invariant: EVERY per-section video trim ends with
+    // `tpad=...,trim=duration=D,setpts=PTS-STARTPTS` and EVERY per-section
+    // audio trim ends with `apad=...,atrim=duration=D,asetpts=...` so both
+    // contribute exactly D seconds of content to the concat regardless of
+    // whether the source was VFR, short-tailed, or perfectly aligned.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-section-duration-lock-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    const cameraPath = path.join(tmpDir, 'camera.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+    fs.writeFileSync(cameraPath, 'camera', 'utf8');
+
+    const sections = [
+      { takeId: 'take-1', sourceStart: 0, sourceEnd: 4.017 },
+      { takeId: 'take-1', sourceStart: 9.0, sourceEnd: 17.213 },
+      { takeId: 'take-1', sourceStart: 18.1, sourceEnd: 21.124 },
+      { takeId: 'take-1', sourceStart: 21.8, sourceEnd: 25.834 },
+      { takeId: 'take-1', sourceStart: 31.9, sourceEnd: 33.6 }
+    ];
+
+    const execCalls: { bin: string; args: string[] }[] = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        takes: [{ id: 'take-1', screenPath, cameraPath }],
+        sections,
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: true, cameraFullscreen: false }
+        ] as Keyframe[],
+        pipSize: 300,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill'
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 906,
+        // Simulate the VFR screen source seen in the field (~29.25 effective
+        // fps) so a regression that reintroduces the drift shows up clearly.
+        probeVideoFpsWithFfmpeg: async () => 29.25,
+        runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
+          execCalls.push({ bin: ffmpegPath, args });
+        })
+      }
+    );
+
+    const argString = execCalls[0].args.join(' ');
+    for (let index = 0; index < sections.length; index += 1) {
+      const duration = (sections[index].sourceEnd - sections[index].sourceStart).toFixed(3);
+      // Screen video must end with `trim=duration=D,setpts=PTS-STARTPTS`.
+      expect(argString).toMatch(
+        new RegExp(
+          `\\[0:v\\][^;]*?trim=duration=${duration}[^,]*,setpts=PTS-STARTPTS[^;]*?\\[sv${index}\\]`
+        )
+      );
+      // Camera video must end the same way.
+      expect(argString).toMatch(
+        new RegExp(
+          `\\[1:v\\][^;]*?trim=duration=${duration}[^,]*,setpts=PTS-STARTPTS\\[cv${index}\\]`
+        )
+      );
+      // Audio must end with `atrim=duration=D,asetpts=...` so it contributes
+      // exactly D seconds to the audio concat — matching the video length.
+      expect(argString).toMatch(
+        new RegExp(
+          `\\[0:a\\][^;]*?atrim=duration=${duration}[^,]*,asetpts=PTS-STARTPTS\\[sa${index}\\]`
+        )
+      );
+    }
   });
 
   test('renderComposite keeps overlay filters bounded for long redundant camera timelines', async () => {

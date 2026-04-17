@@ -162,6 +162,120 @@ describe('main/services/project-service integration', () => {
     expect(opened.project.takes[0].proxyPath).toBe(proxyPath);
   });
 
+  test('cameraProxyPath round-trips through save and open as relative path', () => {
+    const created = service.createProject({ name: 'CameraProxy', parentFolder: sandbox.root });
+    const screenPath = path.join(created.projectPath, 'screen.webm');
+    const cameraPath = path.join(created.projectPath, 'camera.webm');
+    const cameraProxyPath = path.join(created.projectPath, 'camera-proxy-v2.mp4');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+    fs.writeFileSync(cameraPath, 'camera', 'utf8');
+    fs.writeFileSync(cameraProxyPath, 'proxy', 'utf8');
+
+    service.saveProject({
+      projectPath: created.projectPath,
+      project: {
+        ...created.project,
+        takes: [
+          {
+            id: 'take-1',
+            createdAt: new Date().toISOString(),
+            duration: 5,
+            screenPath,
+            cameraPath,
+            proxyPath: null,
+            cameraProxyPath,
+            sections: []
+          }
+        ]
+      }
+    });
+
+    const raw = JSON.parse(
+      fs.readFileSync(path.join(created.projectPath, 'project.json'), 'utf8')
+    );
+    expect(raw.takes[0].cameraProxyPath).toBe('camera-proxy-v2.mp4');
+
+    const opened = service.openProject(created.projectPath);
+    expect(opened.project.takes[0].cameraProxyPath).toBe(cameraProxyPath);
+    // Legacy takes without a cameraProxyPath field must hydrate to null,
+    // not undefined, so the renderer's "!take.cameraProxyPath" trigger
+    // keeps working without special-casing missing fields.
+    service.saveProject({
+      projectPath: created.projectPath,
+      project: {
+        ...created.project,
+        takes: [
+          {
+            id: 'take-legacy',
+            createdAt: new Date().toISOString(),
+            duration: 2,
+            screenPath,
+            cameraPath: null,
+            proxyPath: null,
+            sections: []
+          }
+        ]
+      }
+    });
+    const legacyOpened = service.openProject(created.projectPath);
+    expect(legacyOpened.project.takes[0].cameraProxyPath).toBeNull();
+  });
+
+  test('recorder start offsets round-trip through save and open, defaulting to 0', () => {
+    const created = service.createProject({ name: 'StartOffsets', parentFolder: sandbox.root });
+    const screenPath = path.join(created.projectPath, 'screen.webm');
+    const cameraPath = path.join(created.projectPath, 'camera.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+    fs.writeFileSync(cameraPath, 'camera', 'utf8');
+
+    service.saveProject({
+      projectPath: created.projectPath,
+      project: {
+        ...created.project,
+        takes: [
+          {
+            id: 'take-offsets',
+            createdAt: new Date().toISOString(),
+            duration: 4,
+            screenPath,
+            cameraPath,
+            proxyPath: null,
+            sections: [],
+            screenStartOffsetMs: 0,
+            cameraStartOffsetMs: 187,
+            audioStartOffsetMs: 0
+          },
+          {
+            id: 'take-legacy',
+            createdAt: new Date().toISOString(),
+            duration: 2,
+            screenPath,
+            cameraPath: null,
+            proxyPath: null,
+            sections: []
+          }
+        ]
+      }
+    });
+
+    const raw = JSON.parse(
+      fs.readFileSync(path.join(created.projectPath, 'project.json'), 'utf8')
+    );
+    expect(raw.takes[0].screenStartOffsetMs).toBe(0);
+    expect(raw.takes[0].cameraStartOffsetMs).toBe(187);
+    expect(raw.takes[0].audioStartOffsetMs).toBe(0);
+
+    const opened = service.openProject(created.projectPath);
+    expect(opened.project.takes[0].screenStartOffsetMs).toBe(0);
+    expect(opened.project.takes[0].cameraStartOffsetMs).toBe(187);
+    expect(opened.project.takes[0].audioStartOffsetMs).toBe(0);
+    // Legacy takes that were saved before the fields existed must default to 0
+    // (not NaN/undefined) so downstream consumers can treat them uniformly.
+    expect(opened.project.takes[1].screenStartOffsetMs).toBe(0);
+    expect(opened.project.takes[1].cameraStartOffsetMs).toBe(0);
+    expect(opened.project.takes[1].audioStartOffsetMs).toBe(0);
+  });
+
   test('proxyPath defaults to null for legacy takes without proxy', () => {
     const created = service.createProject({ name: 'Legacy', parentFolder: sandbox.root });
     const screenPath = path.join(created.projectPath, 'screen.webm');

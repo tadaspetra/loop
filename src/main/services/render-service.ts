@@ -41,6 +41,13 @@ export interface RenderTakeInput {
   // True when the screen webm contains a captured system-audio track. Mixed
   // with the mic track (when present) via ffmpeg amix during export.
   hasSystemAudio?: boolean;
+  // Per-recorder delay (ms, non-negative) between this take's anchor
+  // (earliest) recorder first data chunk and this specific file's first data
+  // chunk. Applied as a trim-window shift per source so the same section
+  // window in the export refers to the same real-world moment on every file.
+  screenStartOffsetMs?: number;
+  cameraStartOffsetMs?: number;
+  audioStartOffsetMs?: number;
 }
 
 export interface RenderCompositeOptions {
@@ -55,6 +62,10 @@ export interface RenderCompositeOptions {
   sourceWidth?: number;
   sourceHeight?: number;
   outputFolder?: string;
+  // Optional explicit output path. When set, the given path is used as-is
+  // (no recording-${now}-edited.mp4 auto-naming). Useful for deterministic
+  // paths like the background preview render that is keyed by timeline hash.
+  outputPath?: string;
 }
 
 export interface RenderCompositeDeps {
@@ -208,30 +219,168 @@ function buildExportAudioLabel(exportAudioPreset: ExportAudioPreset): string {
   return 'audio_final';
 }
 
+/**
+ * Compute a shifted trim window plus the amount of start/stop padding
+ * required to hit the desired output duration. Positive `shiftSec` means
+ * sample the source later (start/end pushed forward); negative means sample
+ * earlier, which may require padding the clipped prefix with clones/silence.
+ *
+ * The output invariants:
+ * - The trim window is always within the source's valid time (>= 0).
+ * - `startPad + (sampleEnd - sampleStart) + stopPad == sectionEnd - sectionStart`,
+ *   so a downstream `trim=duration=${sectionEnd - sectionStart}` always yields
+ *   the exact section length even when the source was short of the window.
+ */
+export interface ShiftedTrimWindow {
+  sampleStart: number;
+  sampleEnd: number;
+  startPad: number;
+  stopPad: number;
+  duration: number;
+}
+
+export function computeShiftedTrimWindow(
+  sectionStart: number,
+  sectionEnd: number,
+  shiftSec: number
+): ShiftedTrimWindow {
+  const duration = Math.max(0, sectionEnd - sectionStart);
+  const shift = Number.isFinite(shiftSec) ? shiftSec : 0;
+  const effectiveStart = sectionStart + shift;
+  const effectiveEnd = sectionEnd + shift;
+  const sampleStart = Math.max(0, effectiveStart);
+  const sampleEnd = Math.max(sampleStart + 0.001, Math.max(0, effectiveEnd));
+  const startPad = Math.max(0, -effectiveStart);
+  // stopPad keeps the downstream `trim=duration` honest when the source
+  // doesn't extend far enough into the shifted window (e.g. positive shift
+  // past file end). For a shift ≥ 0, the potential shortfall is exactly
+  // `shift` seconds; for a negative shift, no stop padding is needed.
+  const stopPad = Math.max(0, shift);
+  return { sampleStart, sampleEnd, startPad, stopPad, duration };
+}
+
+function hasMeaningfulShift(shiftSec: number): boolean {
+  return Number.isFinite(shiftSec) && Math.abs(shiftSec) >= 0.0005;
+}
+
+// Safety pad added to the end of every trimmed video section so the final
+// `trim=duration=D` can always hit the exact nominal section length. This
+// absorbs:
+//
+// 1. VFR frame-quantization loss — a naive `trim=X:Y` on a 29.25fps source
+//    can produce a stream whose actual last-frame PTS is a frame or two
+//    shy of Y. Audio `atrim=X:Y` is sample-accurate (no such loss), so
+//    without this pad the per-section video duration is <= audio duration
+//    and the mismatch accumulates into a visible audio-leads-video drift
+//    over multi-section exports.
+// 2. Future-shift shortfall when `shiftSec > 0` runs off the end of the
+//    source file; the `max(0, shiftSec)` term below covers that case on
+//    top of the baseline safety pad.
+const VIDEO_TRIM_SAFETY_STOP_PAD_SEC = 0.25;
+
+function buildShiftedVideoTrim(
+  inputLabel: string,
+  sectionStart: number,
+  sectionEnd: number,
+  shiftSec: number,
+  outputLabel: string,
+  tailFilter: string
+): string {
+  const suffix = tailFilter ? `,${tailFilter}` : '';
+  const shift = Number.isFinite(shiftSec) ? shiftSec : 0;
+  const meaningfulShift = hasMeaningfulShift(shift);
+  const baseWindow = meaningfulShift
+    ? computeShiftedTrimWindow(sectionStart, sectionEnd, shift)
+    : {
+        sampleStart: sectionStart,
+        sampleEnd: sectionEnd,
+        startPad: 0,
+        stopPad: 0,
+        duration: Math.max(0, sectionEnd - sectionStart)
+      };
+  const stopPad = baseWindow.stopPad + VIDEO_TRIM_SAFETY_STOP_PAD_SEC;
+  return `${inputLabel}trim=start=${baseWindow.sampleStart.toFixed(3)}:end=${baseWindow.sampleEnd.toFixed(3)},setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=${baseWindow.startPad.toFixed(3)}:stop_mode=clone:stop_duration=${stopPad.toFixed(3)},trim=duration=${baseWindow.duration.toFixed(3)},setpts=PTS-STARTPTS${suffix}${outputLabel}`;
+}
+
+// Mirror of `VIDEO_TRIM_SAFETY_STOP_PAD_SEC` for audio: every section's
+// `atrim` is followed by a small `apad` + final-`atrim=duration` cap so the
+// per-section audio length is exactly the section's nominal duration. Audio
+// `atrim` is normally sample-accurate, but if a recording was cut short
+// (e.g. camera file ends a few frames before screen), the tail section's
+// audio would otherwise be shorter than its video, which would propagate
+// through `concat` into multi-section audio/video drift.
+const AUDIO_TRIM_SAFETY_STOP_PAD_SEC = 0.25;
+
+function buildShiftedAudioTrim(
+  inputLabel: string,
+  sectionStart: number,
+  sectionEnd: number,
+  shiftSec: number,
+  outputLabel: string
+): string {
+  const shift = Number.isFinite(shiftSec) ? shiftSec : 0;
+  const meaningfulShift = hasMeaningfulShift(shift);
+  const baseWindow = meaningfulShift
+    ? computeShiftedTrimWindow(sectionStart, sectionEnd, shift)
+    : {
+        sampleStart: sectionStart,
+        sampleEnd: sectionEnd,
+        startPad: 0,
+        stopPad: 0,
+        duration: Math.max(0, sectionEnd - sectionStart)
+      };
+  const filters: string[] = [
+    `atrim=start=${baseWindow.sampleStart.toFixed(3)}:end=${baseWindow.sampleEnd.toFixed(3)}`,
+    'asetpts=PTS-STARTPTS'
+  ];
+  if (baseWindow.startPad > 0) {
+    const startPadMs = Math.round(baseWindow.startPad * 1000);
+    filters.push(`adelay=${startPadMs}|${startPadMs}`);
+  }
+  // Always `apad` so the downstream `atrim=duration` can guarantee the
+  // section's exact length even if the shifted window (or the source itself)
+  // ran short of the nominal end.
+  const stopPad = baseWindow.stopPad + AUDIO_TRIM_SAFETY_STOP_PAD_SEC;
+  filters.push(`apad=pad_dur=${stopPad.toFixed(3)}`);
+  filters.push(`atrim=duration=${baseWindow.duration.toFixed(3)}`);
+  filters.push('asetpts=PTS-STARTPTS');
+  return `${inputLabel}${filters.join(',')}${outputLabel}`;
+}
+
+/**
+ * Returns the ffmpeg filter chain that trims the camera input for a single
+ * section, shifting the source window by the combined auto-measured recorder
+ * start skew and the user's manual `cameraSyncOffsetMs` fine-tune.
+ *
+ * Sign conventions:
+ * - `cameraStartOffsetMs` (auto): how much later than the anchor recorder the
+ *   camera produced its first chunk. Positive means camera content is delayed
+ *   relative to the anchor, so we sample it EARLIER to re-align.
+ * - `cameraSyncOffsetMs` (user): positive means "advance the camera"
+ *   (= sample later in the camera file), matching the editor-playback
+ *   semantics of `resolveCameraPlaybackTargetTime(screenTime, offsetMs)`.
+ *
+ * Effective shift = userOffsetMs/1000 - cameraStartOffsetMs/1000.
+ */
 export function buildCameraTrimFilter(
   cameraIdx: number,
   section: RenderSectionInput,
-  targetFps: number,
+  _targetFps: number,
   index: number,
-  cameraSyncOffsetMs: number
+  cameraSyncOffsetMs: number,
+  cameraStartOffsetMs = 0
 ): string {
-  const start = Number(section.sourceStart);
-  const end = Number(section.sourceEnd);
-  const duration = end - start;
-  const offsetSec = normalizeCameraSyncOffsetMs(cameraSyncOffsetMs) / 1000;
-  const label = `[cv${index}]`;
-
-  if (!Number.isFinite(offsetSec) || Math.abs(offsetSec) < 0.0005) {
-    return `[${cameraIdx}:v]trim=start=${start.toFixed(3)}:end=${end.toFixed(3)},setpts=PTS-STARTPTS,fps=${targetFps},trim=duration=${duration.toFixed(3)},setpts=PTS-STARTPTS${label}`;
-  }
-
-  const sampleStart = Math.max(0, start + offsetSec);
-  const unclampedSampleEnd = Math.max(0, end + offsetSec);
-  const sampleEnd = Math.max(sampleStart + 0.001, unclampedSampleEnd);
-  const startPad = Math.max(0, -offsetSec);
-  const stopPad = Math.max(0, offsetSec);
-
-  return `[${cameraIdx}:v]trim=start=${sampleStart.toFixed(3)}:end=${sampleEnd.toFixed(3)},setpts=PTS-STARTPTS,fps=${targetFps},tpad=start_mode=clone:start_duration=${startPad.toFixed(3)}:stop_mode=clone:stop_duration=${stopPad.toFixed(3)},trim=duration=${duration.toFixed(3)},setpts=PTS-STARTPTS${label}`;
+  const userOffsetSec = normalizeCameraSyncOffsetMs(cameraSyncOffsetMs) / 1000;
+  const autoOffsetSec = Math.max(0, Number(cameraStartOffsetMs) || 0) / 1000;
+  const shiftSec = userOffsetSec - autoOffsetSec;
+  return buildShiftedVideoTrim(
+    `[${cameraIdx}:v]`,
+    Number(section.sourceStart),
+    Number(section.sourceEnd),
+    shiftSec,
+    `[cv${index}]`,
+    ''
+  );
 }
 
 interface TakeInputPlan {
@@ -240,6 +389,9 @@ interface TakeInputPlan {
   audioIdx: number;
   audioSource: AudioSource;
   hasSystemAudio: boolean;
+  screenStartOffsetMs: number;
+  cameraStartOffsetMs: number;
+  audioStartOffsetMs: number;
 }
 
 interface TakePlanEntry {
@@ -248,6 +400,9 @@ interface TakePlanEntry {
   audioPath: string | null;
   audioSource: AudioSource;
   hasSystemAudio: boolean;
+  screenStartOffsetMs: number;
+  cameraStartOffsetMs: number;
+  audioStartOffsetMs: number;
 }
 
 function buildInputPlan(
@@ -304,7 +459,10 @@ function buildInputPlan(
         cameraIdx,
         audioIdx,
         audioSource: take.audioSource,
-        hasSystemAudio: take.hasSystemAudio
+        hasSystemAudio: take.hasSystemAudio,
+        screenStartOffsetMs: take.screenStartOffsetMs,
+        cameraStartOffsetMs: take.cameraStartOffsetMs,
+        audioStartOffsetMs: take.audioStartOffsetMs
       };
       takeInputs.set(takeId, inputPlan);
     }
@@ -431,14 +589,18 @@ export async function renderComposite(
   const now = typeof deps.now === 'function' ? deps.now : Date.now;
   const onProgress = typeof deps.onProgress === 'function' ? deps.onProgress : null;
 
-  if (!outputFolder) throw new Error('Missing output folder');
+  const explicitOutputPath = typeof opts.outputPath === 'string' ? opts.outputPath : '';
+  if (!outputFolder && !explicitOutputPath) throw new Error('Missing output folder');
   if (sections.length === 0) throw new Error('No sections to render');
 
-  ensureDirectory(outputFolder);
+  const targetFolder = explicitOutputPath ? path.dirname(explicitOutputPath) : outputFolder;
+  ensureDirectory(targetFolder);
 
   if (!ffmpegPath) throw new Error('ffmpeg-static is unavailable on this platform');
 
-  const outputPath = path.join(outputFolder, `recording-${now()}-edited.mp4`);
+  const outputPath = explicitOutputPath
+    ? explicitOutputPath
+    : path.join(outputFolder, `recording-${now()}-edited.mp4`);
   const { canvasW, canvasH } = deriveRenderCanvasSize(sourceWidth, sourceHeight, exportVideoPreset);
 
   const takeMap = new Map<string, TakePlanEntry>();
@@ -450,6 +612,9 @@ export async function renderComposite(
     // back to 'screen' here; the ffmpeg filter graph stays uniform because
     // [screenIdx:a] has always been referenced unconditionally.
     const audioSource: AudioSource = normalizeAudioSource(take.audioSource) ?? 'screen';
+    const screenStartOffsetMs = Math.max(0, Number(take.screenStartOffsetMs) || 0);
+    const cameraStartOffsetMs = Math.max(0, Number(take.cameraStartOffsetMs) || 0);
+    const audioStartOffsetMs = Math.max(0, Number(take.audioStartOffsetMs) || 0);
     takeMap.set(take.id, {
       screenPath: take.screenPath,
       cameraPath: take.cameraPath,
@@ -459,7 +624,10 @@ export async function renderComposite(
       // takes where audioSource === 'screen'), we already pull audio from
       // screen — there's no second stream to mix. Only mark hasSystemAudio
       // as an additional track when the mic lives elsewhere.
-      hasSystemAudio: take.hasSystemAudio === true && audioSource !== 'screen'
+      hasSystemAudio: take.hasSystemAudio === true && audioSource !== 'screen',
+      screenStartOffsetMs,
+      cameraStartOffsetMs,
+      audioStartOffsetMs
     });
   }
 
@@ -493,11 +661,25 @@ export async function renderComposite(
   const filterParts: string[] = [];
   for (let index = 0; index < sections.length; index += 1) {
     const section = sections[index];
-    const { screenIdx, cameraIdx, audioIdx, audioSource, imageIdx } = sectionInputs[index];
-    const start = section.sourceStart.toFixed(3);
-    const end = section.sourceEnd.toFixed(3);
+    const {
+      screenIdx,
+      cameraIdx,
+      audioIdx,
+      audioSource,
+      imageIdx,
+      screenStartOffsetMs,
+      cameraStartOffsetMs,
+      audioStartOffsetMs
+    } = sectionInputs[index];
+    const sectionStart = Number(section.sourceStart);
+    const sectionEnd = Number(section.sourceEnd);
 
-    const sectionDur = (section.sourceEnd - section.sourceStart).toFixed(3);
+    // Screen video trim — for ordinary video sections we shift the source
+    // window by (-screenStartOffsetMs) so the trim refers to the same
+    // real-world moment as other sources in this take; fps normalization
+    // happens once, after the screen concat, per the AGENTS.md guidance that
+    // per-section fps rounding can drift trimmed durations.
+    const screenShiftSec = -screenStartOffsetMs / 1000;
     if (imageIdx >= 0) {
       const imageScale =
         screenFitMode === 'fill'
@@ -507,12 +689,27 @@ export async function renderComposite(
         `[${imageIdx}:v]${imageScale},format=yuv420p,setpts=PTS-STARTPTS,setsar=1[sv${index}]`
       );
     } else if (hasImageSections) {
+      const tail = `scale=${canvasW}:${canvasH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH},setsar=1`;
       filterParts.push(
-        `[${screenIdx}:v]trim=start=${start}:end=${end},setpts=PTS-STARTPTS,fps=${targetFps},trim=duration=${sectionDur},setpts=PTS-STARTPTS,scale=${canvasW}:${canvasH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH},setsar=1[sv${index}]`
+        buildShiftedVideoTrim(
+          `[${screenIdx}:v]`,
+          sectionStart,
+          sectionEnd,
+          screenShiftSec,
+          `[sv${index}]`,
+          tail
+        )
       );
     } else {
       filterParts.push(
-        `[${screenIdx}:v]trim=start=${start}:end=${end},setpts=PTS-STARTPTS,fps=${targetFps},trim=duration=${sectionDur},setpts=PTS-STARTPTS,setsar=1[sv${index}]`
+        buildShiftedVideoTrim(
+          `[${screenIdx}:v]`,
+          sectionStart,
+          sectionEnd,
+          screenShiftSec,
+          `[sv${index}]`,
+          'setsar=1'
+        )
       );
     }
     // Pull audio from whichever input actually owns the mic for this take.
@@ -520,34 +717,63 @@ export async function renderComposite(
     // with a camera report 'camera'; screen-only takes with a mic report
     // 'external' and have a dedicated audio input.
     let micInputIdx = screenIdx;
+    let micStartOffsetMs = screenStartOffsetMs;
     if (audioSource === 'camera' && cameraIdx >= 0) {
       micInputIdx = cameraIdx;
+      micStartOffsetMs = cameraStartOffsetMs;
     } else if (audioSource === 'external' && audioIdx >= 0) {
       micInputIdx = audioIdx;
+      micStartOffsetMs = audioStartOffsetMs;
     }
+    const micShiftSec = -micStartOffsetMs / 1000;
+    const systemAudioShiftSec = -screenStartOffsetMs / 1000;
     const { hasSystemAudio } = sectionInputs[index];
     if (hasSystemAudio) {
       // Mix mic + system audio so viewers hear both the presenter and the
       // system/desktop sound at the same time. amix normalizes levels by
       // default (1/n scaling); we keep that to avoid clipping.
       filterParts.push(
-        `[${micInputIdx}:a]atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS[sa${index}m]`
+        buildShiftedAudioTrim(
+          `[${micInputIdx}:a]`,
+          sectionStart,
+          sectionEnd,
+          micShiftSec,
+          `[sa${index}m]`
+        )
       );
       filterParts.push(
-        `[${screenIdx}:a]atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS[sa${index}s]`
+        buildShiftedAudioTrim(
+          `[${screenIdx}:a]`,
+          sectionStart,
+          sectionEnd,
+          systemAudioShiftSec,
+          `[sa${index}s]`
+        )
       );
       filterParts.push(
         `[sa${index}m][sa${index}s]amix=inputs=2:duration=longest:dropout_transition=0[sa${index}]`
       );
     } else {
       filterParts.push(
-        `[${micInputIdx}:a]atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS[sa${index}]`
+        buildShiftedAudioTrim(
+          `[${micInputIdx}:a]`,
+          sectionStart,
+          sectionEnd,
+          micShiftSec,
+          `[sa${index}]`
+        )
       );
     }
   }
 
   const screenLabels = sections.map((_, index) => `[sv${index}][sa${index}]`).join('');
-  filterParts.push(`${screenLabels}concat=n=${sections.length}:v=1:a=1[screen_raw][audio_out]`);
+  // concat produces VFR output; normalize to a single post-concat fps so
+  // per-section trimmed durations stay matched instead of drifting by a few
+  // frames per section when the source is VFR (see AGENTS.md learned fact).
+  filterParts.push(
+    `${screenLabels}concat=n=${sections.length}:v=1:a=1[screen_concat][audio_out]`
+  );
+  filterParts.push(`[screen_concat]fps=${targetFps},setsar=1[screen_raw]`);
   const exportAudioLabel = buildExportAudioLabel(exportAudioPreset);
   if (exportAudioLabel === 'audio_final') {
     filterParts.push(
@@ -558,11 +784,18 @@ export async function renderComposite(
   if (hasCamera) {
     for (let index = 0; index < sections.length; index += 1) {
       const section = sections[index];
-      const { cameraIdx } = sectionInputs[index];
-      const duration = (section.sourceEnd - section.sourceStart).toFixed(3);
+      const { cameraIdx, cameraStartOffsetMs } = sectionInputs[index];
+      const duration = (Number(section.sourceEnd) - Number(section.sourceStart)).toFixed(3);
       if (cameraIdx >= 0) {
         filterParts.push(
-          buildCameraTrimFilter(cameraIdx, section, targetFps, index, cameraSyncOffsetMs)
+          buildCameraTrimFilter(
+            cameraIdx,
+            section,
+            targetFps,
+            index,
+            cameraSyncOffsetMs,
+            cameraStartOffsetMs
+          )
         );
       } else {
         filterParts.push(`color=black:s=${canvasW}x${canvasH}:d=${duration}[cv${index}]`);
@@ -570,7 +803,8 @@ export async function renderComposite(
     }
 
     const cameraLabels = sections.map((_, index) => `[cv${index}]`).join('');
-    filterParts.push(`${cameraLabels}concat=n=${sections.length}:v=1:a=0[camera_raw]`);
+    filterParts.push(`${cameraLabels}concat=n=${sections.length}:v=1:a=0[camera_concat]`);
+    filterParts.push(`[camera_concat]fps=${targetFps},setsar=1[camera_raw]`);
     const overlayFilter = buildFilterComplex(
       keyframes,
       pipSize,

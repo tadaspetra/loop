@@ -16,6 +16,7 @@ import type { createProjectService } from '../services/project-service';
 import type { renderComposite } from '../services/render-service';
 import type { exportPremiereProject } from '../services/premiere-export-service';
 import type { computeSections } from '../services/sections-service';
+import type { generatePreview } from '../services/preview-render-service';
 import type * as proxyServiceModule from '../services/proxy-service';
 import type * as recordingServiceModule from '../services/recording-service';
 
@@ -24,6 +25,7 @@ type ProjectService = ReturnType<typeof createProjectService>;
 type RenderComposite = typeof renderComposite;
 type ExportPremiereProject = typeof exportPremiereProject;
 type ComputeSections = typeof computeSections;
+type GeneratePreview = typeof generatePreview;
 type ProxyService = typeof proxyServiceModule;
 type RecordingService = typeof recordingServiceModule;
 
@@ -44,6 +46,7 @@ export function registerIpcHandlers({
   renderComposite,
   exportPremiereProject,
   computeSections,
+  generatePreview,
   getScribeToken,
   proxyService,
   recordingService,
@@ -59,6 +62,7 @@ export function registerIpcHandlers({
   renderComposite: RenderComposite;
   exportPremiereProject: ExportPremiereProject;
   computeSections: ComputeSections;
+  generatePreview: GeneratePreview;
   getScribeToken: () => Promise<string>;
   proxyService: ProxyService;
   recordingService: RecordingService;
@@ -221,6 +225,27 @@ export function registerIpcHandlers({
     }
   });
 
+  ipcMain.handle('generate-preview', async (event: IpcMainInvokeEvent, opts: unknown) => {
+    const controller = new AbortController();
+    activeFfmpegAborts.add(controller);
+
+    const onSenderDestroy = () => controller.abort();
+    event.sender.once('destroyed', onSenderDestroy);
+
+    try {
+      return await generatePreview(opts as Parameters<GeneratePreview>[0], {
+        signal: controller.signal
+      });
+    } finally {
+      activeFfmpegAborts.delete(controller);
+      try {
+        event.sender.removeListener('destroyed', onSenderDestroy);
+      } catch {
+        // Sender may already be gone; ignore.
+      }
+    }
+  });
+
   ipcMain.handle('export-premiere-project', async (event: IpcMainInvokeEvent, opts: unknown) => {
     const controller = new AbortController();
     activeFfmpegAborts.add(controller);
@@ -282,10 +307,26 @@ export function registerIpcHandlers({
     'proxy:generate',
     (
       event: IpcMainInvokeEvent,
-      opts: { takeId: string; screenPath: string; projectFolder: string; durationSec?: number }
+      opts: {
+        takeId: string;
+        screenPath?: string;
+        // `inputPath` is the generic successor of the legacy `screenPath`
+        // field — we keep both so existing callers still work, and new
+        // callers can supply a camera/audio path too.
+        inputPath?: string;
+        projectFolder: string;
+        durationSec?: number;
+        // 'screen' (default) produces the screen proxy and fires a
+        // proxy:progress done event carrying proxyPath. 'camera' produces
+        // a matching proxy of the camera file and fires with kind='camera'
+        // so the renderer knows to set take.cameraProxyPath.
+        kind?: 'screen' | 'camera';
+      }
     ) => {
-      if (!proxyService || !opts.screenPath || !opts.projectFolder) return null;
-      const proxyPath = proxyService.deriveProxyPath(opts.screenPath);
+      const inputPath = opts.inputPath || opts.screenPath;
+      if (!proxyService || !inputPath || !opts.projectFolder) return null;
+      const kind = opts.kind === 'camera' ? 'camera' : 'screen';
+      const proxyPath = proxyService.deriveProxyPath(inputPath);
       const totalDuration =
         Number.isFinite(opts.durationSec) && (opts.durationSec as number) > 0
           ? (opts.durationSec as number)
@@ -299,7 +340,7 @@ export function registerIpcHandlers({
           console.warn('proxy:progress send failed:', error);
         }
       };
-      safeSend({ takeId: opts.takeId, status: 'started', percent: 0 });
+      safeSend({ takeId: opts.takeId, kind, status: 'started', percent: 0 });
 
       const controller = new AbortController();
       activeFfmpegAborts.add(controller);
@@ -314,6 +355,7 @@ export function registerIpcHandlers({
                 const percent = Math.max(0, Math.min(1, outSec / totalDuration));
                 safeSend({
                   takeId: opts.takeId,
+                  kind,
                   status: 'progress',
                   percent
                 });
@@ -323,18 +365,19 @@ export function registerIpcHandlers({
 
       proxyService
         .generateProxy({
-          screenPath: opts.screenPath,
+          screenPath: inputPath,
           proxyPath,
           onProgress,
           signal: controller.signal
         })
         .then(() => {
-          safeSend({ takeId: opts.takeId, status: 'done', proxyPath });
+          safeSend({ takeId: opts.takeId, kind, status: 'done', proxyPath });
         })
         .catch((err: unknown) => {
           const message = err instanceof Error ? err.message : String(err);
           safeSend({
             takeId: opts.takeId,
+            kind,
             status: 'error',
             error: message
           });

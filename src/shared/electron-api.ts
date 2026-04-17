@@ -137,6 +137,9 @@ export interface ElectronApi {
   }) => Promise<{ sections: ProjectData['timeline']['sections']; trimmedDuration: number }>;
   renderComposite: (opts: Record<string, unknown>) => Promise<string>;
   onRenderProgress: (listener: (payload: RenderProgressUpdate) => void) => () => void;
+  generatePreview: (
+    opts: Record<string, unknown>
+  ) => Promise<{ path: string; hash: string; cached: boolean }>;
   exportPremiereProject: (opts: Record<string, unknown>) => Promise<PremiereExportResult>;
   onExportPremiereProgress: (listener: (payload: RenderProgressUpdate) => void) => () => void;
   importFile: (sourcePath: string, projectFolder: string) => Promise<string>;

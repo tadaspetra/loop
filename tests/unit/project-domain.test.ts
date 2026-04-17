@@ -6,11 +6,13 @@ import {
   createDefaultProject,
   DEFAULT_PIP_SIZE,
   MAX_PIP_SIZE,
+  MAX_RECORDER_START_OFFSET_MS,
   MIN_PIP_SIZE,
   normalizeCameraSyncOffsetMs,
   normalizeKeyframes,
   normalizePipSize,
   normalizeProjectData,
+  normalizeRecorderStartOffsetMs,
   normalizeExportVideoPreset,
   normalizeSections,
   sanitizeProjectName,
@@ -224,6 +226,68 @@ describe('shared/domain/project', () => {
     expect(sections[0].imagePath).toBe('/tmp/photo.png');
     expect(sections[1].imagePath).toBeNull();
     expect(sections[2].imagePath).toBeNull();
+  });
+
+  test('normalizeRecorderStartOffsetMs clamps invalid, negative, and huge values', () => {
+    expect(normalizeRecorderStartOffsetMs(undefined)).toBe(0);
+    expect(normalizeRecorderStartOffsetMs(null)).toBe(0);
+    expect(normalizeRecorderStartOffsetMs('bad')).toBe(0);
+    // Negative values mean "before anchor", which is meaningless under our
+    // convention (anchor = earliest recorder); coerce to 0 so export does not
+    // trim into negative source time.
+    expect(normalizeRecorderStartOffsetMs(-120)).toBe(0);
+    expect(normalizeRecorderStartOffsetMs(0)).toBe(0);
+    expect(normalizeRecorderStartOffsetMs(145.4)).toBe(145);
+    expect(normalizeRecorderStartOffsetMs(145.6)).toBe(146);
+    // Anything beyond the sanity cap is clamped so a stuck/broken recorder
+    // cannot produce a 30-minute trim shift and ruin an export silently.
+    expect(normalizeRecorderStartOffsetMs(MAX_RECORDER_START_OFFSET_MS + 5000)).toBe(
+      MAX_RECORDER_START_OFFSET_MS
+    );
+  });
+
+  test('normalizeProjectData defaults missing recorder start offsets to 0 and preserves valid values', () => {
+    const legacy = normalizeProjectData(
+      {
+        takes: [
+          {
+            id: 'take-1',
+            screenPath: 'screen.webm',
+            cameraPath: null,
+            duration: 3,
+            sections: []
+          }
+        ]
+      },
+      '/tmp/my-project'
+    );
+
+    expect(legacy.takes[0].screenStartOffsetMs).toBe(0);
+    expect(legacy.takes[0].cameraStartOffsetMs).toBe(0);
+    expect(legacy.takes[0].audioStartOffsetMs).toBe(0);
+
+    const withOffsets = normalizeProjectData(
+      {
+        takes: [
+          {
+            id: 'take-1',
+            screenPath: 'screen.webm',
+            cameraPath: 'camera.webm',
+            duration: 3,
+            sections: [],
+            screenStartOffsetMs: 0,
+            cameraStartOffsetMs: 123.4,
+            audioStartOffsetMs: 'bad'
+          }
+        ]
+      },
+      '/tmp/my-project'
+    );
+
+    expect(withOffsets.takes[0].screenStartOffsetMs).toBe(0);
+    expect(withOffsets.takes[0].cameraStartOffsetMs).toBe(123);
+    // Invalid values fall back to 0 instead of propagating NaN.
+    expect(withOffsets.takes[0].audioStartOffsetMs).toBe(0);
   });
 
   test('normalizeProjectData resolves take proxyPath to absolute and defaults to null', () => {
