@@ -125,6 +125,9 @@ const editorScrubber = document.getElementById('editorScrubber');
 const editorCameraTrack = document.getElementById('editorCameraTrack');
 const editorCameraMarkers = document.getElementById('editorCameraMarkers');
 const cameraTrackLabel = document.getElementById('cameraTrackLabel');
+const editorSystemAudioTrack = document.getElementById('editorSystemAudioTrack');
+const editorSystemAudioCanvas = document.getElementById('editorSystemAudioCanvas');
+const systemAudioTrackLabel = document.getElementById('systemAudioTrackLabel');
 const editorSectionTranscriptList = document.getElementById('editorSectionTranscriptList');
 let editorRenderTimeout = null;
 const editorWaveformCanvas = document.getElementById('editorWaveformCanvas');
@@ -465,7 +468,12 @@ let sectionZoomDragActive = false;
 let draggingBackground = false;
 let backgroundDragMoved = false;
 let backgroundDragState = null;
-let takeAudioBufferCache = new Map(); // takeId -> AudioBuffer
+let takeAudioBufferCache = new Map(); // takeId -> AudioBuffer (mic audio)
+// Separate cache for the system-audio track that lives on the screen webm
+// when a take was recorded with "Include system audio" enabled. Kept distinct
+// from the mic cache so the editor can draw both waveforms simultaneously.
+let takeSystemAudioBufferCache = new Map(); // takeId -> AudioBuffer
+let systemAudioWaveformPeaks = null;
 let takeVideoPool = new Map(); // takeId -> { screen: HTMLVideoElement, camera: HTMLVideoElement|null }
 const proxyStatus = new Map(); // takeId -> { status: 'pending'|'done'|'error', percent: number }
 let activeTakeId = null;
@@ -566,6 +574,8 @@ function cleanupVideoPool() {
   }
   takeVideoPool.clear();
   takeAudioBufferCache.clear();
+  takeSystemAudioBufferCache.clear();
+  systemAudioWaveformPeaks = null;
   activeTakeId = null;
   activePlaybackSection = null;
 }
@@ -916,6 +926,7 @@ function clearEditorState() {
   undoStack.length = 0;
   redoStack.length = 0;
   waveformPeaks = null;
+  systemAudioWaveformPeaks = null;
   renderWaveform();
   renderSectionMarkers();
   updateSectionZoomControls();
@@ -1387,12 +1398,13 @@ function renderSectionTranscriptList() {
   }
 }
 
-function computeWaveformPeaksFromCache(numBuckets = 800) {
+function computePeaksFromBufferCache(cache, numBuckets) {
   if (!editorState || !editorState.sections || editorState.sections.length === 0) return null;
   const totalDuration = editorState.duration;
   if (totalDuration <= 0) return null;
 
   const peaks = new Float32Array(numBuckets);
+  let anyData = false;
   for (let bucket = 0; bucket < numBuckets; bucket++) {
     const bucketStart = (bucket / numBuckets) * totalDuration;
     const bucketEnd = ((bucket + 1) / numBuckets) * totalDuration;
@@ -1405,8 +1417,9 @@ function computeWaveformPeaksFromCache(numBuckets = 800) {
       const sourceStart = section.sourceStart + (overlapStart - section.start);
       const sourceEnd = section.sourceStart + (overlapEnd - section.start);
 
-      const audioBuffer = takeAudioBufferCache.get(section.takeId);
+      const audioBuffer = cache.get(section.takeId);
       if (!audioBuffer) continue;
+      anyData = true;
       const channelData = audioBuffer.getChannelData(0);
       const sampleRate = audioBuffer.sampleRate;
       const startSample = Math.floor(sourceStart * sampleRate);
@@ -1419,13 +1432,31 @@ function computeWaveformPeaksFromCache(numBuckets = 800) {
     }
     peaks[bucket] = maxPeak;
   }
-  return peaks;
+  return anyData ? peaks : null;
+}
+
+function computeWaveformPeaksFromCache(numBuckets = 800) {
+  return computePeaksFromBufferCache(takeAudioBufferCache, numBuckets);
+}
+
+function computeSystemAudioPeaksFromCache(numBuckets = 800) {
+  return computePeaksFromBufferCache(takeSystemAudioBufferCache, numBuckets);
 }
 
 function refreshWaveform() {
   if (!editorState) return;
-  waveformPeaks = computeWaveformPeaksFromCache(Math.round(800 * timelineZoom));
+  const bucketCount = Math.round(800 * timelineZoom);
+  waveformPeaks = computeWaveformPeaksFromCache(bucketCount);
+  systemAudioWaveformPeaks = computeSystemAudioPeaksFromCache(bucketCount);
   renderWaveform();
+}
+
+async function decodeTakeAudioFile(filePath) {
+  const url = pathToFileUrl(filePath);
+  const response = await fetch(url);
+  const arrayBuffer = await response.arrayBuffer();
+  const offlineCtx = new OfflineAudioContext(1, 1, 44100);
+  return offlineCtx.decodeAudioData(arrayBuffer);
 }
 
 async function extractWaveformPeaks(numBuckets = 800) {
@@ -1434,23 +1465,40 @@ async function extractWaveformPeaks(numBuckets = 800) {
   try {
     // Decode and cache audio for each referenced take
     for (const section of editorState.sections) {
-      if (!section.takeId || takeAudioBufferCache.has(section.takeId)) continue;
+      if (!section.takeId) continue;
       const take = activeProject?.takes?.find((t) => t.id === section.takeId);
       if (!take) continue;
-      const { path: audioFilePath } = resolveTakeAudio(take);
-      if (!audioFilePath) continue;
-      try {
-        const url = pathToFileUrl(audioFilePath);
-        const response = await fetch(url);
-        const arrayBuffer = await response.arrayBuffer();
-        const offlineCtx = new OfflineAudioContext(1, 1, 44100);
-        const audioBuffer = await offlineCtx.decodeAudioData(arrayBuffer);
-        takeAudioBufferCache.set(section.takeId, audioBuffer);
-      } catch (err) {
-        console.warn(`Failed to decode audio for take ${section.takeId}:`, err);
+
+      if (!takeAudioBufferCache.has(section.takeId)) {
+        const { path: audioFilePath } = resolveTakeAudio(take);
+        if (audioFilePath) {
+          try {
+            const audioBuffer = await decodeTakeAudioFile(audioFilePath);
+            takeAudioBufferCache.set(section.takeId, audioBuffer);
+          } catch (err) {
+            console.warn(`Failed to decode audio for take ${section.takeId}:`, err);
+          }
+        }
+      }
+
+      // System audio lives on the screen file when hasSystemAudio is true and
+      // the mic is NOT on the screen file (otherwise mic+system share a
+      // single track that's already loaded in the mic cache). Decode it
+      // separately so we can draw both waveforms stacked.
+      const systemAudioOnScreen =
+        take.hasSystemAudio === true &&
+        (take.audioSource === 'camera' || take.audioSource === 'external' || take.audioSource === null);
+      if (systemAudioOnScreen && !takeSystemAudioBufferCache.has(section.takeId) && take.screenPath) {
+        try {
+          const audioBuffer = await decodeTakeAudioFile(take.screenPath);
+          takeSystemAudioBufferCache.set(section.takeId, audioBuffer);
+        } catch (err) {
+          console.warn(`Failed to decode system audio for take ${section.takeId}:`, err);
+        }
       }
     }
 
+    systemAudioWaveformPeaks = computeSystemAudioPeaksFromCache(numBuckets);
     return computeWaveformPeaksFromCache(numBuckets);
   } catch (err) {
     console.warn('Failed to extract waveform:', err);
@@ -1458,25 +1506,52 @@ async function extractWaveformPeaks(numBuckets = 800) {
   }
 }
 
-function renderWaveform() {
-  const canvas = editorWaveformCanvas;
+function drawWaveformBars(wCtx, peaks, totalWidth, baseline, halfHeight, color) {
+  if (!peaks || peaks.length === 0) return;
+  const barWidth = totalWidth / peaks.length;
+  wCtx.fillStyle = color;
+  for (let i = 0; i < peaks.length; i++) {
+    const barHeight = peaks[i] * halfHeight * 0.9;
+    const x = i * barWidth;
+    wCtx.fillRect(x, baseline - barHeight, Math.max(1, barWidth - 0.5), barHeight * 2);
+  }
+}
+
+function drawTrackWaveform(canvas, peaks, color) {
+  if (!canvas) return;
   const rect = canvas.parentElement.getBoundingClientRect();
   canvas.width = Math.round(rect.width * devicePixelRatio);
   canvas.height = Math.round(rect.height * devicePixelRatio);
   const wCtx = canvas.getContext('2d');
   wCtx.clearRect(0, 0, canvas.width, canvas.height);
-  if (!waveformPeaks || waveformPeaks.length === 0) return;
+  if (!peaks || peaks.length === 0) return;
+  drawWaveformBars(wCtx, peaks, canvas.width, canvas.height / 2, canvas.height / 2, color);
+}
 
-  const w = canvas.width;
-  const h = canvas.height;
-  const midY = h / 2;
-  const barWidth = w / waveformPeaks.length;
+function renderWaveform() {
+  // Mic / PiP audio gets the sky-blue color the camera track uses elsewhere
+  // so it visually reads as "the audio that belongs to the PiP video". System
+  // audio gets the neutral gray so it reads as "ambient screen sound".
+  drawTrackWaveform(editorWaveformCanvas, waveformPeaks, 'rgba(14, 165, 233, 0.7)');
 
-  wCtx.fillStyle = 'rgba(163, 163, 163, 0.5)';
-  for (let i = 0; i < waveformPeaks.length; i++) {
-    const barHeight = waveformPeaks[i] * midY * 0.9;
-    const x = i * barWidth;
-    wCtx.fillRect(x, midY - barHeight, Math.max(1, barWidth - 0.5), barHeight * 2);
+  const hasSystem = systemAudioWaveformPeaks && systemAudioWaveformPeaks.length > 0;
+  if (editorSystemAudioTrack) {
+    editorSystemAudioTrack.style.display = hasSystem ? '' : 'none';
+  }
+  if (systemAudioTrackLabel) {
+    systemAudioTrackLabel.style.display = hasSystem ? '' : 'none';
+  }
+  if (hasSystem) {
+    drawTrackWaveform(
+      editorSystemAudioCanvas,
+      systemAudioWaveformPeaks,
+      'rgba(163, 163, 163, 0.65)'
+    );
+  } else if (editorSystemAudioCanvas) {
+    // Ensure the system canvas is cleared so a later hide/show cycle does not
+    // flash the previous take's waveform.
+    const sysCtx = editorSystemAudioCanvas.getContext('2d');
+    sysCtx.clearRect(0, 0, editorSystemAudioCanvas.width, editorSystemAudioCanvas.height);
   }
 }
 
@@ -4687,7 +4762,9 @@ function applyTimelineZoom(newZoom, pivotClientX) {
   editorTimeline.style.minWidth = newZoom * 100 + '%';
 
   // Recompute waveform with more detail
-  waveformPeaks = computeWaveformPeaksFromCache(Math.round(800 * newZoom));
+  const zoomedBuckets = Math.round(800 * newZoom);
+  waveformPeaks = computeWaveformPeaksFromCache(zoomedBuckets);
+  systemAudioWaveformPeaks = computeSystemAudioPeaksFromCache(zoomedBuckets);
   renderWaveform();
 
   // Adjust scroll so the pivot point stays under the cursor

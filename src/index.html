@@ -384,9 +384,17 @@
               Cam
             </div>
             <div
+              id="micAudioTrackLabel"
               class="h-7 flex items-center px-2.5 text-[10px] font-medium text-neutral-500 uppercase tracking-wider border-t border-neutral-800/40"
             >
-              Audio
+              Mic
+            </div>
+            <div
+              id="systemAudioTrackLabel"
+              class="h-7 flex items-center px-2.5 text-[10px] font-medium text-neutral-500 uppercase tracking-wider border-t border-neutral-800/40"
+              style="display: none"
+            >
+              Sys
             </div>
           </div>
           <!-- Track content (scrollable) -->
@@ -407,14 +415,27 @@
               >
                 <div id="editorCameraMarkers" class="absolute inset-0 z-[1]"></div>
               </div>
-              <!-- Audio track -->
+              <!-- Mic (camera / PiP) audio track -->
               <div
+                id="editorMicAudioTrack"
                 class="relative h-7 bg-neutral-900/40 overflow-hidden border-t border-neutral-800/40"
               >
                 <canvas
                   id="editorWaveformCanvas"
                   class="absolute inset-0 w-full h-full pointer-events-none z-0"
-                  style="opacity: 0.5"
+                  style="opacity: 0.65"
+                ></canvas>
+              </div>
+              <!-- System audio (screen) track, only shown when the take carries system audio -->
+              <div
+                id="editorSystemAudioTrack"
+                class="relative h-7 bg-neutral-900/40 overflow-hidden border-t border-neutral-800/40"
+                style="display: none"
+              >
+                <canvas
+                  id="editorSystemAudioCanvas"
+                  class="absolute inset-0 w-full h-full pointer-events-none z-0"
+                  style="opacity: 0.65"
                 ></canvas>
               </div>
               <!-- Scrubber (spans all tracks) -->
