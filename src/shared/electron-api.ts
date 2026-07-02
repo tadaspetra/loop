@@ -73,6 +73,18 @@ export interface RecordingCancelResult {
   cancelled: boolean;
 }
 
+export interface TranscribedWord {
+  text: string;
+  start?: number;
+  end?: number;
+  type?: string;
+}
+
+export interface TranscribeRecordingResult {
+  words: TranscribedWord[];
+  languageCode?: string;
+}
+
 export interface OrphanRecordingCandidate {
   takeId: string;
   createdAt: string;
@@ -160,7 +172,10 @@ export interface ElectronApi {
   onExportPremiereProgress: (listener: (payload: RenderProgressUpdate) => void) => () => void;
   importFile: (sourcePath: string, projectFolder: string) => Promise<string>;
   pickImageFile: () => Promise<string | null>;
-  getScribeToken: () => Promise<string>;
+  transcribeRecording: (opts: {
+    sourcePath: string;
+    languageCode?: string;
+  }) => Promise<TranscribeRecordingResult>;
   generateProxy: (opts: GenerateProxyOpts) => Promise<string | null>;
   onProxyProgress: (listener: (payload: ProxyProgressUpdate) => void) => () => void;
   getPathForFile: (file: File) => string;

@@ -81,6 +81,12 @@ function registerWithHandlers(
   );
   const proxyService = createProxyServiceStub();
   const recordingService = createRecordingServiceStub();
+  const transcribeRecordingFile = vi.fn(
+    async (): Promise<{
+      words: Array<{ text: string; start?: number; end?: number; type?: string }>;
+      languageCode?: string;
+    }> => ({ words: [], languageCode: 'eng' })
+  );
   const exportPremiereProject = vi.fn(
     async (_opts: unknown, deps: { onProgress?: (u: unknown) => void; signal?: AbortSignal }) => {
       deps.onProgress?.({ phase: 'transcoding', percent: 0.5 });
@@ -105,7 +111,7 @@ function registerWithHandlers(
     renderComposite,
     exportPremiereProject,
     computeSections: vi.fn(),
-    getScribeToken: vi.fn(),
+    transcribeRecordingFile,
     proxyService,
     recordingService,
     setPendingDisplayMediaSource: vi.fn()
@@ -118,11 +124,59 @@ function registerWithHandlers(
     renderComposite,
     exportPremiereProject,
     proxyService,
-    recordingService
+    recordingService,
+    transcribeRecordingFile
   };
 }
 
 describe('main/ipc/register-handlers', () => {
+  test('transcription:transcribe delegates to the transcription service', async () => {
+    const { handlers, transcribeRecordingFile } = registerWithHandlers();
+    transcribeRecordingFile.mockResolvedValueOnce({
+      words: [{ text: 'hi', start: 0, end: 0.3, type: 'word' }],
+      languageCode: 'eng'
+    });
+
+    const result = await handlers.get('transcription:transcribe')!(
+      {},
+      { sourcePath: '/tmp/recording-take-audio.webm' }
+    );
+
+    expect(transcribeRecordingFile).toHaveBeenCalledWith({
+      sourcePath: '/tmp/recording-take-audio.webm'
+    });
+    expect(result).toEqual({
+      words: [{ text: 'hi', start: 0, end: 0.3, type: 'word' }],
+      languageCode: 'eng'
+    });
+  });
+
+  test('transcription:transcribe rejects payloads without a sourcePath', async () => {
+    const { handlers, transcribeRecordingFile } = registerWithHandlers();
+
+    await expect(handlers.get('transcription:transcribe')!({}, {})).rejects.toThrow(
+      /sourcePath/
+    );
+    await expect(handlers.get('transcription:transcribe')!({}, null)).rejects.toThrow(
+      /sourcePath/
+    );
+    expect(transcribeRecordingFile).not.toHaveBeenCalled();
+  });
+
+  test('transcription:transcribe forwards an explicit languageCode', async () => {
+    const { handlers, transcribeRecordingFile } = registerWithHandlers();
+
+    await handlers.get('transcription:transcribe')!(
+      {},
+      { sourcePath: '/tmp/a.webm', languageCode: 'spa' }
+    );
+
+    expect(transcribeRecordingFile).toHaveBeenCalledWith({
+      sourcePath: '/tmp/a.webm',
+      languageCode: 'spa'
+    });
+  });
+
   test('request-media-access returns granted on non-mac platforms', async () => {
     const { handlers } = registerWithHandlers();
 

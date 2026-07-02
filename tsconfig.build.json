@@ -9,7 +9,6 @@
     "rootDir": "src"
   },
   "include": [
-    "src/audio-processor.ts",
     "src/**/*.d.ts",
     "src/main.ts",
     "src/preload.ts",

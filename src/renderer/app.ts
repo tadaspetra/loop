@@ -1,13 +1,9 @@
 // @ts-nocheck
+import { normalizeTranscriptText } from './features/transcript/transcript-utils';
 import {
-  normalizeTranscriptText,
-  stripNonSpeechAnnotations,
-  extractSpokenWordTokens
-} from './features/transcript/transcript-utils';
-import {
-  getScribeStatusFromCloseEvent,
-  getScribeStatusFromMessage
-} from './features/transcript/scribe-status';
+  buildSegmentsFromWords,
+  getTranscriptionTimeoutMs
+} from './features/transcript/batch-transcript';
 import {
   roundMs,
   buildRemappedSectionsFromSegments,
@@ -195,13 +191,7 @@ let saveDebounceTimer = null;
 let persistQueue = Promise.resolve();
 let mediaInitialized = false;
 let mediaIdleTimer = null;
-let scribeWs = null;
-let scribeWorkletNode = null;
 let speechSegments = [];
-let audioChunkBuffer = [];
-let audioSendInterval = null;
-let scribeLastFailureReason = null;
-let scribeManualClose = false;
 let micSourceNode = null;
 const MEDIA_IDLE_TIMEOUT_MS = 30000;
 
@@ -239,10 +229,6 @@ function resetMediaRefsAfterCleanup() {
   meterRAF = null;
   drawRAF = null;
   lastCompositeDrawAt = 0;
-  scribeWs = null;
-  scribeWorkletNode = null;
-  audioChunkBuffer = [];
-  audioSendInterval = null;
   micSourceNode = null;
   mediaInitialized = false;
   screenVideo.srcObject = null;
@@ -257,11 +243,8 @@ function cleanupRendererMediaResources() {
     audioStream,
     recorders,
     screenRecInterval,
-    audioSendInterval,
     timerInterval,
     audioContext,
-    scribeWorkletNode,
-    scribeWs,
     drawRAF,
     meterRAF,
     cancelEditorDrawLoop,
@@ -416,9 +399,6 @@ if (typeof window.electronAPI.onProxyProgress === 'function') {
     }
   });
 }
-let scribeAudioOffset = 0; // seconds between recording start and first audio sent to Scribe
-let workletRegistered = null; // tracks which AudioContext has the worklet registered
-
 const CANVAS_W = 1920;
 const CANVAS_H = 1080;
 const PIP_FRACTION = 0.22;
@@ -2634,7 +2614,6 @@ function stopAudioMeter() {
   meterRAF = null;
   micSourceNode = null;
   if (audioContext) {
-    if (workletRegistered === audioContext) workletRegistered = null;
     audioContext.close();
     audioContext = null;
   }
@@ -2920,18 +2899,6 @@ function computeRecorderStartOffsetsMs(recorderList) {
   };
 }
 
-function mergeInt16Arrays(arrays) {
-  let totalLength = 0;
-  for (const arr of arrays) totalLength += arr.length;
-  const merged = new Int16Array(totalLength);
-  let offset = 0;
-  for (const arr of arrays) {
-    merged.set(arr, offset);
-    offset += arr.length;
-  }
-  return merged;
-}
-
 function setTranscriptStatus(text, tone = 'neutral') {
   if (!transcriptStatus) return;
 
@@ -2947,18 +2914,6 @@ function setTranscriptStatus(text, tone = 'neutral') {
   transcriptStatus.className = `px-1 pb-1 text-[11px] ${resolvedTone}`;
   transcriptStatus.classList.toggle('hidden', !hasText);
   transcriptStatus.textContent = hasText ? text : '';
-}
-
-function applyScribeStatus(status) {
-  if (!status) return;
-
-  if (status.failureReason) {
-    scribeLastFailureReason = status.failureReason;
-  } else if (status.tone === 'success') {
-    scribeLastFailureReason = null;
-  }
-
-  setTranscriptStatus(status.text, status.tone);
 }
 
 /**
@@ -2994,6 +2949,14 @@ function handleRecorderFailure(kind, suffix) {
 
 async function startRecording() {
   if (!activeProjectPath) return;
+  // The previous take's stop flow now includes batch transcription, so it can
+  // still be running when Record is pressed again. Overlapping take flows
+  // would race on the shared recovery checkpoint (.pending-recording.json)
+  // and the Stop guard, so refuse to start until the previous take settles.
+  if (stopRecordingInFlight) {
+    showRecordingNotice('Still processing the previous take — try again in a moment.', 'warning');
+    return;
+  }
   recorders = [];
   speechSegments = [];
   // Fresh take: forget any activity windows captured before Record was
@@ -3001,13 +2964,6 @@ async function startRecording() {
   systemAudioActivitySegments = [];
   systemAudioActivityOpen = null;
   systemAudioLastActiveSec = 0;
-  audioChunkBuffer = [];
-  scribeLastFailureReason = null;
-  scribeManualClose = false;
-  // Reset scribe audio timestamp offset and worklet registration per take so
-  // timestamps are never carried over from a previous recording session.
-  scribeAudioOffset = 0;
-  workletRegistered = null;
 
   // The takeId is generated once for this recording session and shared by
   // both recorders, so the on-disk temp files can be matched back to the
@@ -3145,181 +3101,17 @@ async function startRecording() {
   startTime = Date.now();
   timerInterval = setInterval(updateTimer, 200);
 
-  // Show transcript panel and clear previous content
+  // Show transcript panel with a passive note: transcription now runs as a
+  // batch pass over the finalized recording after Stop, so nothing streams
+  // while recording and a long pause can never kill the transcript.
   transcriptPanel.classList.remove('hidden');
   transcriptContent.innerHTML = '';
   segmentBadge.textContent = '0 segments';
-  setTranscriptStatus('Transcription connecting...', 'neutral');
-
-  // Set up Scribe via direct WebSocket
-  if (audioContext && audioStream && micSourceNode) {
-    try {
-      const token = await window.electronAPI.getScribeToken();
-      const sampleRate = audioContext.sampleRate;
-
-      // Map sample rate to ElevenLabs audio_format parameter
-      const formatMap = {
-        8000: 'pcm_8000',
-        16000: 'pcm_16000',
-        22050: 'pcm_22050',
-        24000: 'pcm_24000',
-        44100: 'pcm_44100',
-        48000: 'pcm_48000'
-      };
-      const audioFormat = formatMap[sampleRate] || 'pcm_16000';
-
-      const wsUrl =
-        `wss://api.elevenlabs.io/v1/speech-to-text/realtime` +
-        `?model_id=scribe_v2_realtime` +
-        `&token=${token}` +
-        `&audio_format=${audioFormat}` +
-        `&commit_strategy=vad` +
-        `&include_timestamps=true` +
-        `&vad_silence_threshold_secs=1.5` +
-        `&vad_threshold=0.8` +
-        `&min_speech_duration_ms=200` +
-        `&language_code=eng`;
-
-      scribeWs = new WebSocket(wsUrl);
-
-      scribeWs.onopen = () => {
-        setTranscriptStatus('Transcription connecting...', 'neutral');
-      };
-
-      scribeWs.onmessage = (event) => {
-        let msg;
-        try {
-          msg = JSON.parse(event.data);
-        } catch (error) {
-          console.warn('Failed to parse Scribe message:', error);
-          return;
-        }
-
-        applyScribeStatus(getScribeStatusFromMessage(msg));
-
-        if (msg.message_type === 'partial_transcript') {
-          updatePartialTranscript(msg.text || '');
-        } else if (msg.message_type === 'committed_transcript_with_timestamps') {
-          commitTranscript(msg);
-        }
-      };
-
-      scribeWs.onerror = (err) => {
-        console.error('Scribe WebSocket error:', err);
-        if (!scribeManualClose) {
-          setTranscriptStatus('Transcription connection error', 'error');
-        }
-      };
-
-      scribeWs.onclose = (event) => {
-        console.warn('Scribe WebSocket closed:', {
-          code: event.code,
-          reason: event.reason,
-          wasClean: event.wasClean,
-          lastFailureReason: scribeLastFailureReason,
-          manualClose: scribeManualClose
-        });
-        if (!scribeManualClose) {
-          applyScribeStatus(getScribeStatusFromCloseEvent(event, scribeLastFailureReason));
-        }
-      };
-
-      // Set up AudioWorklet for PCM capture (only register module once per AudioContext)
-      if (workletRegistered !== audioContext) {
-        await audioContext.audioWorklet.addModule(
-          new URL('./audio-processor.js', window.location.href).toString()
-        );
-        workletRegistered = audioContext;
-      }
-      scribeWorkletNode = new AudioWorkletNode(audioContext, 'audio-capture');
-      micSourceNode.connect(scribeWorkletNode);
-
-      scribeWorkletNode.port.onmessage = (e) => {
-        if (e.data.pcm) {
-          audioChunkBuffer.push(new Int16Array(e.data.pcm));
-        }
-      };
-
-      // Record the offset: time between recording start and first audio send
-      scribeAudioOffset = (Date.now() - startTime) / 1000;
-
-      // Send accumulated audio every ~100ms
-      audioSendInterval = setInterval(() => {
-        if (audioChunkBuffer.length === 0 || !scribeWs || scribeWs.readyState !== WebSocket.OPEN)
-          return;
-        const merged = mergeInt16Arrays(audioChunkBuffer);
-        audioChunkBuffer = [];
-        const bytes = new Uint8Array(merged.buffer);
-        const CHUNK = 8192;
-        let binary = '';
-        for (let i = 0; i < bytes.length; i += CHUNK) {
-          binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
-        }
-        const base64 = btoa(binary);
-        scribeWs.send(
-          JSON.stringify({
-            message_type: 'input_audio_chunk',
-            audio_base_64: base64,
-            sample_rate: sampleRate,
-            commit: false
-          })
-        );
-      }, 100);
-    } catch (err) {
-      console.warn('Scribe setup failed:', err);
-      const reason = err instanceof Error ? err.message : 'setup failed';
-      setTranscriptStatus(`Transcription unavailable: ${reason}`, 'error');
-    }
+  if (audioStream) {
+    setTranscriptStatus('Transcript will be generated when recording stops', 'neutral');
   } else {
-    setTranscriptStatus('Transcription unavailable: microphone not ready', 'warning');
+    setTranscriptStatus('Transcription unavailable: no microphone selected', 'warning');
   }
-}
-
-function updatePartialTranscript(text) {
-  let partial = document.getElementById('partialText');
-  if (!partial) {
-    partial = document.createElement('div');
-    partial.id = 'partialText';
-    partial.className = 'text-neutral-600 italic';
-    transcriptContent.prepend(partial);
-  }
-  partial.textContent = stripNonSpeechAnnotations(text);
-  transcriptContent.scrollTop = 0;
-}
-
-function commitTranscript(data) {
-  // Remove partial display
-  const partial = document.getElementById('partialText');
-  if (partial) partial.remove();
-
-  const spokenWords = extractSpokenWordTokens(data.words);
-  if (spokenWords.length === 0) return;
-
-  // Build clean text from spoken words only, excluding non-speech annotations.
-  const cleanText = stripNonSpeechAnnotations(spokenWords.map((w) => w.text).join(' '));
-  if (!cleanText) return;
-
-  // Shift timestamps by the offset between recording start and first audio sent
-  speechSegments.push({
-    start: spokenWords[0].start + scribeAudioOffset,
-    end: spokenWords[spokenWords.length - 1].end + scribeAudioOffset,
-    text: cleanText
-  });
-
-  // Add committed text
-  const div = document.createElement('div');
-  div.className =
-    'mb-2 text-neutral-300 cursor-pointer rounded-md px-1.5 py-0.5 -mx-1 hover:bg-neutral-800/60 transition-colors';
-  div.dataset.segmentIndex = speechSegments.length - 1;
-  div.textContent = cleanText;
-  div.addEventListener('click', () => {
-    const idx = parseInt(div.dataset.segmentIndex, 10);
-    selectSegment(selectedSegmentIndex === idx ? -1 : idx);
-  });
-  transcriptContent.prepend(div);
-  transcriptContent.scrollTop = 0;
-
-  updateSegmentBadge();
 }
 
 /**
@@ -4015,37 +3807,6 @@ async function stopRecordingImpl() {
   for (const cleanup of trackEndedCleanups) cleanup();
   trackEndedCleanups = [];
 
-  // Stop audio send interval
-  if (audioSendInterval) {
-    clearInterval(audioSendInterval);
-    audioSendInterval = null;
-  }
-
-  // Disconnect worklet (must sever micSourceNode→worklet input, not just worklet outputs)
-  if (scribeWorkletNode) {
-    scribeWorkletNode.port.onmessage = null;
-    if (micSourceNode) micSourceNode.disconnect(scribeWorkletNode);
-    scribeWorkletNode.disconnect();
-    scribeWorkletNode = null;
-  }
-
-  // Send final commit and close WebSocket.
-  // Detach onmessage first so late-arriving transcripts cannot mutate
-  // speechSegments after we snapshot them for section computation.
-  const hadScribe = !!scribeWs;
-  scribeManualClose = true;
-  if (scribeWs) {
-    scribeWs.onmessage = null;
-    if (scribeWs.readyState === WebSocket.OPEN) {
-      scribeWs.send(JSON.stringify({ message_type: 'commit' }));
-      await new Promise((r) => setTimeout(r, 1000));
-      scribeWs.close();
-    }
-  }
-  scribeWs = null;
-  scribeLastFailureReason = null;
-  audioChunkBuffer = [];
-
   if (screenRecInterval) {
     clearInterval(screenRecInterval);
     screenRecInterval = null;
@@ -4104,9 +3865,9 @@ async function stopRecordingImpl() {
   if (keepSilencesToggle) keepSilencesToggle.disabled = false;
   timerEl.textContent = '00:00';
 
-  // Hide transcript panel
-  transcriptPanel.classList.add('hidden');
-  setTranscriptStatus('', 'neutral');
+  // The transcript panel stays visible for now: the batch transcription pass
+  // below reports its progress on the transcript status line. It is hidden
+  // once the take enters the editor (or on the failure branches).
 
   // Enter editor if we have at least a screen recording
   if (results.screen?.path) {
@@ -4138,17 +3899,19 @@ async function stopRecordingImpl() {
     pendingRecordingAudioSource = null;
     const audioPath = audioSource === 'external' ? audioOnlyPath : null;
 
-    // Compute sections from speech segments (instant, no FFmpeg). If any
-    // system audio activity was detected during the take, flush any still-
-    // open window and merge those "keep" regions alongside speech so the
-    // section builder never trims across audible system sound (e.g. music,
-    // screen narration, tutorial demos) just because the mic was quiet.
+    // Flush any still-open system-audio activity window so those "keep"
+    // regions can be merged alongside speech and the section builder never
+    // trims across audible system sound (music, screen narration, demos)
+    // just because the mic was quiet.
     closeSystemAudioActivityWindow();
     const autoCutSilences = keepSilencesToggle?.checked !== true;
-    const activeSegments = [
-      ...speechSegments.filter((s) => !s.deleted),
-      ...systemAudioActivitySegments
-    ];
+    let transcriptNotice = false;
+
+    // Durable checkpoint BEFORE any transcription work: the finalized files
+    // plus this recovery take are everything needed to restore the full
+    // recording if the app dies (or transcription fails) from here on. The
+    // sections at this point deliberately keep the whole recording.
+    let activeSegments = [...systemAudioActivitySegments];
     let sectionsForTimeline = buildRecordingSectionsForTimeline({
       recordedDuration,
       activeSegments,
@@ -4166,6 +3929,86 @@ async function stopRecordingImpl() {
       sections: sectionsForTimeline,
       trimSegments: activeSegments
     });
+
+    // Batch-transcribe the finalized recording. The mic audio lives either in
+    // the dedicated audio-only file or muxed into the camera file; word
+    // timestamps come back relative to that file, so the per-file recorder
+    // start offset maps them into recording time exactly.
+    let transcriptionSourcePath = null;
+    let transcriptionOffsetSec = 0;
+    if (audioSource === 'external' && audioOnlyPath) {
+      transcriptionSourcePath = audioOnlyPath;
+      transcriptionOffsetSec = recorderStartOffsetsMs.audio / 1000;
+    } else if (audioSource === 'camera' && cameraPath) {
+      transcriptionSourcePath = cameraPath;
+      transcriptionOffsetSec = recorderStartOffsetsMs.camera / 1000;
+    }
+
+    if (transcriptionSourcePath) {
+      setTranscriptStatus('Transcribing recording...', 'neutral');
+      try {
+        const timeoutMs = getTranscriptionTimeoutMs(recordedDuration);
+        const result = await Promise.race([
+          window.electronAPI.transcribeRecording({ sourcePath: transcriptionSourcePath }),
+          new Promise((_, reject) => {
+            setTimeout(
+              () =>
+                reject(
+                  new Error(`transcription timed out after ${Math.round(timeoutMs / 1000)}s`)
+                ),
+              timeoutMs
+            );
+          })
+        ]);
+        if (!matchesActiveProjectSession(projectSession)) return;
+        speechSegments = buildSegmentsFromWords(result?.words || [], {
+          offsetSec: transcriptionOffsetSec
+        });
+        updateSegmentBadge();
+        if (speechSegments.length > 0) {
+          setTranscriptStatus('', 'neutral');
+        } else {
+          console.warn('No speech detected, using full recording');
+          setTranscriptStatus('No speech detected — keeping the full recording', 'warning');
+          transcriptNotice = true;
+        }
+      } catch (err) {
+        if (!matchesActiveProjectSession(projectSession)) return;
+        // The take is already durable (files + recovery checkpoint), so a
+        // transcription failure only costs the auto-cut: keep the full
+        // recording and surface the reason instead of failing silently.
+        console.error('Batch transcription failed, keeping full recording:', err);
+        const reason = err instanceof Error ? err.message : String(err);
+        setTranscriptStatus(`Transcription failed: ${reason} — full recording kept`, 'warning');
+        transcriptNotice = true;
+      }
+    }
+
+    if (speechSegments.length > 0) {
+      activeSegments = [
+        ...speechSegments.filter((s) => !s.deleted),
+        ...systemAudioActivitySegments
+      ];
+      sectionsForTimeline = buildRecordingSectionsForTimeline({
+        recordedDuration,
+        activeSegments,
+        autoCutSilences
+      });
+      // Refresh the recovery checkpoint with the transcript-aware sections so
+      // a crash between here and project persistence recovers the same cut.
+      await saveRecoveryTake({
+        id: takeId,
+        createdAt: takeCreatedAt,
+        screenPath,
+        cameraPath,
+        audioPath,
+        audioSource,
+        hasSystemAudio,
+        recordedDuration,
+        sections: sectionsForTimeline,
+        trimSegments: activeSegments
+      });
+    }
     if (autoCutSilences && activeSegments.length > 0) {
       try {
         const computed = await window.electronAPI.computeSections({
@@ -4186,8 +4029,6 @@ async function stopRecordingImpl() {
           autoCutSilences
         });
       }
-    } else if (autoCutSilences && hadScribe) {
-      console.warn('No speech detected, using full recording');
     }
 
     // Set takeId on all sections
@@ -4212,6 +4053,13 @@ async function stopRecordingImpl() {
         audioStartOffsetMs: recorderStartOffsetsMs.audio,
         sections: sectionsForTimeline
       });
+    }
+
+    // Transcription is settled; drop the panel unless it carries a warning
+    // the user should still see next time the recording view is shown.
+    if (!transcriptNotice) {
+      transcriptPanel.classList.add('hidden');
+      setTranscriptStatus('', 'neutral');
     }
 
     let appendResult;
@@ -4287,6 +4135,8 @@ async function stopRecordingImpl() {
       }
     }
   } else if (finalizeErrors.length > 0) {
+    transcriptPanel.classList.add('hidden');
+    setTranscriptStatus('', 'neutral');
     console.error('Recording finalize failed:', finalizeErrors);
     // Best-effort: drop any remaining temp files so the project folder stays
     // clean. The user will have already seen this error surfaced in the
@@ -4302,6 +4152,8 @@ async function stopRecordingImpl() {
     pendingRecordingAudioSource = null;
     showProjectHomeMessage(finalizeErrors.join(' '));
   } else {
+    transcriptPanel.classList.add('hidden');
+    setTranscriptStatus('', 'neutral');
     pendingRecordingTakeId = null;
     pendingRecordingAudioSource = null;
   }
@@ -5757,33 +5609,6 @@ editorExportPremiereBtn.addEventListener('click', async () => {
   await exportPremiere();
 });
 
-// ===== Segment selection =====
-
-transcriptContent.addEventListener('click', (e) => {
-  if (!e.target.closest('[data-segment-index]')) selectSegment(-1);
-});
-
-let selectedSegmentIndex = -1;
-const recordingUndoStack = [];
-
-function selectSegment(index) {
-  // Deselect previous
-  if (selectedSegmentIndex >= 0) {
-    const prev = transcriptContent.querySelector(`[data-segment-index="${selectedSegmentIndex}"]`);
-    if (prev) prev.style.outline = '';
-  }
-  selectedSegmentIndex = index;
-  if (index >= 0) {
-    const el = transcriptContent.querySelector(`[data-segment-index="${index}"]`);
-    if (el) el.style.outline = '2px solid rgba(255, 255, 255, 0.3)';
-  }
-}
-
-function applySegmentDeletedStyle(el, deleted) {
-  el.style.textDecoration = deleted ? 'line-through' : '';
-  el.style.opacity = deleted ? '0.4' : '';
-}
-
 // ===== Keyboard shortcuts =====
 
 function updateSegmentBadge() {
@@ -5798,52 +5623,6 @@ function updateSegmentBadge() {
 }
 
 document.addEventListener('keydown', (e) => {
-  // Backspace during recording: toggle delete on selected segment, or remove last non-deleted
-  if (recording && e.code === 'Backspace') {
-    e.preventDefault();
-    if (selectedSegmentIndex >= 0 && selectedSegmentIndex < speechSegments.length) {
-      // Toggle delete on selected segment
-      const seg = speechSegments[selectedSegmentIndex];
-      recordingUndoStack.push({ segmentIndex: selectedSegmentIndex, wasDeleted: seg.deleted });
-      seg.deleted = !seg.deleted;
-      const el = transcriptContent.querySelector(`[data-segment-index="${selectedSegmentIndex}"]`);
-      if (el) applySegmentDeletedStyle(el, seg.deleted);
-      updateSegmentBadge();
-    } else {
-      // No selection: delete last non-deleted segment
-      for (let i = speechSegments.length - 1; i >= 0; i--) {
-        if (!speechSegments[i].deleted) {
-          recordingUndoStack.push({ segmentIndex: i, wasDeleted: false });
-          speechSegments[i].deleted = true;
-          const el = transcriptContent.querySelector(`[data-segment-index="${i}"]`);
-          if (el) applySegmentDeletedStyle(el, true);
-          updateSegmentBadge();
-          break;
-        }
-      }
-    }
-    return;
-  }
-
-  // Ctrl+Z during recording: undo last delete/undelete action
-  if (recording && e.code === 'KeyZ' && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
-    e.preventDefault();
-    const action = recordingUndoStack.pop();
-    if (action) {
-      speechSegments[action.segmentIndex].deleted = action.wasDeleted;
-      const el = transcriptContent.querySelector(`[data-segment-index="${action.segmentIndex}"]`);
-      if (el) applySegmentDeletedStyle(el, action.wasDeleted);
-      updateSegmentBadge();
-    }
-    return;
-  }
-
-  // Escape during recording: deselect segment
-  if (recording && e.code === 'Escape') {
-    selectSegment(-1);
-    return;
-  }
-
   if (!editorState || editorState.rendering || activeWorkspaceView !== 'timeline') return;
   // Don't capture if focus is in an input
   if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') return;

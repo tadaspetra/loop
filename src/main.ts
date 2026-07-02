@@ -23,7 +23,7 @@ import { renderComposite } from './main/services/render-service';
 import { exportPremiereProject } from './main/services/premiere-export-service';
 import { computeSections } from './main/services/sections-service';
 import { generatePreview } from './main/services/preview-render-service';
-import { getScribeToken } from './main/services/scribe-service';
+import { transcribeRecordingFile } from './main/services/transcription-service';
 import * as proxyService from './main/services/proxy-service';
 import * as recordingService from './main/services/recording-service';
 
@@ -49,7 +49,7 @@ registerIpcHandlers({
   exportPremiereProject,
   computeSections,
   generatePreview,
-  getScribeToken,
+  transcribeRecordingFile,
   proxyService,
   recordingService,
   setPendingDisplayMediaSource

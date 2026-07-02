@@ -19,6 +19,7 @@ import type { renderComposite } from '../services/render-service';
 import type { exportPremiereProject } from '../services/premiere-export-service';
 import type { computeSections } from '../services/sections-service';
 import type { generatePreview } from '../services/preview-render-service';
+import type { transcribeRecordingFile } from '../services/transcription-service';
 import type * as proxyServiceModule from '../services/proxy-service';
 import type * as recordingServiceModule from '../services/recording-service';
 
@@ -28,6 +29,9 @@ type RenderComposite = typeof renderComposite;
 type ExportPremiereProject = typeof exportPremiereProject;
 type ComputeSections = typeof computeSections;
 type GeneratePreview = typeof generatePreview;
+type TranscribeRecordingFile = (
+  opts: Parameters<typeof transcribeRecordingFile>[0]
+) => ReturnType<typeof transcribeRecordingFile>;
 type ProxyService = typeof proxyServiceModule;
 type RecordingService = typeof recordingServiceModule;
 
@@ -51,7 +55,7 @@ export function registerIpcHandlers({
   exportPremiereProject,
   computeSections,
   generatePreview,
-  getScribeToken,
+  transcribeRecordingFile,
   proxyService,
   recordingService,
   setPendingDisplayMediaSource
@@ -69,7 +73,7 @@ export function registerIpcHandlers({
   exportPremiereProject: ExportPremiereProject;
   computeSections: ComputeSections;
   generatePreview: GeneratePreview;
-  getScribeToken: () => Promise<string>;
+  transcribeRecordingFile: TranscribeRecordingFile;
   proxyService: ProxyService;
   recordingService: RecordingService;
   setPendingDisplayMediaSource: (sourceId: string | null) => void;
@@ -331,11 +335,20 @@ export function registerIpcHandlers({
     return filePaths[0];
   });
 
-  ipcMain.handle('get-scribe-token', async () => {
+  ipcMain.handle('transcription:transcribe', async (_event, opts: unknown) => {
+    const payload = (opts || {}) as { sourcePath?: unknown; languageCode?: unknown };
+    if (typeof payload.sourcePath !== 'string' || !payload.sourcePath.trim()) {
+      throw new Error('transcription:transcribe requires a sourcePath');
+    }
     try {
-      return await getScribeToken();
+      return await transcribeRecordingFile({
+        sourcePath: payload.sourcePath,
+        ...(typeof payload.languageCode === 'string' && payload.languageCode
+          ? { languageCode: payload.languageCode }
+          : {})
+      });
     } catch (error) {
-      console.error('Failed to get Scribe token:', error);
+      console.error('Batch transcription failed:', error);
       throw error;
     }
   });

@@ -78,23 +78,16 @@ Acceptance criteria:
 
 ## C. Transcript And Trim
 
-### C1. Realtime transcript
+### C1. Batch transcript
 
-- During recording, app sends PCM chunks to Scribe realtime websocket and displays partial + committed text.
-
-Acceptance criteria:
-
-- Committed transcript segments store `start/end/text`.
-- Non-speech annotations (e.g. bracketed cues) are stripped from user-visible transcript and segment content.
-
-### C2. Segment editing
-
-- User can select transcript segments and toggle deletion with keyboard shortcuts.
+- After recording stops and the take's files are finalized and checkpointed for recovery, the app batch-transcribes the finalized mic audio (audio-only file, or audio extracted from the camera file via ffmpeg stream copy) with ElevenLabs Scribe in the main process, then groups word timestamps into speech segments.
 
 Acceptance criteria:
 
-- Deleted segments are excluded from trim input.
-- Badge reflects active vs removed count.
+- No transcription network call happens before the finalized files and the recovery take are on disk; a transcription failure or timeout never loses or blocks the recording (falls back to full-duration sections with a visible warning).
+- Speech segments store `start/end/text`, with word timestamps mapped into recording time using the per-file recorder start offsets.
+- Non-speech annotations (e.g. bracketed cues) are stripped from segment content.
+- Recordings without mic audio skip transcription entirely (no network call).
 
 ### C3. Section computation
 

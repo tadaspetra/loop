@@ -19,22 +19,12 @@ function makeFakeAudioContext() {
   return { close: vi.fn() };
 }
 
-function makeFakeWorkletNode() {
-  return { disconnect: vi.fn() };
-}
-
-function makeFakeWebSocket() {
-  return { close: vi.fn() };
-}
-
 type FakeMediaRefs = MediaRefs & {
   screenStream: ReturnType<typeof makeFakeStream> | null;
   cameraStream: ReturnType<typeof makeFakeStream> | null;
   audioStream: ReturnType<typeof makeFakeStream> | null;
   recorders: ReturnType<typeof makeFakeRecorder>[];
   audioContext: ReturnType<typeof makeFakeAudioContext> | null;
-  scribeWorkletNode: ReturnType<typeof makeFakeWorkletNode> | null;
-  scribeWs: ReturnType<typeof makeFakeWebSocket> | null;
   cancelEditorDrawLoop: ReturnType<typeof vi.fn> | null;
   stopAudioMeter: ReturnType<typeof vi.fn> | null;
 };
@@ -47,11 +37,8 @@ function makeFullRefs(): FakeMediaRefs {
     audioStream: makeFakeStream(1),
     recorders: [makeFakeRecorder('recording'), makeFakeRecorder('recording')],
     screenRecInterval: setInterval(() => {}, 100000),
-    audioSendInterval: setInterval(() => {}, 100000),
     timerInterval: setInterval(() => {}, 100000),
     audioContext: makeFakeAudioContext(),
-    scribeWorkletNode: makeFakeWorkletNode(),
-    scribeWs: makeFakeWebSocket(),
     drawRAF: 1,
     meterRAF: 2,
     cancelEditorDrawLoop: vi.fn(),
@@ -109,11 +96,8 @@ describe('cleanupAllMedia', () => {
       audioStream: null,
       recorders: [] as ReturnType<typeof makeFakeRecorder>[],
       screenRecInterval: null,
-      audioSendInterval: null,
       timerInterval: null,
       audioContext: null,
-      scribeWorkletNode: null,
-      scribeWs: null,
       drawRAF: null,
       meterRAF: null,
       cancelEditorDrawLoop: null,
@@ -173,28 +157,7 @@ describe('cleanupAllMedia', () => {
     cleanupAllMedia(refs);
 
     expect(refs.screenRecInterval).toBeNull();
-    expect(refs.audioSendInterval).toBeNull();
     expect(refs.timerInterval).toBeNull();
-  });
-
-  test('disconnects scribe worklet node', () => {
-    const refs = makeFullRefs();
-    const node = refs.scribeWorkletNode!;
-
-    cleanupAllMedia(refs);
-
-    expect(node.disconnect).toHaveBeenCalledOnce();
-    expect(refs.scribeWorkletNode).toBeNull();
-  });
-
-  test('closes scribe websocket', () => {
-    const refs = makeFullRefs();
-    const socket = refs.scribeWs!;
-
-    cleanupAllMedia(refs);
-
-    expect(socket.close).toHaveBeenCalledOnce();
-    expect(refs.scribeWs).toBeNull();
   });
 
   test('calls stopAudioMeter and closes the audio context', () => {

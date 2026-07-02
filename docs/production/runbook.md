@@ -3,7 +3,7 @@
 ## Environment
 
 - Copy `.env.example` to `.env`.
-- Set `ELEVENLABS_API_KEY` for realtime transcription token generation.
+- Set `ELEVENLABS_API_KEY` for post-recording batch transcription (used only in the main process; never exposed to the renderer).
 
 ## Local Verification
 
