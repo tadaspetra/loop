@@ -6,6 +6,7 @@ const { mockContextBridge, mockIpcRenderer, mockWebUtils } = vi.hoisted(() => ({
   mockContextBridge: { exposeInMainWorld: vi.fn() },
   mockIpcRenderer: {
     invoke: vi.fn(),
+    send: vi.fn(),
     on: vi.fn(),
     removeListener: vi.fn()
   },
@@ -149,5 +150,43 @@ describe('preload', () => {
       folder: '/proj',
       takeId: 'take-1'
     });
+  });
+
+  test('recordingSetActive sends a coerced boolean over the fire-and-forget channel', () => {
+    electronAPI.recordingSetActive(true);
+    expect(mockIpcRenderer.send).toHaveBeenCalledWith('recording:set-active', true);
+
+    electronAPI.recordingSetActive(0 as unknown as boolean);
+    expect(mockIpcRenderer.send).toHaveBeenLastCalledWith('recording:set-active', false);
+  });
+
+  test('confirmClose invokes the matching IPC channel', () => {
+    electronAPI.confirmClose();
+    expect(mockIpcRenderer.invoke).toHaveBeenCalledWith('app:confirm-close');
+  });
+
+  test('onCloseRequested subscribes with unsubscribe support', () => {
+    const listener = vi.fn();
+    const unsubscribe = electronAPI.onCloseRequested(listener);
+
+    expect(mockIpcRenderer.on).toHaveBeenCalledWith('app:close-requested', expect.any(Function));
+
+    const handler = mockIpcRenderer.on.mock.calls.find(
+      (call) => call[0] === 'app:close-requested'
+    )?.[1] as (_event: unknown) => void;
+    handler({});
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    unsubscribe();
+    expect(mockIpcRenderer.removeListener).toHaveBeenCalledWith('app:close-requested', handler);
+  });
+
+  test('onCloseRequested ignores non-function listeners', () => {
+    const unsubscribe = electronAPI.onCloseRequested(undefined as unknown as () => void);
+    expect(typeof unsubscribe).toBe('function');
+    expect(mockIpcRenderer.on).not.toHaveBeenCalledWith(
+      'app:close-requested',
+      expect.any(Function)
+    );
   });
 });

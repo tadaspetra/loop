@@ -62,13 +62,16 @@ When adding new code:
 
 ## Test-First Requirements
 
-Before implementing behavior changes:
+Always define expected behavior and acceptance criteria before implementing. Treat "what behavior changed?" as a required design question before coding.
 
-- Add unit tests for pure logic.
-- Add integration tests for filesystem, IPC, or service coordination.
-- Add or extend e2e coverage for critical user flows if the change affects runtime behavior.
-- For every user-visible behavior change, add at least one proving test that would fail without the change.
-- Treat "what behavior changed?" as a required design question before coding.
+How to prove the behavior depends on the layer — apply tests-first where it earns its keep, and be honest where it cannot:
+
+- Pure logic and main-process services (`src/shared/**`, `src/main/services/**`): write the proving unit/integration tests first. These paths test cheaply against temp directories and fakes, and this is where tests-first pays off most.
+- Filesystem, IPC, or service coordination: add integration tests alongside the change.
+- OS-, device-, or `MediaRecorder`-level behavior (real disk-full, device disconnect, app quit ordering, capture edge cases): unit tests with fakes are NOT sufficient proof. Add e2e/smoke coverage where feasible, and document explicit manual verification steps for what automation cannot reach. Never claim durability or capture reliability is proven from helper-only tests.
+- Renderer UI glue (banners, overlays, status text): prefer behavior-level e2e/smoke checks or documented manual verification over brittle DOM-assertion unit tests written first. Extract decision logic into a pure helper and unit test that instead.
+
+For every user-visible behavior change, add at least one proving test that would fail without the change — at the most honest layer available, not merely the most convenient one.
 
 Minimum expectation by change type:
 

@@ -34,15 +34,19 @@ import {
 import { getTakePlaybackSources } from './features/timeline/take-playback-sources';
 import { getWaveformDecodeSources } from './features/timeline/waveform-sources';
 import {
+  buildMicrophoneConstraints,
+  classifyRecorderFailure,
   finalizeStreamedRecording,
   getRecorderFinalizeTimeoutMs,
   getRecorderOptions,
   getRecorderTimesliceMs,
+  isOverconstrainedError,
   shouldRenderPreviewFrame,
   createAudioOnlyRecordingStream,
   createCameraRecordingStream,
   createScreenRecordingStream
 } from './features/recording/recorder-utils';
+import { CLOSE_PROMPT_MESSAGE, getCloseRequestedAction } from './features/recording/close-request';
 import { resolveTakeAudio } from '../shared/domain/take-audio';
 import { drawMirroredImage, getCenteredSquareCropRect } from './features/camera/camera-render';
 import { cleanupAllMedia } from './features/media-cleanup';
@@ -143,6 +147,13 @@ let cameraStream = null;
 let audioStream = null;
 let recorders = [];
 let recording = false;
+// Guards stopRecording against re-entry: a mid-capture failure may auto-stop
+// while the user also presses Stop (or a track-ended monitor fires). Only the
+// first caller runs the finalize flow.
+let stopRecordingInFlight = false;
+// True while the "System audio unavailable" notice is showing so a later
+// successful loopback capture can clear it instead of leaving a stale warning.
+let systemAudioFallbackNoticeShown = false;
 let pendingRecordingTakeId = null;
 // System-audio metering + activity detection. We sample the screen stream's
 // audio tracks during recording and emit "keep" segments (aligned with the
@@ -200,8 +211,23 @@ function clearMediaIdleTimer() {
   mediaIdleTimer = null;
 }
 
+/**
+ * Keep the main-process quit guard in sync with the renderer's recording
+ * state. Fire-and-forget: a failure to notify must never affect the
+ * recording pipeline itself.
+ */
+function notifyRecordingActive(active) {
+  if (typeof window.electronAPI.recordingSetActive !== 'function') return;
+  try {
+    window.electronAPI.recordingSetActive(Boolean(active));
+  } catch (error) {
+    console.warn('Failed to sync recording-active state to main:', error);
+  }
+}
+
 function resetMediaRefsAfterCleanup() {
   recording = false;
+  notifyRecordingActive(false);
   screenStream = null;
   cameraStream = null;
   audioStream = null;
@@ -654,11 +680,6 @@ function cleanupVideoPool() {
   systemAudioWaveformPeaks = null;
   activeTakeId = null;
   activePlaybackSection = null;
-}
-
-function invalidateTakeWaveformCache(takeId) {
-  takeAudioBufferCache.delete(takeId);
-  takeSystemAudioBufferCache.delete(takeId);
 }
 
 function resolveTimeToSource(timelineTime) {
@@ -2361,11 +2382,24 @@ async function updateScreenStream() {
         video: true,
         audio: true
       });
+      // Loopback worked this time: retire any stale "system audio
+      // unavailable" warning from a previous attempt so the UI reflects the
+      // stream the user will actually record.
+      if (systemAudioFallbackNoticeShown) {
+        systemAudioFallbackNoticeShown = false;
+        if (!recording) {
+          setTranscriptStatus('', 'neutral');
+          transcriptPanel?.classList.add('hidden');
+        }
+      }
     } catch (error) {
       console.warn(
         '[Recorder] System audio capture failed; falling back to video-only screen stream:',
         error
       );
+      const decision = classifyRecorderFailure('system-audio', 'screen');
+      showRecordingNotice(decision.userMessage, 'warning');
+      systemAudioFallbackNoticeShown = true;
       screenStream = await navigator.mediaDevices.getUserMedia({
         audio: false,
         video: {
@@ -2403,11 +2437,14 @@ async function updateCameraStream() {
   const deviceId = cameraSelect.value;
   if (!deviceId) return;
 
+  // Allow up to 4K camera capture. Frame rate deliberately stays capped at
+  // 30fps: camera WebM is VFR and this app has a documented history of
+  // camera/audio sync drift, so higher frame rates risk regressing sync.
   cameraStream = await navigator.mediaDevices.getUserMedia({
     video: {
       deviceId: { exact: deviceId },
-      width: { ideal: 1920, max: 1920 },
-      height: { ideal: 1080, max: 1080 },
+      width: { ideal: 3840, max: 3840 },
+      height: { ideal: 2160, max: 2160 },
       frameRate: { ideal: 30, max: 30 },
       aspectRatio: { ideal: 16 / 9 }
     },
@@ -2431,10 +2468,24 @@ async function updateAudioStream() {
   const deviceId = audioSelect.value;
   if (!deviceId) return;
 
-  audioStream = await navigator.mediaDevices.getUserMedia({
-    audio: { deviceId: { exact: deviceId } },
-    video: false
-  });
+  try {
+    audioStream = await navigator.mediaDevices.getUserMedia({
+      audio: buildMicrophoneConstraints(deviceId),
+      video: false
+    });
+  } catch (err) {
+    // Capture beats quality: never fail a recording because a device cannot
+    // satisfy the quality constraints. Retry once with only the device id.
+    if (!isOverconstrainedError(err)) throw err;
+    console.warn(
+      '[Recorder] Microphone quality constraints rejected (OverconstrainedError) — retrying with device id only.',
+      err
+    );
+    audioStream = await navigator.mediaDevices.getUserMedia({
+      audio: buildMicrophoneConstraints(deviceId, { includeQualityConstraints: false }),
+      video: false
+    });
+  }
   startAudioMeter(audioStream);
 }
 
@@ -2710,9 +2761,17 @@ async function createRecorder(stream, suffix, takeId) {
   // surfaced on finalize.
   let appendChain = Promise.resolve();
 
+  // Feed the actual captured dimensions (from track.getSettings()) into the
+  // options so the camera bitrate scales with what the device delivered
+  // (12/20/30 Mbps for <=1080p/1440p/4K). Screen bitrate is fixed and
+  // ignores these.
+  const [videoTrack] = typeof stream?.getVideoTracks === 'function' ? stream.getVideoTracks() : [];
+  const videoSettings = videoTrack?.getSettings?.() || {};
   const recorderOptions = getRecorderOptions({
     suffix,
-    hasAudio: typeof stream?.getAudioTracks === 'function' && stream.getAudioTracks().length > 0
+    hasAudio: typeof stream?.getAudioTracks === 'function' && stream.getAudioTracks().length > 0,
+    videoWidth: videoSettings.width,
+    videoHeight: videoSettings.height
   });
 
   // Open the on-disk write handle BEFORE starting the recorder. If this fails
@@ -2760,17 +2819,24 @@ async function createRecorder(stream, suffix, takeId) {
           bytesWritten += buffer.byteLength;
         }
       } catch (err) {
-        if (!recorderError) {
+        // Only the FIRST failure drives the user-facing reaction: once an
+        // append fails every later chunk is also lost, so surface it and
+        // (for critical recorders) auto-stop instead of waiting for Stop.
+        const firstFailure = !recorderError;
+        if (firstFailure) {
           recorderError = err instanceof Error ? err.message : String(err);
         }
         console.error(`[Recorder] ${suffix} chunk append failed:`, err);
+        if (firstFailure) handleRecorderFailure('append', suffix);
       }
     });
   };
 
   recorder.onerror = (event) => {
+    const firstFailure = !recorderError;
     recorderError = event?.error?.message || `${suffix} recorder failed`;
     console.error(`[Recorder] ${suffix} error`, event?.error || event);
+    if (firstFailure) handleRecorderFailure('recorder-error', suffix);
   };
 
   // blobPromise resolves with { path, error, suffix, bytesWritten } after the
@@ -2893,6 +2959,37 @@ function applyScribeStatus(status) {
   }
 
   setTranscriptStatus(status.text, status.tone);
+}
+
+/**
+ * Surface a recording notice on the existing transcript status line. The
+ * status line lives inside the transcript panel (hidden outside recording),
+ * so un-hide the panel when a notice must be visible before recording starts
+ * (e.g. the system-audio fallback during source selection).
+ */
+function showRecordingNotice(text, tone = 'warning') {
+  const hasText = typeof text === 'string' && text.trim().length > 0;
+  if (hasText && transcriptPanel) transcriptPanel.classList.remove('hidden');
+  setTranscriptStatus(text, tone);
+}
+
+/**
+ * React to a mid-capture recorder failure: show a visible, non-blocking
+ * notice immediately and, for critical recorders (screen/mic), auto-stop the
+ * whole recording exactly once so everything already streamed to disk is
+ * finalized instead of silently recording into a black hole.
+ */
+function handleRecorderFailure(kind, suffix) {
+  const decision = classifyRecorderFailure(kind, suffix);
+  showRecordingNotice(decision.userMessage, decision.shouldAutoStop ? 'error' : 'warning');
+  if (decision.shouldAutoStop && recording && !stopRecordingInFlight) {
+    console.error(
+      `[Recorder] ${suffix} ${kind} failure, auto-stopping to preserve what is on disk`
+    );
+    stopRecording().catch((err) => {
+      console.error('[Recorder] Auto-stop after recorder failure crashed:', err);
+    });
+  }
 }
 
 async function startRecording() {
@@ -3034,6 +3131,7 @@ async function startRecording() {
   const recorderTimesliceMs = getRecorderTimesliceMs();
   recorders.forEach((r) => r.start(recorderTimesliceMs));
   recording = true;
+  notifyRecordingActive(true);
   updateWorkspaceHeader();
   recordBtn.textContent = 'Stop';
   recordBtn.classList.replace('bg-red-600', 'bg-neutral-700');
@@ -3897,6 +3995,18 @@ function appendTakeToTimeline({
 }
 
 async function stopRecording() {
+  // Stop may be requested twice: a mid-capture failure auto-stops while the
+  // user clicks Stop (or a critical track ends). Run the finalize flow once.
+  if (stopRecordingInFlight) return;
+  stopRecordingInFlight = true;
+  try {
+    await stopRecordingImpl();
+  } finally {
+    stopRecordingInFlight = false;
+  }
+}
+
+async function stopRecordingImpl() {
   const projectSession = getActiveProjectSession();
   const recordedDuration = (Date.now() - startTime) / 1000;
   clearInterval(timerInterval);
@@ -3982,6 +4092,7 @@ async function stopRecording() {
 
   recorders = [];
   recording = false;
+  notifyRecordingActive(false);
   updateWorkspaceHeader();
   recordBtn.textContent = 'Record';
   recordBtn.classList.replace('bg-neutral-700', 'bg-red-600');
@@ -6001,3 +6112,56 @@ window.addEventListener('beforeunload', () => {
     console.warn('Failed to flush project save on exit:', error);
   });
 });
+
+// Quit guard: main intercepts the window close while a recording is active
+// and asks us to stop + save first. On confirm, stop/finalize the recording,
+// then trigger the real close; on cancel, keep recording. If stopping fails,
+// still allow the close — every streamed chunk is already in the .part files
+// and recoverable on next launch, so the user must never be trapped.
+let closeRequestInFlight = false;
+
+async function requestConfirmedClose() {
+  if (typeof window.electronAPI.confirmClose !== 'function') return;
+  try {
+    await window.electronAPI.confirmClose();
+  } catch (error) {
+    console.error('Failed to confirm window close:', error);
+  }
+}
+
+async function handleCloseRequested() {
+  if (closeRequestInFlight) return;
+  closeRequestInFlight = true;
+  try {
+    const action = getCloseRequestedAction({
+      recording,
+      hasActiveRecorders: hasActiveRecorders()
+    });
+    if (action === 'close-immediately') {
+      // Main's flag was stale (recording already fully stopped); nothing to
+      // save, so let the close proceed without prompting.
+      await requestConfirmedClose();
+      return;
+    }
+
+    if (!window.confirm(CLOSE_PROMPT_MESSAGE)) return;
+
+    try {
+      await stopRecording();
+    } catch (error) {
+      console.error(
+        'Failed to stop recording before close; captured bytes remain recoverable in the .part files:',
+        error
+      );
+    }
+    await requestConfirmedClose();
+  } finally {
+    closeRequestInFlight = false;
+  }
+}
+
+if (typeof window.electronAPI.onCloseRequested === 'function') {
+  window.electronAPI.onCloseRequested(() => {
+    handleCloseRequested();
+  });
+}

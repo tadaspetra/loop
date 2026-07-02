@@ -119,6 +119,22 @@ Acceptance criteria:
 - Recovered take is not duplicated if already present.
 - Recovery file is cleared on successful append completion.
 
+### D2. Quit guard while recording
+
+- Closing the window mid-recording is intercepted; the renderer prompts
+  "Recording in progress — stop and save before quitting?".
+- On confirm, the recording is stopped and finalized to disk before the
+  window actually closes; on cancel, recording continues.
+
+Acceptance criteria:
+
+- Window close is prevented only while a recording is active (renderer keeps
+  main informed via `recording:set-active`).
+- A stop/finalize failure still allows the close (bytes remain in `.part`
+  files and are recoverable on next launch).
+- If the renderer is unreachable, the close proceeds instead of wedging the
+  window open.
+
 ## E. Timeline Editor
 
 ### E1. Enter/exit timeline

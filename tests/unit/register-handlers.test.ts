@@ -44,20 +44,35 @@ function createRecordingServiceStub() {
   };
 }
 
+function createCloseGuardStub() {
+  return {
+    setRecordingActive: vi.fn(),
+    isRecordingActive: vi.fn(() => false),
+    confirmClose: vi.fn(),
+    handleCloseRequest: vi.fn(() => 'allow' as const)
+  };
+}
+
 function registerWithHandlers(
   opts: {
     systemPreferences?: {
       askForMediaAccess: ReturnType<typeof vi.fn>;
       getMediaAccessStatus: ReturnType<typeof vi.fn>;
     };
+    getWindow?: () => unknown;
   } = {}
 ) {
   const handlers = new Map<string, (event: unknown, payload: unknown) => unknown>();
+  const listeners = new Map<string, (event: unknown, payload: unknown) => unknown>();
   const ipcMain = {
     handle(channel: string, handler: (event: unknown, payload: unknown) => unknown) {
       handlers.set(channel, handler);
+    },
+    on(channel: string, listener: (event: unknown, payload: unknown) => unknown) {
+      listeners.set(channel, listener);
     }
   };
+  const closeGuard = createCloseGuardStub();
   const renderComposite = vi.fn(
     async (_opts: unknown, deps: { onProgress?: (u: unknown) => void; signal?: AbortSignal }) => {
       deps.onProgress?.({ phase: 'rendering', percent: 0.5, status: 'Rendering 50%' });
@@ -84,7 +99,8 @@ function registerWithHandlers(
     desktopCapturer: { getSources: vi.fn() },
     shell: { openPath: vi.fn() },
     systemPreferences: opts.systemPreferences,
-    getWindow: () => null,
+    getWindow: opts.getWindow || (() => null),
+    closeGuard,
     projectService: createProjectServiceStub(),
     renderComposite,
     exportPremiereProject,
@@ -95,7 +111,15 @@ function registerWithHandlers(
     setPendingDisplayMediaSource: vi.fn()
   } as unknown as Parameters<typeof registerIpcHandlers>[0]);
 
-  return { handlers, renderComposite, exportPremiereProject, proxyService, recordingService };
+  return {
+    handlers,
+    listeners,
+    closeGuard,
+    renderComposite,
+    exportPremiereProject,
+    proxyService,
+    recordingService
+  };
 }
 
 describe('main/ipc/register-handlers', () => {
@@ -524,5 +548,50 @@ describe('main/ipc/register-handlers', () => {
       discarded: 0
     });
     expect(await handlers.get('recording:scan-orphans')!({ sender }, '')).toEqual([]);
+  });
+
+  test('recording:set-active forwards a coerced boolean to the close guard', () => {
+    const { listeners, closeGuard } = registerWithHandlers();
+    const listener = listeners.get('recording:set-active');
+    expect(listener).toBeDefined();
+
+    listener!({}, true);
+    expect(closeGuard.setRecordingActive).toHaveBeenLastCalledWith(true);
+
+    listener!({}, false);
+    expect(closeGuard.setRecordingActive).toHaveBeenLastCalledWith(false);
+
+    // A malformed payload must never flip the guard on by accident.
+    listener!({}, undefined);
+    expect(closeGuard.setRecordingActive).toHaveBeenLastCalledWith(false);
+
+    listener!({}, 1);
+    expect(closeGuard.setRecordingActive).toHaveBeenLastCalledWith(true);
+  });
+
+  test('app:confirm-close arms the bypass before closing the window', async () => {
+    const win = { close: vi.fn(), isDestroyed: vi.fn(() => false) };
+    const { handlers, closeGuard } = registerWithHandlers({ getWindow: () => win });
+
+    await expect(handlers.get('app:confirm-close')!({}, undefined)).resolves.toBe(true);
+
+    expect(closeGuard.confirmClose).toHaveBeenCalledTimes(1);
+    expect(win.close).toHaveBeenCalledTimes(1);
+    // Ordering matters: the bypass must be armed before close() re-triggers
+    // the window 'close' event, otherwise the guard prevents its own close.
+    const confirmOrder = closeGuard.confirmClose.mock.invocationCallOrder[0];
+    const closeOrder = win.close.mock.invocationCallOrder[0];
+    expect(confirmOrder).toBeLessThan(closeOrder);
+  });
+
+  test('app:confirm-close tolerates a missing or destroyed window', async () => {
+    const { handlers, closeGuard } = registerWithHandlers();
+    await expect(handlers.get('app:confirm-close')!({}, undefined)).resolves.toBe(false);
+    expect(closeGuard.confirmClose).toHaveBeenCalled();
+
+    const destroyed = { close: vi.fn(), isDestroyed: vi.fn(() => true) };
+    const { handlers: handlers2 } = registerWithHandlers({ getWindow: () => destroyed });
+    await expect(handlers2.get('app:confirm-close')!({}, undefined)).resolves.toBe(false);
+    expect(destroyed.close).not.toHaveBeenCalled();
   });
 });

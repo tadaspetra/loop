@@ -13,6 +13,7 @@ import type {
   SystemPreferences
 } from 'electron';
 
+import type { CloseGuard } from '../app/close-guard';
 import type { createProjectService } from '../services/project-service';
 import type { renderComposite } from '../services/render-service';
 import type { exportPremiereProject } from '../services/premiere-export-service';
@@ -44,6 +45,7 @@ export function registerIpcHandlers({
   shell,
   systemPreferences,
   getWindow,
+  closeGuard,
   projectService,
   renderComposite,
   exportPremiereProject,
@@ -61,6 +63,7 @@ export function registerIpcHandlers({
   shell: Shell;
   systemPreferences?: Pick<SystemPreferences, 'askForMediaAccess' | 'getMediaAccessStatus'>;
   getWindow: () => BrowserWindow | null;
+  closeGuard: CloseGuard;
   projectService: ProjectService;
   renderComposite: RenderComposite;
   exportPremiereProject: ExportPremiereProject;
@@ -437,6 +440,24 @@ export function registerIpcHandlers({
   // renderer crash or timeout never drops captured bytes. Each recorder
   // (screen, camera) opens an independent write handle keyed by
   // (takeId, suffix) and finalizes with an atomic rename.
+  // Quit-guard bookkeeping: the renderer flips this flag on recording
+  // start/stop (fire-and-forget) so the window 'close' handler can decide
+  // synchronously in main whether a recording is at risk.
+  ipcMain.on('recording:set-active', (_event, active: unknown) => {
+    closeGuard.setRecordingActive(Boolean(active));
+  });
+
+  // The renderer calls this after the close prompt (recording stopped and
+  // finalized, or stop failed and the user still wants out). Arms the
+  // one-shot bypass BEFORE close() so the guard lets the close through.
+  ipcMain.handle('app:confirm-close', async () => {
+    closeGuard.confirmClose();
+    const win = getWindow();
+    if (!win || win.isDestroyed()) return false;
+    win.close();
+    return true;
+  });
+
   ipcMain.handle('recording:begin', async (_event, payload: unknown) => {
     const opts = (payload || {}) as {
       takeId?: string;

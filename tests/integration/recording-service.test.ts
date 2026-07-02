@@ -9,14 +9,23 @@ import {
   appendRecordingChunk,
   beginRecording,
   cancelRecording,
+  closeAllRecordingHandlesForShutdown,
   computeRecordingPaths,
+  configureRecordingDurability,
   discardOrphanRecording,
   finalizeRecording,
   findOrphanRecordingParts,
   getActiveRecordingCount,
+  listActiveRecordings,
   recoverOrphanRecording,
   scanOrphanRecordings
 } from '../../src/main/services/recording-service';
+
+/** Let fire-and-forget promise chains (periodic fsync) settle. */
+async function flushAsyncWork(): Promise<void> {
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+}
 
 function createSandbox() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'video-recording-service-'));
@@ -239,6 +248,240 @@ describe('main/services/recording-service', () => {
 
   test('recoverOrphanRecording returns null for unknown takeIds', () => {
     expect(recoverOrphanRecording(sandbox.root, 'take-does-not-exist')).toBeNull();
+  });
+
+  test('finalize never renames over an existing final recording file', async () => {
+    const { finalPath } = computeRecordingPaths(sandbox.root, 'take-clobber', 'screen');
+    // Simulate a previous recording (e.g. recovered after a crash) already
+    // occupying the deterministic final path for this takeId.
+    fs.writeFileSync(finalPath, 'previous-take-bytes');
+
+    beginRecording({ takeId: 'take-clobber', suffix: 'screen', folder: sandbox.root });
+    await appendRecordingChunk({
+      takeId: 'take-clobber',
+      suffix: 'screen',
+      data: Buffer.from('new-take-bytes')
+    });
+    const result = finalizeRecording({ takeId: 'take-clobber', suffix: 'screen' });
+
+    expect(result.path).toBe(path.join(sandbox.root, 'recording-take-clobber-screen-2.webm'));
+    // Both recordings survive with their own bytes.
+    expect(fs.readFileSync(finalPath, 'utf8')).toBe('previous-take-bytes');
+    expect(fs.readFileSync(result.path, 'utf8')).toBe('new-take-bytes');
+  });
+
+  test('finalize keeps uniquifying (-3, ...) when earlier suffixes are taken', async () => {
+    const { finalPath } = computeRecordingPaths(sandbox.root, 'take-clobber2', 'screen');
+    const secondPath = path.join(sandbox.root, 'recording-take-clobber2-screen-2.webm');
+    fs.writeFileSync(finalPath, 'first');
+    fs.writeFileSync(secondPath, 'second');
+
+    beginRecording({ takeId: 'take-clobber2', suffix: 'screen', folder: sandbox.root });
+    await appendRecordingChunk({
+      takeId: 'take-clobber2',
+      suffix: 'screen',
+      data: Buffer.from('third')
+    });
+    const result = finalizeRecording({ takeId: 'take-clobber2', suffix: 'screen' });
+
+    expect(result.path).toBe(path.join(sandbox.root, 'recording-take-clobber2-screen-3.webm'));
+    expect(fs.readFileSync(finalPath, 'utf8')).toBe('first');
+    expect(fs.readFileSync(secondPath, 'utf8')).toBe('second');
+    expect(fs.readFileSync(result.path, 'utf8')).toBe('third');
+  });
+
+  test('recoverOrphanRecording never renames over an existing final recording file', () => {
+    const existingFinal = path.join(
+      sandbox.root,
+      'recording-take-1700000000000-screen.webm'
+    );
+    fs.writeFileSync(existingFinal, 'already-recovered-bytes');
+    const screenPart = path.join(
+      sandbox.root,
+      '.recording-take-1700000000000-screen-aaaaaa.webm.part'
+    );
+    fs.writeFileSync(screenPart, 'orphan-screen-bytes');
+
+    const result = recoverOrphanRecording(sandbox.root, 'take-1700000000000');
+    expect(result).not.toBeNull();
+    expect(result!.screenPath).toBe(
+      path.join(sandbox.root, 'recording-take-1700000000000-screen-2.webm')
+    );
+    // Both the pre-existing recording and the recovered orphan survive.
+    expect(fs.readFileSync(existingFinal, 'utf8')).toBe('already-recovered-bytes');
+    expect(fs.readFileSync(result!.screenPath!, 'utf8')).toBe('orphan-screen-bytes');
+    expect(fs.existsSync(screenPart)).toBe(false);
+  });
+
+  test('finalize surfaces a durability warning when fsync fails but still saves the file', async () => {
+    configureRecordingDurability({
+      fsyncSync: () => {
+        throw new Error('EIO: fsync exploded');
+      }
+    });
+
+    beginRecording({ takeId: 'take-fsync', suffix: 'screen', folder: sandbox.root });
+    await appendRecordingChunk({
+      takeId: 'take-fsync',
+      suffix: 'screen',
+      data: Buffer.from('bytes-we-must-keep')
+    });
+    const result = finalizeRecording({ takeId: 'take-fsync', suffix: 'screen' });
+
+    // The rename still happens: bytes under a final name beat a stuck .part.
+    expect(fs.readFileSync(result.path, 'utf8')).toBe('bytes-we-must-keep');
+    expect(result.bytesWritten).toBe('bytes-we-must-keep'.length);
+    expect(result.warning).toMatch(/fsync/i);
+  });
+
+  test('finalize reports no warning when fsync succeeds', async () => {
+    beginRecording({ takeId: 'take-ok', suffix: 'screen', folder: sandbox.root });
+    await appendRecordingChunk({
+      takeId: 'take-ok',
+      suffix: 'screen',
+      data: Buffer.from('ok')
+    });
+    const result = finalizeRecording({ takeId: 'take-ok', suffix: 'screen' });
+    expect(result.warning).toBeUndefined();
+  });
+
+  test('appendRecordingChunk fsyncs periodically based on the configured interval', async () => {
+    let nowMs = 0;
+    const fsyncCalls: number[] = [];
+    configureRecordingDurability({
+      fsyncIntervalMs: 5000,
+      now: () => nowMs,
+      fsyncAsync: async (fd) => {
+        fsyncCalls.push(fd);
+      }
+    });
+
+    beginRecording({ takeId: 'take-periodic', suffix: 'screen', folder: sandbox.root });
+    const fd = listActiveRecordings()[0].fd;
+
+    nowMs = 1000;
+    await appendRecordingChunk({
+      takeId: 'take-periodic',
+      suffix: 'screen',
+      data: Buffer.from('a')
+    });
+    await flushAsyncWork();
+    expect(fsyncCalls).toHaveLength(0);
+
+    nowMs = 6000;
+    await appendRecordingChunk({
+      takeId: 'take-periodic',
+      suffix: 'screen',
+      data: Buffer.from('b')
+    });
+    await flushAsyncWork();
+    expect(fsyncCalls).toEqual([fd]);
+
+    // Within the interval of the last fsync: no additional fsync.
+    nowMs = 7000;
+    await appendRecordingChunk({
+      takeId: 'take-periodic',
+      suffix: 'screen',
+      data: Buffer.from('c')
+    });
+    await flushAsyncWork();
+    expect(fsyncCalls).toHaveLength(1);
+
+    // Past the interval again: a second fsync fires.
+    nowMs = 12000;
+    await appendRecordingChunk({
+      takeId: 'take-periodic',
+      suffix: 'screen',
+      data: Buffer.from('d')
+    });
+    await flushAsyncWork();
+    expect(fsyncCalls).toEqual([fd, fd]);
+
+    const result = finalizeRecording({ takeId: 'take-periodic', suffix: 'screen' });
+    expect(fs.readFileSync(result.path, 'utf8')).toBe('abcd');
+  });
+
+  test('a failed periodic fsync is reported once and does not kill the recording', async () => {
+    let nowMs = 0;
+    let fsyncAttempts = 0;
+    configureRecordingDurability({
+      fsyncIntervalMs: 5000,
+      now: () => nowMs,
+      fsyncAsync: async () => {
+        fsyncAttempts += 1;
+        throw new Error('ENOSPC: no space left on device');
+      }
+    });
+
+    beginRecording({ takeId: 'take-badfsync', suffix: 'screen', folder: sandbox.root });
+
+    nowMs = 6000;
+    await appendRecordingChunk({
+      takeId: 'take-badfsync',
+      suffix: 'screen',
+      data: Buffer.from('one')
+    });
+    await flushAsyncWork();
+
+    // Appends keep working after the failed fsync.
+    nowMs = 12000;
+    await appendRecordingChunk({
+      takeId: 'take-badfsync',
+      suffix: 'screen',
+      data: Buffer.from('two')
+    });
+    await flushAsyncWork();
+    expect(fsyncAttempts).toBeGreaterThanOrEqual(1);
+
+    const result = finalizeRecording({ takeId: 'take-badfsync', suffix: 'screen' });
+    expect(fs.readFileSync(result.path, 'utf8')).toBe('onetwo');
+    expect(result.warning).toMatch(/fsync/i);
+    // Reported once: the warning does not repeat itself per failed attempt.
+    const mentions = result.warning!.split(/periodic fsync/i).length - 1;
+    expect(mentions).toBe(1);
+  });
+
+  test('closeAllRecordingHandlesForShutdown fsyncs, closes fds, and leaves .part files recoverable', async () => {
+    beginRecording({
+      takeId: 'take-1700000000000',
+      suffix: 'screen',
+      folder: sandbox.root
+    });
+    await appendRecordingChunk({
+      takeId: 'take-1700000000000',
+      suffix: 'screen',
+      data: Buffer.from('shutdown-safe-bytes')
+    });
+    const handle = listActiveRecordings()[0];
+    const { fd, tempPath } = handle;
+
+    expect(() => closeAllRecordingHandlesForShutdown()).not.toThrow();
+
+    // The fd is really closed...
+    expect(() => fs.fstatSync(fd)).toThrow();
+    expect(handle.closed).toBe(true);
+    // ...and the .part file stays on disk with every byte for recovery.
+    expect(fs.existsSync(tempPath)).toBe(true);
+    expect(fs.readFileSync(tempPath, 'utf8')).toBe('shutdown-safe-bytes');
+
+    // Appends after shutdown fail loudly instead of writing to a dead fd.
+    await expect(
+      appendRecordingChunk({
+        takeId: 'take-1700000000000',
+        suffix: 'screen',
+        data: Buffer.from('late')
+      })
+    ).rejects.toThrow(/finalized|closed/i);
+
+    // Orphan recovery sees the .part file exactly like a post-crash scan.
+    const candidates = scanOrphanRecordings(sandbox.root);
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].takeId).toBe('take-1700000000000');
+    expect(candidates[0].screen?.partPath).toBe(tempPath);
+    expect(candidates[0].screen?.bytes).toBe('shutdown-safe-bytes'.length);
+
+    // Best-effort and idempotent: calling again never throws.
+    expect(() => closeAllRecordingHandlesForShutdown()).not.toThrow();
   });
 
   test('discardOrphanRecording removes every .part file for a takeId', () => {
