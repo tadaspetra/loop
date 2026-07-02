@@ -47,6 +47,12 @@ export interface RecordingHandle {
   fd: number;
   bytesWritten: number;
   closed: boolean;
+  /** Timestamp (durability.now()) of the last periodic fsync attempt. */
+  lastFsyncAt: number;
+  /** True while an async periodic fsync is in flight for this fd. */
+  fsyncInFlight: boolean;
+  /** First periodic fsync failure, recorded once and surfaced at finalize. */
+  fsyncWarning: string | null;
 }
 
 export interface BeginRecordingResult {
@@ -57,6 +63,13 @@ export interface BeginRecordingResult {
 export interface FinalizeRecordingResult {
   path: string;
   bytesWritten: number;
+  /**
+   * Present when captured bytes were saved but durability could not be fully
+   * guaranteed (an fsync failed at finalize or during recording). Callers
+   * should surface this prominently instead of treating the save as fully
+   * durable.
+   */
+  warning?: string;
 }
 
 export interface AppendChunkResult {
@@ -64,6 +77,43 @@ export interface AppendChunkResult {
 }
 
 const handles = new Map<string, RecordingHandle>();
+
+/**
+ * Durability knobs, injectable so tests can drive periodic fsync behavior
+ * deterministically without real clocks or real fsync failures.
+ */
+export interface RecordingDurabilityConfig {
+  /** Minimum gap between periodic fsyncs while a recording is appending. */
+  fsyncIntervalMs: number;
+  now: () => number;
+  fsyncAsync: (fd: number) => Promise<void>;
+  fsyncSync: (fd: number) => void;
+}
+
+function defaultFsyncAsync(fd: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    fs.fsync(fd, (err) => (err ? reject(err) : resolve()));
+  });
+}
+
+const DEFAULT_DURABILITY_CONFIG: RecordingDurabilityConfig = {
+  fsyncIntervalMs: 5000,
+  now: () => Date.now(),
+  fsyncAsync: defaultFsyncAsync,
+  fsyncSync: (fd) => fs.fsyncSync(fd)
+};
+
+let durability: RecordingDurabilityConfig = { ...DEFAULT_DURABILITY_CONFIG };
+
+export function configureRecordingDurability(
+  overrides: Partial<RecordingDurabilityConfig>
+): void {
+  durability = { ...durability, ...overrides };
+}
+
+export function resetRecordingDurabilityConfig(): void {
+  durability = { ...DEFAULT_DURABILITY_CONFIG };
+}
 
 function handleKey(takeId: string, suffix: string): string {
   return `${takeId}::${suffix}`;
@@ -94,6 +144,24 @@ export function computeRecordingPaths(
     `.recording-${safeTakeId}-${safeSuffix}-${rand}${safeExt}.part`
   );
   return { tempPath, finalPath };
+}
+
+/**
+ * Never rename over an existing final recording. If the deterministic final
+ * path is already occupied (crash -> recover orphan -> record again with the
+ * same takeId), pick the next free "-2", "-3", ... variant so the previous
+ * bytes survive.
+ */
+function resolveNonClobberingFinalPath(finalPath: string): string {
+  if (!fs.existsSync(finalPath)) return finalPath;
+  const dir = path.dirname(finalPath);
+  const ext = path.extname(finalPath);
+  const base = path.basename(finalPath, ext);
+  for (let n = 2; n < 10_000; n += 1) {
+    const candidate = path.join(dir, `${base}-${n}${ext}`);
+    if (!fs.existsSync(candidate)) return candidate;
+  }
+  throw new Error(`Could not find a non-conflicting final name for ${finalPath}`);
 }
 
 function toBuffer(data: Buffer | Uint8Array | ArrayBuffer): Buffer {
@@ -132,7 +200,10 @@ export function beginRecording(opts: BeginRecordingOptions): BeginRecordingResul
     finalPath,
     fd,
     bytesWritten: 0,
-    closed: false
+    closed: false,
+    lastFsyncAt: durability.now(),
+    fsyncInFlight: false,
+    fsyncWarning: null
   });
   return { tempPath, finalPath };
 }
@@ -155,7 +226,34 @@ export async function appendRecordingChunk(opts: AppendChunkOptions): Promise<Ap
     });
   });
   handle.bytesWritten += buffer.length;
+  maybeSchedulePeriodicFsync(handle, key);
   return { bytesWritten: handle.bytesWritten };
+}
+
+/**
+ * Periodic durability fsync: bound how many seconds of captured bytes can sit
+ * only in OS page cache during a long recording. Fire-and-forget so appends
+ * never block on disk flushes; a failure is recorded on the handle once and
+ * surfaced as a finalize warning instead of killing the recording.
+ */
+function maybeSchedulePeriodicFsync(handle: RecordingHandle, key: string): void {
+  if (handle.closed || handle.fsyncInFlight) return;
+  const now = durability.now();
+  if (now - handle.lastFsyncAt < durability.fsyncIntervalMs) return;
+  handle.fsyncInFlight = true;
+  handle.lastFsyncAt = now;
+  durability
+    .fsyncAsync(handle.fd)
+    .catch((error: unknown) => {
+      if (!handle.fsyncWarning) {
+        const message = error instanceof Error ? error.message : String(error);
+        handle.fsyncWarning = `Periodic fsync failed during recording: ${message}`;
+        console.warn(`[recording] periodic fsync failed for ${key}:`, error);
+      }
+    })
+    .finally(() => {
+      handle.fsyncInFlight = false;
+    });
 }
 
 export function finalizeRecording(opts: FinalizeRecordingOptions): FinalizeRecordingResult {
@@ -170,12 +268,20 @@ export function finalizeRecording(opts: FinalizeRecordingOptions): FinalizeRecor
     return { path: handle.finalPath, bytesWritten: handle.bytesWritten };
   }
 
+  const warnings: string[] = [];
+  if (handle.fsyncWarning) warnings.push(handle.fsyncWarning);
+
   try {
     // Flush buffers to disk before rename so a crash immediately after the
-    // rename cannot leave us with a zero-length final file.
+    // rename cannot leave us with a zero-length final file. If the fsync
+    // fails we still proceed with the rename — bytes under a final name beat
+    // a stuck .part — but the durability gap must not be silently swallowed,
+    // so it is surfaced to the caller as a warning.
     try {
-      fs.fsyncSync(handle.fd);
+      durability.fsyncSync(handle.fd);
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      warnings.push(`fsync failed at finalize; bytes may not be fully flushed: ${message}`);
       console.warn(`[recording] fsync failed for ${key}:`, error);
     }
     fs.closeSync(handle.fd);
@@ -193,11 +299,14 @@ export function finalizeRecording(opts: FinalizeRecordingOptions): FinalizeRecor
     throw new Error(`Recording produced no data for ${suffix}`);
   }
 
-  fs.renameSync(handle.tempPath, handle.finalPath);
+  const finalPath = resolveNonClobberingFinalPath(handle.finalPath);
+  fs.renameSync(handle.tempPath, finalPath);
+  handle.finalPath = finalPath;
   const result: FinalizeRecordingResult = {
-    path: handle.finalPath,
+    path: finalPath,
     bytesWritten: handle.bytesWritten
   };
+  if (warnings.length > 0) result.warning = warnings.join('; ');
   handles.delete(key);
   return result;
 }
@@ -376,7 +485,12 @@ export function recoverOrphanRecording(
     const entry = candidate[suffix];
     if (!entry) continue;
     if (!fs.existsSync(entry.partPath)) continue;
-    const { finalPath } = computeRecordingPaths(folder, takeId, suffix);
+    // Never rename over an existing final file: a previous recovery (or a new
+    // recording reusing the same takeId) may already own the deterministic
+    // name, and recovering an orphan must not destroy it.
+    const finalPath = resolveNonClobberingFinalPath(
+      computeRecordingPaths(folder, takeId, suffix).finalPath
+    );
     try {
       fs.renameSync(entry.partPath, finalPath);
       if (suffix === 'screen') recovered.screenPath = finalPath;
@@ -419,6 +533,29 @@ export function discardOrphanRecording(
 }
 
 /**
+ * Shutdown safety: flush and close every open recording fd, leaving the .part
+ * files on disk so orphan recovery can pick them up on next launch. Wired to
+ * Electron's `before-quit`; synchronous, best-effort, and never throws — a
+ * failing fsync/close on one handle must not block the others (or the quit).
+ */
+export function closeAllRecordingHandlesForShutdown(): void {
+  for (const [key, handle] of handles) {
+    if (handle.closed) continue;
+    try {
+      durability.fsyncSync(handle.fd);
+    } catch (error) {
+      console.warn(`[recording] shutdown fsync failed for ${key}:`, error);
+    }
+    try {
+      fs.closeSync(handle.fd);
+    } catch (error) {
+      console.warn(`[recording] shutdown close failed for ${key}:`, error);
+    }
+    handle.closed = true;
+  }
+}
+
+/**
  * Reset service state. Test-only helper; in production, finalize/cancel own
  * every handle.
  */
@@ -434,4 +571,5 @@ export function _resetForTests(): void {
     safeUnlink(handle.tempPath);
   }
   handles.clear();
+  resetRecordingDurabilityConfig();
 }

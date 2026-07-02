@@ -3,6 +3,9 @@ import { describe, expect, test } from 'vitest';
 import { vi } from 'vitest';
 
 import {
+  buildMicrophoneConstraints,
+  classifyRecorderFailure,
+  computeCameraVideoBitsPerSecond,
   createAudioOnlyRecordingStream,
   createCameraRecordingStream,
   createScreenRecordingStream,
@@ -11,6 +14,7 @@ import {
   getRecorderFinalizeTimeoutMs,
   getRecorderTimesliceMs,
   getSupportedRecorderMimeType,
+  isOverconstrainedError,
   PREVIEW_FPS_IDLE,
   PREVIEW_FPS_RECORDING,
   RECORDER_FINALIZE_TIMEOUT_MS,
@@ -20,23 +24,115 @@ import {
 } from '../../src/renderer/features/recording/recorder-utils';
 
 describe('recorder-utils', () => {
-  test('prefers vp8 recorder support before heavier codecs', () => {
-    const mediaRecorderCtor = {
+  test('prefers vp9 over vp8, with plain webm as the last candidate', () => {
+    expect(RECORDER_MIME_CANDIDATES).toEqual([
+      'video/webm; codecs=vp9',
+      'video/webm; codecs=vp8',
+      'video/webm'
+    ]);
+
+    const bothSupported = {
       isTypeSupported: (mimeType: string) =>
         mimeType === 'video/webm; codecs=vp8' || mimeType === 'video/webm; codecs=vp9'
     };
+    expect(getSupportedRecorderMimeType(bothSupported)).toBe('video/webm; codecs=vp9');
+  });
 
-    expect(RECORDER_MIME_CANDIDATES[0]).toBe('video/webm; codecs=vp8');
-    expect(getSupportedRecorderMimeType(mediaRecorderCtor)).toBe('video/webm; codecs=vp8');
+  test('falls back to vp8 when vp9 is unsupported, then plain webm', () => {
+    const vp8Only = {
+      isTypeSupported: (mimeType: string) => mimeType === 'video/webm; codecs=vp8'
+    };
+    expect(getSupportedRecorderMimeType(vp8Only)).toBe('video/webm; codecs=vp8');
+
+    const plainOnly = {
+      isTypeSupported: (mimeType: string) => mimeType === 'video/webm'
+    };
+    expect(getSupportedRecorderMimeType(plainOnly)).toBe('video/webm');
   });
 
   test('falls back to empty mime type when MediaRecorder support is unavailable', () => {
-    expect(getSupportedRecorderMimeType(undefined)).toBe('');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      expect(getSupportedRecorderMimeType(undefined)).toBe('');
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/browser default codec/i));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test('warns that the browser default codec is used when no candidate is supported', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const nothingSupported = { isTypeSupported: () => false };
+      expect(getSupportedRecorderMimeType(nothingSupported)).toBe('');
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/browser default codec/i));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test('does not warn when a preferred codec is supported', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const supported = { isTypeSupported: () => true };
+      expect(getSupportedRecorderMimeType(supported)).toBe('video/webm; codecs=vp9');
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  describe('computeCameraVideoBitsPerSecond', () => {
+    test('uses 30 Mbps at 4K and above', () => {
+      expect(computeCameraVideoBitsPerSecond(3840, 2160)).toBe(30_000_000);
+      expect(computeCameraVideoBitsPerSecond(4096, 2160)).toBe(30_000_000);
+    });
+
+    test('uses 20 Mbps at 1440p and above (below 4K)', () => {
+      expect(computeCameraVideoBitsPerSecond(2560, 1440)).toBe(20_000_000);
+      // Wide-but-short frames drop to the tier both dimensions satisfy.
+      expect(computeCameraVideoBitsPerSecond(3840, 2158)).toBe(20_000_000);
+    });
+
+    test('uses the 12 Mbps default at 1080p and below', () => {
+      expect(computeCameraVideoBitsPerSecond(1920, 1080)).toBe(12_000_000);
+      expect(computeCameraVideoBitsPerSecond(2559, 1440)).toBe(12_000_000);
+      expect(computeCameraVideoBitsPerSecond(1280, 720)).toBe(12_000_000);
+    });
+
+    test('treats missing or invalid dimensions as the 12 Mbps default', () => {
+      expect(computeCameraVideoBitsPerSecond(undefined, undefined)).toBe(12_000_000);
+      expect(computeCameraVideoBitsPerSecond(Number.NaN, 2160)).toBe(12_000_000);
+      expect(computeCameraVideoBitsPerSecond(3840, Number.NaN)).toBe(12_000_000);
+      expect(
+        computeCameraVideoBitsPerSecond(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY)
+      ).toBe(12_000_000);
+      expect(computeCameraVideoBitsPerSecond(-3840, -2160)).toBe(12_000_000);
+      expect(computeCameraVideoBitsPerSecond(0, 0)).toBe(12_000_000);
+      expect(
+        computeCameraVideoBitsPerSecond('3840' as unknown as number, '2160' as unknown as number)
+      ).toBe(12_000_000);
+    });
+  });
+
+  test('camera recorder options scale video bitrate with the captured resolution', () => {
+    expect(
+      getRecorderOptions(
+        { suffix: 'camera', hasAudio: false, videoWidth: 3840, videoHeight: 2160 },
+        undefined
+      )
+    ).toEqual({ videoBitsPerSecond: 30_000_000 });
+    expect(
+      getRecorderOptions(
+        { suffix: 'camera', hasAudio: false, videoWidth: 2560, videoHeight: 1440 },
+        undefined
+      )
+    ).toEqual({ videoBitsPerSecond: 20_000_000 });
   });
 
   test('omits audio bitrate for camera recordings without audio tracks', () => {
     expect(getRecorderOptions({ suffix: 'camera', hasAudio: false }, undefined)).toEqual({
-      videoBitsPerSecond: 10000000
+      videoBitsPerSecond: 12_000_000
     });
   });
 
@@ -44,6 +140,47 @@ describe('recorder-utils', () => {
     expect(getRecorderOptions({ suffix: 'screen', hasAudio: true }, undefined)).toEqual({
       videoBitsPerSecond: 30000000,
       audioBitsPerSecond: 192000
+    });
+  });
+
+  test('screen bitrate stays fixed at 30 Mbps regardless of captured dimensions', () => {
+    expect(
+      getRecorderOptions(
+        { suffix: 'screen', hasAudio: false, videoWidth: 5120, videoHeight: 2880 },
+        undefined
+      )
+    ).toEqual({ videoBitsPerSecond: 30000000 });
+  });
+
+  describe('microphone constraints', () => {
+    test('requests explicit quality constraints with ideal (not exact) sample rate and channels', () => {
+      expect(buildMicrophoneConstraints('mic-1')).toEqual({
+        deviceId: { exact: 'mic-1' },
+        sampleRate: { ideal: 48000 },
+        channelCount: { ideal: 2 },
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false
+      });
+    });
+
+    test('falls back to device-id-only constraints so capture beats quality', () => {
+      expect(buildMicrophoneConstraints('mic-1', { includeQualityConstraints: false })).toEqual({
+        deviceId: { exact: 'mic-1' }
+      });
+    });
+
+    test('detects OverconstrainedError rejections and nothing else', () => {
+      expect(isOverconstrainedError({ name: 'OverconstrainedError' })).toBe(true);
+      const domLike = new Error('constraints not satisfied');
+      domLike.name = 'OverconstrainedError';
+      expect(isOverconstrainedError(domLike)).toBe(true);
+
+      expect(isOverconstrainedError(new Error('NotAllowedError'))).toBe(false);
+      expect(isOverconstrainedError({ name: 'NotReadableError' })).toBe(false);
+      expect(isOverconstrainedError(null)).toBe(false);
+      expect(isOverconstrainedError(undefined)).toBe(false);
+      expect(isOverconstrainedError('OverconstrainedError')).toBe(false);
     });
   });
 
@@ -237,6 +374,32 @@ describe('recorder-utils', () => {
     });
   });
 
+  test('finalizeStreamedRecording carries a durability warning through and logs it prominently', async () => {
+    const finalize = vi.fn(async () => ({
+      path: '/tmp/screen.webm',
+      bytesWritten: 2048,
+      warning: 'fsync failed at finalize; bytes may not be fully flushed: EIO'
+    }));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      const result = await finalizeStreamedRecording({
+        takeId: 'take-warn',
+        suffix: 'screen',
+        bytesWritten: 2048,
+        deps: { finalize }
+      });
+
+      // The recording still succeeded — a durability warning is not an error.
+      expect(result.error).toBeNull();
+      expect(result.path).toBe('/tmp/screen.webm');
+      expect(result.warning).toMatch(/fsync/i);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/durability warning/i));
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   test('finalizeStreamedRecording reports an error and cancels when no bytes were written', async () => {
     const finalize = vi.fn();
     const cancel = vi.fn(async () => ({ cancelled: true }));
@@ -284,5 +447,55 @@ describe('recorder-utils', () => {
 
     expect(result.path).toBeNull();
     expect(result.error).toMatch(/could not be saved/i);
+  });
+
+  describe('classifyRecorderFailure', () => {
+    test('auto-stops when the screen recorder can no longer append chunks to disk', () => {
+      const decision = classifyRecorderFailure('append', 'screen');
+      expect(decision.shouldAutoStop).toBe(true);
+      expect(decision.userMessage).toMatch(/screen/i);
+      expect(decision.userMessage).toMatch(/save/i);
+      expect(decision.userMessage).toMatch(/stopping/i);
+    });
+
+    test('auto-stops on a screen recorder (encoder) error to finalize what is on disk', () => {
+      const decision = classifyRecorderFailure('recorder-error', 'screen');
+      expect(decision.shouldAutoStop).toBe(true);
+      expect(decision.userMessage).toMatch(/screen/i);
+      expect(decision.userMessage).toMatch(/stopping/i);
+    });
+
+    test('auto-stops when the dedicated mic recorder fails (append or encoder error)', () => {
+      const appendDecision = classifyRecorderFailure('append', 'audio');
+      expect(appendDecision.shouldAutoStop).toBe(true);
+      expect(appendDecision.userMessage).toMatch(/microphone/i);
+      expect(appendDecision.userMessage).toMatch(/stopping/i);
+
+      const errorDecision = classifyRecorderFailure('recorder-error', 'audio');
+      expect(errorDecision.shouldAutoStop).toBe(true);
+      expect(errorDecision.userMessage).toMatch(/microphone/i);
+      expect(errorDecision.userMessage).toMatch(/stopping/i);
+    });
+
+    test('camera append failure warns but keeps the recording going for partial success', () => {
+      const decision = classifyRecorderFailure('append', 'camera');
+      expect(decision.shouldAutoStop).toBe(false);
+      expect(decision.userMessage).toMatch(/camera/i);
+      expect(decision.userMessage).toMatch(/continuing/i);
+      expect(decision.userMessage).toMatch(/screen/i);
+    });
+
+    test('camera recorder error warns but keeps the recording going for partial success', () => {
+      const decision = classifyRecorderFailure('recorder-error', 'camera');
+      expect(decision.shouldAutoStop).toBe(false);
+      expect(decision.userMessage).toMatch(/camera/i);
+      expect(decision.userMessage).toMatch(/continuing/i);
+    });
+
+    test('system-audio fallback never stops the recording and only informs', () => {
+      const decision = classifyRecorderFailure('system-audio', 'screen');
+      expect(decision.shouldAutoStop).toBe(false);
+      expect(decision.userMessage).toBe('System audio unavailable — recording screen without it');
+    });
   });
 });

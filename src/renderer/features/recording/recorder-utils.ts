@@ -1,7 +1,9 @@
+// Ordered by preference: VP9 gives noticeably better quality-per-bit than
+// VP8 at the bitrates we record at, so try it first and step down.
 export const RECORDER_MIME_CANDIDATES = [
+  'video/webm; codecs=vp9',
   'video/webm; codecs=vp8',
-  'video/webm',
-  'video/webm; codecs=vp9'
+  'video/webm'
 ] as const;
 
 export const RECORDER_TIMESLICE_MS = 1000;
@@ -25,29 +27,64 @@ export interface FinalizedRecordingResult {
   path: string | null;
   suffix: string;
   bytesWritten: number;
+  /** Durability warning from the main process (e.g. fsync failed); the file
+   *  was still saved, but the caller should surface the degraded guarantee. */
+  warning?: string;
 }
 
 export function getSupportedRecorderMimeType(
   mediaRecorderCtor: MediaRecorderCtorLike | undefined = globalThis.MediaRecorder
 ): string {
   if (!mediaRecorderCtor || typeof mediaRecorderCtor.isTypeSupported !== 'function') {
+    console.warn(
+      '[Recorder] MediaRecorder.isTypeSupported is unavailable — recording with the browser default codec.'
+    );
     return '';
   }
 
-  return (
-    RECORDER_MIME_CANDIDATES.find((mimeType) => mediaRecorderCtor.isTypeSupported?.(mimeType)) || ''
+  const supported = RECORDER_MIME_CANDIDATES.find((mimeType) =>
+    mediaRecorderCtor.isTypeSupported?.(mimeType)
   );
+  if (!supported) {
+    console.warn(
+      '[Recorder] No preferred WebM codec (vp9/vp8/webm) is supported — recording with the browser default codec.'
+    );
+    return '';
+  }
+  return supported;
+}
+
+// Camera bitrate tiers by captured resolution. The camera opens at up to 4K
+// now, so the bitrate has to scale with what the device actually delivered
+// (read from track.getSettings() after getUserMedia) or 4K footage would be
+// starved at a 1080p-era bitrate.
+export const CAMERA_VIDEO_BITS_PER_SECOND_4K = 30_000_000;
+export const CAMERA_VIDEO_BITS_PER_SECOND_1440P = 20_000_000;
+export const CAMERA_VIDEO_BITS_PER_SECOND_DEFAULT = 12_000_000;
+
+export function computeCameraVideoBitsPerSecond(width?: unknown, height?: unknown): number {
+  const w = typeof width === 'number' && Number.isFinite(width) && width > 0 ? width : 0;
+  const h = typeof height === 'number' && Number.isFinite(height) && height > 0 ? height : 0;
+
+  if (w >= 3840 && h >= 2160) return CAMERA_VIDEO_BITS_PER_SECOND_4K;
+  if (w >= 2560 && h >= 1440) return CAMERA_VIDEO_BITS_PER_SECOND_1440P;
+  return CAMERA_VIDEO_BITS_PER_SECOND_DEFAULT;
 }
 
 export function getRecorderOptions(
-  { suffix, hasAudio = true }: { suffix?: string; hasAudio?: boolean } = {},
+  {
+    suffix,
+    hasAudio = true,
+    videoWidth,
+    videoHeight
+  }: { suffix?: string; hasAudio?: boolean; videoWidth?: number; videoHeight?: number } = {},
   mediaRecorderCtor: MediaRecorderCtorLike | undefined = globalThis.MediaRecorder
 ): MediaRecorderOptions {
   const mimeType = getSupportedRecorderMimeType(mediaRecorderCtor);
   const options: MediaRecorderOptions = mimeType ? { mimeType } : {};
 
   if (suffix === 'camera') {
-    options.videoBitsPerSecond = 10000000;
+    options.videoBitsPerSecond = computeCameraVideoBitsPerSecond(videoWidth, videoHeight);
     if (hasAudio) options.audioBitsPerSecond = 192000;
   } else if (suffix === 'screen') {
     options.videoBitsPerSecond = 30000000;
@@ -59,6 +96,40 @@ export function getRecorderOptions(
   }
 
   return options;
+}
+
+/**
+ * Constraints for opening the microphone. Quality knobs (sample rate,
+ * channel count, disabled processing) use `ideal`/plain values rather than
+ * `exact` so a constrained device can still open; only the device id itself
+ * is exact. The device-id-only fallback exists because capture beats
+ * quality: if a device rejects the quality constraints with
+ * OverconstrainedError, retry with just the id instead of losing the mic.
+ */
+export function buildMicrophoneConstraints(
+  deviceId: string,
+  { includeQualityConstraints = true }: { includeQualityConstraints?: boolean } = {}
+): MediaTrackConstraints {
+  if (!includeQualityConstraints) {
+    return { deviceId: { exact: deviceId } };
+  }
+
+  return {
+    deviceId: { exact: deviceId },
+    sampleRate: { ideal: 48000 },
+    channelCount: { ideal: 2 },
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false
+  };
+}
+
+export function isOverconstrainedError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { name?: unknown }).name === 'OverconstrainedError'
+  );
 }
 
 export function getRecorderTimesliceMs(): number {
@@ -139,11 +210,69 @@ export function createScreenRecordingStream(
   return new MediaStreamCtor([...videoTracks, ...screenAudioTracks, ...extraAudioTracks]);
 }
 
+export type RecorderFailureKind = 'append' | 'recorder-error' | 'system-audio';
+export type RecorderFailureSuffix = 'screen' | 'camera' | 'audio';
+
+export interface RecorderFailureDecision {
+  shouldAutoStop: boolean;
+  userMessage: string;
+}
+
+const RECORDER_SUFFIX_LABELS: Record<RecorderFailureSuffix, string> = {
+  screen: 'Screen',
+  camera: 'Camera',
+  audio: 'Microphone'
+};
+
+/**
+ * Decide how the recording UI should react to a mid-capture failure.
+ *
+ * Policy (mirrors the critical/non-critical track policy used for
+ * track-ended monitoring):
+ * - screen or dedicated mic recorder failing to append (disk/IPC) or hitting
+ *   an encoder error means every later chunk is also lost, so auto-stop the
+ *   whole recording to finalize what is already on disk.
+ * - camera-only failure keeps the recording going: partial success must still
+ *   save the screen file, so just warn.
+ * - system-audio loopback fallback never stops anything; it only informs that
+ *   the screen is being recorded without desktop audio.
+ */
+export function classifyRecorderFailure(
+  kind: RecorderFailureKind,
+  suffix: RecorderFailureSuffix
+): RecorderFailureDecision {
+  if (kind === 'system-audio') {
+    return {
+      shouldAutoStop: false,
+      userMessage: 'System audio unavailable — recording screen without it'
+    };
+  }
+
+  if (suffix === 'camera') {
+    return {
+      shouldAutoStop: false,
+      userMessage:
+        kind === 'append'
+          ? 'Camera recording can no longer save to disk — continuing with screen only.'
+          : 'Camera recorder failed — continuing with screen only.'
+    };
+  }
+
+  const label = RECORDER_SUFFIX_LABELS[suffix] || suffix;
+  return {
+    shouldAutoStop: true,
+    userMessage:
+      kind === 'append'
+        ? `${label} recording can no longer save to disk — stopping to keep what has been saved.`
+        : `${label} recorder failed — stopping to keep what has been saved.`
+  };
+}
+
 export interface FinalizeStreamedRecordingDeps {
   finalize: (opts: {
     takeId: string;
     suffix: string;
-  }) => Promise<{ path: string; bytesWritten: number }>;
+  }) => Promise<{ path: string; bytesWritten: number; warning?: string }>;
   cancel?: (opts: { takeId: string; suffix: string }) => Promise<{ cancelled: boolean }>;
 }
 
@@ -184,11 +313,20 @@ export async function finalizeStreamedRecording({
     if (!result?.path) {
       throw new Error(`${suffix} recording could not be saved`);
     }
+    if (result.warning) {
+      // Durability warning from the main process: the bytes were saved, but
+      // an fsync failed somewhere along the way. Log loudly so degraded
+      // durability is never silently swallowed, and carry it on the result.
+      console.error(
+        `[Recorder] DURABILITY WARNING for ${suffix} recording at ${result.path}: ${result.warning}`
+      );
+    }
     return {
       error: null,
       path: result.path,
       suffix,
-      bytesWritten: result.bytesWritten ?? bytesWritten
+      bytesWritten: result.bytesWritten ?? bytesWritten,
+      ...(result.warning ? { warning: result.warning } : {})
     };
   } catch (error) {
     return {

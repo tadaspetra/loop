@@ -78,6 +78,16 @@ const electronApi: ElectronApi = {
   recordingAppend: (opts) => ipcRenderer.invoke('recording:append', opts),
   recordingFinalize: (opts) => ipcRenderer.invoke('recording:finalize', opts),
   recordingCancel: (opts) => ipcRenderer.invoke('recording:cancel', opts),
+  recordingSetActive: (active) => {
+    ipcRenderer.send('recording:set-active', Boolean(active));
+  },
+  confirmClose: () => ipcRenderer.invoke('app:confirm-close'),
+  onCloseRequested: (listener) => {
+    if (typeof listener !== 'function') return () => {};
+    const handler = () => listener();
+    ipcRenderer.on('app:close-requested', handler);
+    return () => ipcRenderer.removeListener('app:close-requested', handler);
+  },
   recordingListOrphans: (folder) => ipcRenderer.invoke('recording:list-orphans', folder),
   recordingScanOrphans: (folder) => ipcRenderer.invoke('recording:scan-orphans', folder),
   recordingRecoverOrphan: (opts) => ipcRenderer.invoke('recording:recover-orphan', opts),

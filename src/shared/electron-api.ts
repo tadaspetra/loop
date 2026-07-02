@@ -61,6 +61,12 @@ export interface RecordingFinalizeOpts {
 export interface RecordingFinalizeResult {
   path: string;
   bytesWritten: number;
+  /**
+   * Present when the recording was saved but an fsync failed (at finalize or
+   * during recording), so full durability could not be guaranteed. Callers
+   * should surface this prominently.
+   */
+  warning?: string;
 }
 
 export interface RecordingCancelResult {
@@ -162,6 +168,22 @@ export interface ElectronApi {
   recordingAppend: (opts: RecordingAppendOpts) => Promise<RecordingAppendResult>;
   recordingFinalize: (opts: RecordingFinalizeOpts) => Promise<RecordingFinalizeResult>;
   recordingCancel: (opts: RecordingFinalizeOpts) => Promise<RecordingCancelResult>;
+  /**
+   * Fire-and-forget notification that a recording started/stopped, so main
+   * can guard window close synchronously (no renderer round-trip).
+   */
+  recordingSetActive: (active: boolean) => void;
+  /**
+   * Trigger the real window close after a guarded close was confirmed
+   * (recording stopped/finalized, or the user chose to close anyway).
+   * Resolves true when a live window was told to close.
+   */
+  confirmClose: () => Promise<boolean>;
+  /**
+   * Fired by main when a window close was intercepted mid-recording; the
+   * renderer should prompt, stop/finalize, then call confirmClose().
+   */
+  onCloseRequested: (listener: () => void) => () => void;
   recordingListOrphans: (folder: string) => Promise<string[]>;
   recordingScanOrphans: (folder: string) => Promise<OrphanRecordingCandidate[]>;
   recordingRecoverOrphan: (opts: {

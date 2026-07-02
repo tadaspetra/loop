@@ -11,7 +11,7 @@ function normalizePath(value: unknown): string | null {
 
 export function getTakePlaybackSources(
   take:
-    | Pick<Take, 'screenPath' | 'cameraPath' | 'proxyPath' | 'cameraProxyPath'>
+    | Partial<Pick<Take, 'screenPath' | 'cameraPath' | 'proxyPath' | 'cameraProxyPath'>>
     | null
     | undefined
 ): TakePlaybackSources {
