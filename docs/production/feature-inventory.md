@@ -78,16 +78,19 @@ Acceptance criteria:
 
 ## C. Transcript And Trim
 
-### C1. Batch transcript
+### C1. On-demand Transcribe & Cut
 
-- After recording stops and the take's files are finalized and checkpointed for recovery, the app batch-transcribes the finalized mic audio (audio-only file, or audio extracted from the camera file via ffmpeg stream copy) with ElevenLabs Scribe in the main process, then groups word timestamps into speech segments.
+- Stopping a recording puts the take on the timeline immediately as one full-length section — no transcription and no network call in the stop flow.
+- The timeline toolbar's "Transcribe & Cut" button batch-transcribes the target take's mic audio (audio-only file, or audio extracted from the camera file via ffmpeg stream copy) with ElevenLabs Scribe in the main process, groups word timestamps into speech segments, and replaces the take's timeline sections with speech-cut sections.
+- The target take is the selected section's take, falling back to the most recent take still on the timeline.
 
 Acceptance criteria:
 
-- No transcription network call happens before the finalized files and the recovery take are on disk; a transcription failure or timeout never loses or blocks the recording (falls back to full-duration sections with a visible warning).
-- Speech segments store `start/end/text`, with word timestamps mapped into recording time using the per-file recorder start offsets.
-- Non-speech annotations (e.g. bracketed cues) are stripped from segment content.
-- Recordings without mic audio skip transcription entirely (no network call).
+- The recording view shows no transcript panel and no silence-cutting option; recorder failures surface on a compact notice line.
+- The stop flow performs no transcription work; the finalized files and the recovery checkpoint are on disk before the take enters the timeline.
+- Transcribe & Cut applies as a single undo step; failure, timeout, no-speech, or a timeline edit made while transcription was in flight leaves the timeline unchanged and reports a visible status.
+- Word timestamps map into take time using the per-file recorder start offsets; non-speech annotations are stripped; system-audio "keep" regions captured during the same app session are respected.
+- Takes without mic audio report a visible message and trigger no network call.
 
 ### C3. Section computation
 

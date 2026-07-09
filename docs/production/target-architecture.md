@@ -38,6 +38,7 @@ src/
       timeline/
         section-utils.js
         keyframe-utils.js
+        transcribe-cut.js
     services/
       electron-api.js
       project-session.js

@@ -27,6 +27,11 @@ import {
   normalizeCameraSyncOffsetMs,
   resolveCameraPlaybackTargetTime
 } from './features/timeline/camera-sync';
+import {
+  replaceTakeSections,
+  resolveTargetTakeId,
+  resolveTranscriptionSource
+} from './features/timeline/transcribe-cut';
 import { getTakePlaybackSources } from './features/timeline/take-playback-sources';
 import { getWaveformDecodeSources } from './features/timeline/waveform-sources';
 import {
@@ -108,12 +113,8 @@ const folderPathEl = document.getElementById('folderPath');
 const openFolderBtn = document.getElementById('openFolderBtn');
 const pickFolderBtn = document.getElementById('pickFolderBtn');
 const contentProtectionToggle = document.getElementById('contentProtectionToggle');
-const keepSilencesToggle = document.getElementById('keepSilencesToggle');
 const recordingView = document.getElementById('recordingView');
-const transcriptPanel = document.getElementById('transcriptPanel');
-const transcriptContent = document.getElementById('transcriptContent');
-const transcriptStatus = document.getElementById('transcriptStatus');
-const segmentBadge = document.getElementById('segmentBadge');
+const recordingNoticeEl = document.getElementById('recordingNotice');
 const processingView = document.getElementById('processingView');
 const processingTitle = document.getElementById('processingTitle');
 const processingStatus = document.getElementById('processingStatus');
@@ -182,6 +183,10 @@ let systemAudioRAF = null;
 let systemAudioActivitySegments = [];
 let systemAudioActivityOpen = null;
 let systemAudioLastActiveSec = 0;
+// System-audio "keep" regions captured per take during this app session,
+// consumed by the on-demand Transcribe & Cut action. Not persisted: after an
+// app restart a cut simply proceeds without them.
+const takeSystemAudioActivity = new Map();
 const SYSTEM_AUDIO_RMS_ACTIVE_THRESHOLD = 0.01;
 const SYSTEM_AUDIO_RELEASE_MS = 400;
 /**
@@ -210,7 +215,6 @@ let saveDebounceTimer = null;
 let persistQueue = Promise.resolve();
 let mediaInitialized = false;
 let mediaIdleTimer = null;
-let speechSegments = [];
 let micSourceNode = null;
 const MEDIA_IDLE_TIMEOUT_MS = 30000;
 
@@ -941,8 +945,7 @@ function buildProjectSavePayload() {
       exportVideoPreset: normalizeExportVideoPreset(exportVideoPresetSelect.value),
       cameraSyncOffsetMs: normalizeCameraSyncOffsetMs(cameraSyncOffsetInput.value),
       pipSize: editorState?.pipSize || PIP_SIZE,
-      systemAudioEnabled: !!systemAudioCheckbox?.checked,
-      autoCutSilences: keepSilencesToggle?.checked !== true
+      systemAudioEnabled: !!systemAudioCheckbox?.checked
     },
     timeline: getProjectTimelineSnapshot()
   };
@@ -1380,9 +1383,6 @@ async function activateProject(projectPath, project, preferredView = 'recording'
   hideFromRecording = project.settings?.hideFromRecording === false ? 'false' : 'true';
   if (systemAudioCheckbox) {
     systemAudioCheckbox.checked = project.settings?.systemAudioEnabled === true;
-  }
-  if (keepSilencesToggle) {
-    keepSilencesToggle.checked = project.settings?.autoCutSilences === false;
   }
   exportAudioPresetSelect.value = normalizeExportAudioPreset(project.settings?.exportAudioPreset);
   exportVideoPresetSelect.value = normalizeExportVideoPreset(project.settings?.exportVideoPreset);
@@ -2407,10 +2407,7 @@ async function updateScreenStream() {
       // stream the user will actually record.
       if (systemAudioFallbackNoticeShown) {
         systemAudioFallbackNoticeShown = false;
-        if (!recording) {
-          setTranscriptStatus('', 'neutral');
-          transcriptPanel?.classList.add('hidden');
-        }
+        if (!recording) clearRecordingNotice();
       }
     } catch (error) {
       console.warn(
@@ -2956,8 +2953,12 @@ function computeRecorderStartOffsetsMs(recorderList) {
   };
 }
 
-function setTranscriptStatus(text, tone = 'neutral') {
-  if (!transcriptStatus) return;
+/**
+ * Surface a recording notice (recorder failures, capture warnings) on the
+ * compact status line in the recording sidebar. Empty text hides the line.
+ */
+function showRecordingNotice(text, tone = 'warning') {
+  if (!recordingNoticeEl) return;
 
   const toneClasses = {
     neutral: 'text-neutral-500',
@@ -2968,21 +2969,13 @@ function setTranscriptStatus(text, tone = 'neutral') {
   const resolvedTone = toneClasses[tone] || toneClasses.neutral;
   const hasText = typeof text === 'string' && text.trim().length > 0;
 
-  transcriptStatus.className = `px-1 pb-1 text-[11px] ${resolvedTone}`;
-  transcriptStatus.classList.toggle('hidden', !hasText);
-  transcriptStatus.textContent = hasText ? text : '';
+  recordingNoticeEl.className = `px-1 py-1.5 text-[11px] ${resolvedTone}`;
+  recordingNoticeEl.classList.toggle('hidden', !hasText);
+  recordingNoticeEl.textContent = hasText ? text : '';
 }
 
-/**
- * Surface a recording notice on the existing transcript status line. The
- * status line lives inside the transcript panel (hidden outside recording),
- * so un-hide the panel when a notice must be visible before recording starts
- * (e.g. the system-audio fallback during source selection).
- */
-function showRecordingNotice(text, tone = 'warning') {
-  const hasText = typeof text === 'string' && text.trim().length > 0;
-  if (hasText && transcriptPanel) transcriptPanel.classList.remove('hidden');
-  setTranscriptStatus(text, tone);
+function clearRecordingNotice() {
+  showRecordingNotice('', 'neutral');
 }
 
 /**
@@ -3015,7 +3008,6 @@ async function startRecording() {
     return;
   }
   recorders = [];
-  speechSegments = [];
   // Fresh take: forget any activity windows captured before Record was
   // pressed so only the actual recording window drives section keep logic.
   systemAudioActivitySegments = [];
@@ -3054,7 +3046,7 @@ async function startRecording() {
         recorders.push(await createRecorder(screenOnly, 'screen', takeId));
       } catch (err) {
         console.error('[Recorder] Failed to prepare screen recorder:', err);
-        setTranscriptStatus(
+        showRecordingNotice(
           `Could not start screen recording: ${err instanceof Error ? err.message : String(err)}`,
           'error'
         );
@@ -3105,7 +3097,7 @@ async function startRecording() {
         recorders.push(await createRecorder(audioOnly, 'audio', takeId));
       } catch (err) {
         console.error('[Recorder] Failed to prepare audio-only recorder:', err);
-        setTranscriptStatus(
+        showRecordingNotice(
           `Could not start microphone recording: ${err instanceof Error ? err.message : String(err)}`,
           'error'
         );
@@ -3153,22 +3145,9 @@ async function startRecording() {
   if (systemAudioCheckbox) systemAudioCheckbox.disabled = true;
   cameraSelect.disabled = true;
   audioSelect.disabled = true;
-  if (keepSilencesToggle) keepSilencesToggle.disabled = true;
 
   startTime = Date.now();
   timerInterval = setInterval(updateTimer, 200);
-
-  // Show transcript panel with a passive note: transcription now runs as a
-  // batch pass over the finalized recording after Stop, so nothing streams
-  // while recording and a long pause can never kill the transcript.
-  transcriptPanel.classList.remove('hidden');
-  transcriptContent.innerHTML = '';
-  segmentBadge.textContent = '0 segments';
-  if (audioStream) {
-    setTranscriptStatus('Transcript will be generated when recording stops', 'neutral');
-  } else {
-    setTranscriptStatus('Transcription unavailable: no microphone selected', 'warning');
-  }
 }
 
 /**
@@ -3920,12 +3899,7 @@ async function stopRecordingImpl() {
   if (systemAudioCheckbox) systemAudioCheckbox.disabled = false;
   cameraSelect.disabled = false;
   audioSelect.disabled = false;
-  if (keepSilencesToggle) keepSilencesToggle.disabled = false;
   timerEl.textContent = '00:00';
-
-  // The transcript panel stays visible for now: the batch transcription pass
-  // below reports its progress on the transcript status line. It is hidden
-  // once the take enters the editor (or on the failure branches).
 
   // Enter editor if we have at least a screen recording
   if (results.screen?.path) {
@@ -3957,24 +3931,23 @@ async function stopRecordingImpl() {
     pendingRecordingAudioSource = null;
     const audioPath = audioSource === 'external' ? audioOnlyPath : null;
 
-    // Flush any still-open system-audio activity window so those "keep"
-    // regions can be merged alongside speech and the section builder never
-    // trims across audible system sound (music, screen narration, demos)
-    // just because the mic was quiet.
+    // Flush any still-open system-audio activity window and stash the
+    // captured "keep" regions for this take. The on-demand Transcribe & Cut
+    // action merges them alongside speech so the section builder never trims
+    // across audible system sound (music, screen narration, demos) just
+    // because the mic was quiet.
     closeSystemAudioActivityWindow();
-    const autoCutSilences = keepSilencesToggle?.checked !== true;
-    let transcriptNotice = false;
+    takeSystemAudioActivity.set(takeId, [...systemAudioActivitySegments]);
 
-    // Durable checkpoint BEFORE any transcription work: the finalized files
-    // plus this recovery take are everything needed to restore the full
-    // recording if the app dies (or transcription fails) from here on. The
-    // sections at this point deliberately keep the whole recording.
-    let activeSegments = [...systemAudioActivitySegments];
-    let sectionsForTimeline = buildRecordingSectionsForTimeline({
-      recordedDuration,
-      activeSegments,
-      autoCutSilences
-    });
+    // The take enters the timeline as one full-length section immediately —
+    // no transcription, no network. Cutting happens later, on demand, via the
+    // editor's Transcribe & Cut button. The recovery checkpoint saved here
+    // (plus the finalized files) is everything needed to restore the full
+    // recording if anything later fails.
+    let sectionsForTimeline = buildDefaultSectionsForDuration(recordedDuration).map((s) => ({
+      ...s,
+      takeId
+    }));
     await saveRecoveryTake({
       id: takeId,
       createdAt: takeCreatedAt,
@@ -3985,112 +3958,8 @@ async function stopRecordingImpl() {
       hasSystemAudio,
       recordedDuration,
       sections: sectionsForTimeline,
-      trimSegments: activeSegments
+      trimSegments: []
     });
-
-    // Batch-transcribe the finalized recording. The mic audio lives either in
-    // the dedicated audio-only file or muxed into the camera file; word
-    // timestamps come back relative to that file, so the per-file recorder
-    // start offset maps them into recording time exactly.
-    let transcriptionSourcePath = null;
-    let transcriptionOffsetSec = 0;
-    if (audioSource === 'external' && audioOnlyPath) {
-      transcriptionSourcePath = audioOnlyPath;
-      transcriptionOffsetSec = recorderStartOffsetsMs.audio / 1000;
-    } else if (audioSource === 'camera' && cameraPath) {
-      transcriptionSourcePath = cameraPath;
-      transcriptionOffsetSec = recorderStartOffsetsMs.camera / 1000;
-    }
-
-    if (transcriptionSourcePath) {
-      setTranscriptStatus('Transcribing recording...', 'neutral');
-      try {
-        const timeoutMs = getTranscriptionTimeoutMs(recordedDuration);
-        const result = await Promise.race([
-          window.electronAPI.transcribeRecording({ sourcePath: transcriptionSourcePath }),
-          new Promise((_, reject) => {
-            setTimeout(
-              () =>
-                reject(
-                  new Error(`transcription timed out after ${Math.round(timeoutMs / 1000)}s`)
-                ),
-              timeoutMs
-            );
-          })
-        ]);
-        if (!matchesActiveProjectSession(projectSession)) return;
-        speechSegments = buildSegmentsFromWords(result?.words || [], {
-          offsetSec: transcriptionOffsetSec
-        });
-        updateSegmentBadge();
-        if (speechSegments.length > 0) {
-          setTranscriptStatus('', 'neutral');
-        } else {
-          console.warn('No speech detected, using full recording');
-          setTranscriptStatus('No speech detected — keeping the full recording', 'warning');
-          transcriptNotice = true;
-        }
-      } catch (err) {
-        if (!matchesActiveProjectSession(projectSession)) return;
-        // The take is already durable (files + recovery checkpoint), so a
-        // transcription failure only costs the auto-cut: keep the full
-        // recording and surface the reason instead of failing silently.
-        console.error('Batch transcription failed, keeping full recording:', err);
-        const reason = err instanceof Error ? err.message : String(err);
-        setTranscriptStatus(`Transcription failed: ${reason} — full recording kept`, 'warning');
-        transcriptNotice = true;
-      }
-    }
-
-    if (speechSegments.length > 0) {
-      activeSegments = [
-        ...speechSegments.filter((s) => !s.deleted),
-        ...systemAudioActivitySegments
-      ];
-      sectionsForTimeline = buildRecordingSectionsForTimeline({
-        recordedDuration,
-        activeSegments,
-        autoCutSilences
-      });
-      // Refresh the recovery checkpoint with the transcript-aware sections so
-      // a crash between here and project persistence recovers the same cut.
-      await saveRecoveryTake({
-        id: takeId,
-        createdAt: takeCreatedAt,
-        screenPath,
-        cameraPath,
-        audioPath,
-        audioSource,
-        hasSystemAudio,
-        recordedDuration,
-        sections: sectionsForTimeline,
-        trimSegments: activeSegments
-      });
-    }
-    if (autoCutSilences && activeSegments.length > 0) {
-      try {
-        const computed = await window.electronAPI.computeSections({
-          segments: activeSegments
-        });
-        sectionsForTimeline = buildRecordingSectionsForTimeline({
-          recordedDuration,
-          activeSegments,
-          autoCutSilences,
-          computedSections: computed?.sections
-        });
-        if (!matchesActiveProjectSession(projectSession)) return;
-      } catch (err) {
-        console.warn('Section computation failed, using fallback sections:', err);
-        sectionsForTimeline = buildRecordingSectionsForTimeline({
-          recordedDuration,
-          activeSegments,
-          autoCutSilences
-        });
-      }
-    }
-
-    // Set takeId on all sections
-    sectionsForTimeline = sectionsForTimeline.map((s) => ({ ...s, takeId }));
 
     // Add take to project before entering editor (video pool needs it)
     if (activeProject) {
@@ -4111,13 +3980,6 @@ async function stopRecordingImpl() {
         audioStartOffsetMs: recorderStartOffsetsMs.audio,
         sections: sectionsForTimeline
       });
-    }
-
-    // Transcription is settled; drop the panel unless it carries a warning
-    // the user should still see next time the recording view is shown.
-    if (!transcriptNotice) {
-      transcriptPanel.classList.add('hidden');
-      setTranscriptStatus('', 'neutral');
     }
 
     let appendResult;
@@ -4193,12 +4055,10 @@ async function stopRecordingImpl() {
       }
     }
   } else if (finalizeErrors.length > 0) {
-    transcriptPanel.classList.add('hidden');
-    setTranscriptStatus('', 'neutral');
     console.error('Recording finalize failed:', finalizeErrors);
     // Best-effort: drop any remaining temp files so the project folder stays
     // clean. The user will have already seen this error surfaced in the
-    // transcript status.
+    // recording notice.
     if (pendingRecordingTakeId) {
       for (const suffix of ['screen', 'camera', 'audio']) {
         window.electronAPI
@@ -4210,8 +4070,6 @@ async function stopRecordingImpl() {
     pendingRecordingAudioSource = null;
     showProjectHomeMessage(finalizeErrors.join(' '));
   } else {
-    transcriptPanel.classList.add('hidden');
-    setTranscriptStatus('', 'neutral');
     pendingRecordingTakeId = null;
     pendingRecordingAudioSource = null;
   }
@@ -6007,18 +5865,174 @@ editorExportPremiereBtn.addEventListener('click', async () => {
   await exportPremiere();
 });
 
-// ===== Keyboard shortcuts =====
+// ===== Transcribe & Cut =====
 
-function updateSegmentBadge() {
-  const total = speechSegments.length;
-  const removed = speechSegments.filter((s) => s.deleted).length;
-  const active = total - removed;
-  if (removed > 0) {
-    segmentBadge.textContent = `${active} segment${active !== 1 ? 's' : ''} (${removed} removed)`;
-  } else {
-    segmentBadge.textContent = `${total} segment${total !== 1 ? 's' : ''}`;
+const transcribeCutBtn = document.getElementById('transcribeCutBtn');
+const transcribeCutStatusEl = document.getElementById('transcribeCutStatus');
+let transcribeCutInFlight = false;
+
+function setTranscribeCutStatus(text, tone = 'neutral') {
+  if (!transcribeCutStatusEl) return;
+  const toneClasses = {
+    neutral: 'text-neutral-500',
+    success: 'text-emerald-400',
+    warning: 'text-amber-400',
+    error: 'text-red-400'
+  };
+  const hasText = typeof text === 'string' && text.trim().length > 0;
+  transcribeCutStatusEl.className = `text-[11px] ${toneClasses[tone] || toneClasses.neutral}`;
+  transcribeCutStatusEl.classList.toggle('hidden', !hasText);
+  transcribeCutStatusEl.textContent = hasText ? text : '';
+}
+
+/**
+ * On-demand transcription and silence cutting for a take already on the
+ * timeline. The take's media files are never touched: on success its timeline
+ * sections are replaced with speech-cut ones (a single undo step), and any
+ * failure, timeout, or mid-flight timeline edit leaves the timeline exactly
+ * as it was.
+ */
+async function transcribeAndCutTake() {
+  if (!editorState || editorState.rendering || transcribeCutInFlight) return;
+  const projectSession = getActiveProjectSession();
+
+  const takeId = resolveTargetTakeId({
+    sections: editorState.sections,
+    selectedSectionId: editorState.selectedSectionId,
+    takes: activeProject?.takes || []
+  });
+  const take = takeId ? activeProject?.takes?.find((t) => t.id === takeId) : null;
+  if (!take) {
+    setTranscribeCutStatus('No take on the timeline to transcribe', 'warning');
+    return;
+  }
+  const source = resolveTranscriptionSource(take);
+  if (!source) {
+    setTranscribeCutStatus('This take has no microphone audio to transcribe', 'warning');
+    return;
+  }
+
+  // Snapshot which sections belong to the take right now, so timeline edits
+  // made while the transcription is in flight abort the cut instead of being
+  // clobbered by it.
+  const sectionIdsAtStart = editorState.sections
+    .filter((s) => s.takeId === takeId)
+    .map((s) => s.id)
+    .join('|');
+
+  transcribeCutInFlight = true;
+  transcribeCutBtn.disabled = true;
+  const originalLabel = transcribeCutBtn.textContent;
+  transcribeCutBtn.textContent = 'Transcribing…';
+  setTranscribeCutStatus('', 'neutral');
+  try {
+    const takeDuration = Math.max(0, Number(take.duration) || 0);
+    const timeoutMs = getTranscriptionTimeoutMs(takeDuration);
+    const result = await Promise.race([
+      window.electronAPI.transcribeRecording({ sourcePath: source.sourcePath }),
+      new Promise((_, reject) => {
+        setTimeout(
+          () =>
+            reject(new Error(`transcription timed out after ${Math.round(timeoutMs / 1000)}s`)),
+          timeoutMs
+        );
+      })
+    ]);
+    if (!matchesActiveProjectSession(projectSession) || !editorState) return;
+
+    const speechSegments = buildSegmentsFromWords(result?.words || [], {
+      offsetSec: source.offsetSec
+    });
+    // Merge system-audio "keep" regions captured while this take recorded so
+    // audible screen sound is never trimmed just because the mic was quiet.
+    const activeSegments = [...speechSegments, ...(takeSystemAudioActivity.get(takeId) || [])];
+    if (activeSegments.length === 0) {
+      setTranscribeCutStatus('No speech detected — nothing to cut', 'warning');
+      return;
+    }
+
+    let computedSections;
+    try {
+      const computed = await window.electronAPI.computeSections({ segments: activeSegments });
+      computedSections = computed?.sections;
+    } catch (err) {
+      console.warn('Section computation failed, falling back to local remap:', err);
+    }
+    if (!matchesActiveProjectSession(projectSession) || !editorState) return;
+
+    const cutSections = buildRecordingSectionsForTimeline({
+      recordedDuration: takeDuration,
+      activeSegments,
+      autoCutSilences: true,
+      computedSections
+    }).map((section) => ({ ...section, id: generateSectionId(), takeId }));
+    if (cutSections.length === 0) {
+      setTranscribeCutStatus('No speech detected — nothing to cut', 'warning');
+      return;
+    }
+    // Snapshot take-local coordinates now: the same section objects get
+    // remapped to timeline-absolute positions once spliced into the editor.
+    const takeLocalSections = cutSections.map((s) => ({ ...s }));
+
+    const sectionIdsNow = editorState.sections
+      .filter((s) => s.takeId === takeId)
+      .map((s) => s.id)
+      .join('|');
+    if (sectionIdsNow !== sectionIdsAtStart) {
+      setTranscribeCutStatus('Timeline changed while transcribing — no cuts applied', 'warning');
+      return;
+    }
+
+    const { sections, replacedCount } = replaceTakeSections(
+      editorState.sections,
+      takeId,
+      cutSections
+    );
+    if (replacedCount === 0) {
+      setTranscribeCutStatus('Take is no longer on the timeline — no cuts applied', 'warning');
+      return;
+    }
+
+    pushUndo();
+    editorState.sections = sections;
+    reindexSections(editorState.sections);
+    editorState.selectedSectionId = cutSections[0].id;
+    editorState.selectedSectionIds = new Set([cutSections[0].id]);
+    recalculateTimelinePositions();
+    syncSectionAnchorKeyframes();
+    renderSectionMarkers();
+    updateSectionZoomControls();
+    refreshWaveform();
+    editorSeek(Math.min(editorState.currentTime, editorState.duration));
+
+    // Keep the persisted take snapshot in sync with the cut (take-local
+    // coordinates), matching what the recording flow stamps at append time.
+    take.sections = takeLocalSections;
+    scheduleProjectSave();
+    setTranscribeCutStatus(
+      `Cut into ${cutSections.length} section${cutSections.length !== 1 ? 's' : ''}`,
+      'success'
+    );
+  } catch (err) {
+    console.error('Transcribe & Cut failed:', err);
+    const reason = err instanceof Error ? err.message : String(err);
+    setTranscribeCutStatus(`Transcription failed: ${reason}`, 'error');
+  } finally {
+    transcribeCutInFlight = false;
+    transcribeCutBtn.disabled = false;
+    transcribeCutBtn.textContent = originalLabel;
   }
 }
+
+if (transcribeCutBtn) {
+  transcribeCutBtn.addEventListener('click', () => {
+    transcribeAndCutTake().catch((err) => {
+      console.error('Transcribe & Cut crashed:', err);
+    });
+  });
+}
+
+// ===== Keyboard shortcuts =====
 
 document.addEventListener('keydown', (e) => {
   if (!editorState || editorState.rendering || activeWorkspaceView !== 'timeline') return;
@@ -6086,14 +6100,6 @@ contentProtectionToggle.addEventListener('change', async () => {
   scheduleProjectSave();
 });
 
-if (keepSilencesToggle) {
-  keepSilencesToggle.addEventListener('change', () => {
-    if (activeProject?.settings) {
-      activeProject.settings.autoCutSilences = !keepSilencesToggle.checked;
-    }
-    scheduleProjectSave();
-  });
-}
 
 exportAudioPresetSelect.addEventListener('change', () => {
   exportAudioPresetSelect.value = normalizeExportAudioPreset(exportAudioPresetSelect.value);
