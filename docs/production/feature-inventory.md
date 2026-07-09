@@ -146,12 +146,10 @@ Acceptance criteria:
 
 - Play/pause/seek across section boundaries and multiple takes.
 - Sync optional camera playback to screen with soft/hard resync policy.
-- Apply an optional per-project camera sync offset to advance or delay camera playback relative to screen/audio.
 
 Acceptance criteria:
 
 - Playback crosses section boundaries without visible dead frames.
-- Camera sync offset affects seek/playback consistently across section switches.
 - End-of-timeline pauses and resets controls safely.
 
 ### E3. Section editing
@@ -216,7 +214,6 @@ Acceptance criteria:
 - App renders timeline sections into final MP4 with ffmpeg:
   - trims source sections
   - concatenates audio/video
-  - applies optional camera sync offset compensation before camera compositing
   - applies fit/fill and camera PiP/fullscreen keyframe transitions
   - outputs CFR stream
 

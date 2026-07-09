@@ -9,11 +9,7 @@ import {
   type ExportAudioPreset,
   type ExportVideoPreset
 } from '../../shared/domain/project';
-import {
-  renderComposite,
-  type RenderCompositeDeps,
-  type RenderTakeInput
-} from './render-service';
+import { renderComposite, type RenderCompositeDeps, type RenderTakeInput } from './render-service';
 
 const PREVIEW_FILE_PREFIX = 'preview-';
 const PREVIEW_FILE_SUFFIX = '.mp4';
@@ -61,7 +57,6 @@ export interface ComputeTimelineHashInput {
   pipSize: number;
   screenFitMode: ScreenFitMode;
   screenTransform?: unknown;
-  cameraSyncOffsetMs: number;
   sourceWidth: number;
   sourceHeight: number;
 }
@@ -134,7 +129,6 @@ export function computeTimelineHash(input: ComputeTimelineHashInput): string {
     st: transform
       ? [round(transform.x, 2), round(transform.y, 2), round(transform.scale, 4)]
       : null,
-    camSync: Math.round(Number(input?.cameraSyncOffsetMs) || 0),
     w: Math.round(Number(input?.sourceWidth) || 0),
     h: Math.round(Number(input?.sourceHeight) || 0)
   };
@@ -163,7 +157,6 @@ export interface GeneratePreviewOpts {
   pipSize: number;
   screenFitMode: ScreenFitMode;
   screenTransform?: unknown;
-  cameraSyncOffsetMs: number;
   sourceWidth: number;
   sourceHeight: number;
 }
@@ -220,7 +213,6 @@ export async function generatePreview(
       screenTransform: opts.screenTransform,
       exportAudioPreset,
       exportVideoPreset,
-      cameraSyncOffsetMs: opts.cameraSyncOffsetMs,
       sourceWidth: opts.sourceWidth,
       sourceHeight: opts.sourceHeight,
       outputPath: previewPath

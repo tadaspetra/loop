@@ -50,7 +50,6 @@ describe('main/services/preview-render-service integration', () => {
       keyframes,
       pipSize: 400,
       screenFitMode: 'fill',
-      cameraSyncOffsetMs: 0,
       sourceWidth: 1920,
       sourceHeight: 1080
     });
@@ -74,7 +73,6 @@ describe('main/services/preview-render-service integration', () => {
         keyframes,
         pipSize: 400,
         screenFitMode: 'fill',
-        cameraSyncOffsetMs: 0,
         sourceWidth: 1920,
         sourceHeight: 1080
       },
@@ -134,7 +132,6 @@ describe('main/services/preview-render-service integration', () => {
         keyframes,
         pipSize: 400,
         screenFitMode: 'fill',
-        cameraSyncOffsetMs: 0,
         sourceWidth: 1920,
         sourceHeight: 1080
       },

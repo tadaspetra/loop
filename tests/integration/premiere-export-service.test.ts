@@ -41,7 +41,10 @@ function baseKeyframe(overrides: Partial<Keyframe> = {}): Keyframe {
   };
 }
 
-function makeBaseOpts(tmpDir: string, opts: Partial<PremiereExportOptions> = {}): PremiereExportOptions {
+function makeBaseOpts(
+  tmpDir: string,
+  opts: Partial<PremiereExportOptions> = {}
+): PremiereExportOptions {
   const screenPath = path.join(tmpDir, 'screen.webm');
   const cameraPath = path.join(tmpDir, 'camera.webm');
   fs.writeFileSync(screenPath, 'screen', 'utf8');
@@ -53,7 +56,6 @@ function makeBaseOpts(tmpDir: string, opts: Partial<PremiereExportOptions> = {})
     pipSize: 422,
     sourceWidth: 1920,
     sourceHeight: 1080,
-    cameraSyncOffsetMs: 0,
     takes: [
       {
         id: 'take-1',
@@ -85,7 +87,6 @@ describe('main/services/premiere-export-service', () => {
         pipSize: 422,
         sourceWidth: 1920,
         sourceHeight: 1080,
-        cameraSyncOffsetMs: 0,
         takes: [],
         sections: [],
         keyframes: []
@@ -172,7 +173,9 @@ describe('main/services/premiere-export-service', () => {
 
     // Screen clip carries a Basic Motion fit scale of 50% (1920/3840) so the
     // 4K capture fills the 1080p frame.
-    expect(xml).toMatch(/<parameterid>scale<\/parameterid>\s*<name>Scale<\/name>[\s\S]*?<value>50\.000<\/value>/);
+    expect(xml).toMatch(
+      /<parameterid>scale<\/parameterid>\s*<name>Scale<\/name>[\s\S]*?<value>50\.000<\/value>/
+    );
 
     expect(result.xmlPath).toBe(xmlPath);
     expect(result.outputFolder).toBe(opts.outputFolder);
@@ -326,7 +329,14 @@ describe('main/services/premiere-export-service', () => {
           fps: null,
           raw: {}
         });
-        onProgress?.({ status: 'end', outTimeSec: 4, frame: null, speed: null, fps: null, raw: {} });
+        onProgress?.({
+          status: 'end',
+          outTimeSec: 4,
+          frame: null,
+          speed: null,
+          fps: null,
+          raw: {}
+        });
         const outPath = args[args.length - 1];
         if (outPath && outPath.endsWith('.mp4')) {
           fs.mkdirSync(path.dirname(outPath), { recursive: true });
@@ -368,5 +378,4 @@ describe('main/services/premiere-export-service', () => {
 
     expect(calls).toHaveLength(2);
   });
-
 });

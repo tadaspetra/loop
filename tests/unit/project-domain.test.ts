@@ -8,7 +8,6 @@ import {
   MAX_PIP_SIZE,
   MAX_RECORDER_START_OFFSET_MS,
   MIN_PIP_SIZE,
-  normalizeCameraSyncOffsetMs,
   normalizeKeyframes,
   normalizePipSize,
   normalizeProjectData,
@@ -196,16 +195,7 @@ describe('shared/domain/project', () => {
     expect(fallbackProject.settings.exportVideoPreset).toBe('quality');
   });
 
-  test('normalizeCameraSyncOffsetMs rounds and clamps camera sync offset values', () => {
-    expect(normalizeCameraSyncOffsetMs(undefined)).toBe(0);
-    expect(normalizeCameraSyncOffsetMs('125.7')).toBe(126);
-    expect(normalizeCameraSyncOffsetMs('-1999.6')).toBe(-2000);
-    expect(normalizeCameraSyncOffsetMs(5000)).toBe(2000);
-    expect(normalizeCameraSyncOffsetMs(-5000)).toBe(-2000);
-    expect(normalizeCameraSyncOffsetMs('nope')).toBe(0);
-  });
-
-  test('normalizeProjectData preserves valid camera sync offset and defaults invalid values', () => {
+  test('normalizeProjectData ignores the retired cameraSyncOffsetMs setting on legacy files', () => {
     const project = normalizeProjectData(
       {
         settings: {
@@ -214,18 +204,9 @@ describe('shared/domain/project', () => {
       },
       '/tmp/my-project'
     );
-    const fallbackProject = normalizeProjectData(
-      {
-        settings: {
-          cameraSyncOffsetMs: 'bad'
-        }
-      },
-      '/tmp/my-project'
-    );
 
-    expect(project.settings.cameraSyncOffsetMs).toBe(135);
-    expect(fallbackProject.settings.cameraSyncOffsetMs).toBe(0);
-    expect(createDefaultProject('Demo').settings.cameraSyncOffsetMs).toBe(0);
+    expect(project.settings).not.toHaveProperty('cameraSyncOffsetMs');
+    expect(createDefaultProject('Demo').settings).not.toHaveProperty('cameraSyncOffsetMs');
   });
 
   test('normalizePipSize clamps and defaults invalid values', () => {

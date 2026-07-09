@@ -535,48 +535,6 @@ describe('main/services/render-service', () => {
     expect(argString).not.toContain('scale=1510:982');
   });
 
-  test('renderComposite advances camera video when camera sync offset is positive', async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-camera-sync-'));
-    const outputDir = path.join(tmpDir, 'out');
-    const screenPath = path.join(tmpDir, 'screen.webm');
-    const cameraPath = path.join(tmpDir, 'camera.webm');
-    fs.writeFileSync(screenPath, 'screen', 'utf8');
-    fs.writeFileSync(cameraPath, 'camera', 'utf8');
-
-    const execCalls: { bin: string; args: string[] }[] = [];
-    await renderComposite(
-      {
-        outputFolder: outputDir,
-        takes: [{ id: 'take-1', screenPath, cameraPath }],
-        sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.0 }],
-        keyframes: [
-          { time: 0, pipX: 10, pipY: 10, pipVisible: true, cameraFullscreen: false }
-        ] as Keyframe[],
-        pipSize: 300,
-        sourceWidth: 1920,
-        sourceHeight: 1080,
-        screenFitMode: 'fill',
-        cameraSyncOffsetMs: 120
-      },
-      {
-        ffmpegPath: '/usr/bin/ffmpeg',
-        now: () => 147,
-        probeVideoFpsWithFfmpeg: async () => 30,
-        runFfmpeg: createRunFfmpegStub(({ ffmpegPath, args }) => {
-          execCalls.push({ bin: ffmpegPath, args });
-        })
-      }
-    );
-
-    const argString = execCalls[0].args.join(' ');
-    // User camera sync offset shifts the sample window; tpad + trim=duration
-    // is used to clone-pad past the source tail when the shifted window
-    // would otherwise run out of content.
-    expect(argString).toContain(
-      '[1:v]fps=30,trim=start=0.120:end=1.120,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.120,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]'
-    );
-  });
-
   test('renderComposite applies clamped section pan to background crop', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-pan-'));
     const outputDir = path.join(tmpDir, 'out');
@@ -1392,10 +1350,8 @@ describe('main/services/render-service', () => {
     await renderComposite(
       {
         outputFolder: outputDir,
-        // Screen is the anchor; camera first-chunk arrived 120ms later. A
-        // user-dialed +30ms fine-tune is additive (sample even later than
-        // the auto correction). Expected net camera shift = -0.12 + 0.03 =
-        // -0.09, so the trim window slides 90ms earlier.
+        // Screen is the anchor; camera first-chunk arrived 120ms later, so
+        // the camera shift is -0.12 and the trim window slides 120ms earlier.
         takes: [
           {
             id: 'take-1',
@@ -1412,8 +1368,7 @@ describe('main/services/render-service', () => {
         pipSize: 300,
         sourceWidth: 1920,
         sourceHeight: 1080,
-        screenFitMode: 'fill',
-        cameraSyncOffsetMs: 30
+        screenFitMode: 'fill'
       },
       {
         ffmpegPath: '/usr/bin/ffmpeg',
@@ -1426,11 +1381,11 @@ describe('main/services/render-service', () => {
     );
 
     const argString = execCalls[0].args.join(' ');
-    // Interior section (sectionStart >> 0) with net negative shift: no
-    // start-pad (effectiveStart > 0) and no stop-pad (the shifted window
-    // stays inside the source). Output duration = nominal 1.000s.
+    // Interior section (sectionStart >> 0) with negative shift: no start-pad
+    // (effectiveStart > 0) and no stop-pad (the shifted window stays inside
+    // the source). Output duration = nominal 1.000s.
     expect(argString).toContain(
-      '[1:v]fps=30,trim=start=1.910:end=2.910,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.000,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]'
+      '[1:v]fps=30,trim=start=1.880:end=2.880,setpts=PTS-STARTPTS,tpad=start_mode=clone:start_duration=0.000:stop_mode=clone:stop_duration=0.000,trim=duration=1.000,setpts=PTS-STARTPTS[cv0]'
     );
   });
 

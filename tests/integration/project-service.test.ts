@@ -48,10 +48,8 @@ describe('main/services/project-service integration', () => {
     expect(second.projectPath).not.toBe(first.projectPath);
     expect(first.project.settings.exportAudioPreset).toBe('compressed');
     expect(first.project.settings.exportVideoPreset).toBe('quality');
-    expect(first.project.settings.cameraSyncOffsetMs).toBe(0);
     expect(second.project.settings.exportAudioPreset).toBe('compressed');
     expect(second.project.settings.exportVideoPreset).toBe('quality');
-    expect(second.project.settings.cameraSyncOffsetMs).toBe(0);
   });
 
   test('saveProject and openProject round-trip takes and relative paths', () => {
@@ -68,8 +66,7 @@ describe('main/services/project-service integration', () => {
         settings: {
           ...created.project.settings,
           exportAudioPreset: 'compressed',
-          exportVideoPreset: 'fast',
-          cameraSyncOffsetMs: 145
+          exportVideoPreset: 'fast'
         },
         takes: [
           {
@@ -115,7 +112,7 @@ describe('main/services/project-service integration', () => {
     expect(raw.timeline.keyframes[0].backgroundPanY).toBe(-0.4);
     expect(raw.settings.exportAudioPreset).toBe('compressed');
     expect(raw.settings.exportVideoPreset).toBe('fast');
-    expect(raw.settings.cameraSyncOffsetMs).toBe(145);
+    expect(raw.settings).not.toHaveProperty('cameraSyncOffsetMs');
 
     const opened = service.openProject(created.projectPath);
     expect(opened.project.takes[0].screenPath).toBe(screenPath);
@@ -125,7 +122,6 @@ describe('main/services/project-service integration', () => {
     expect(opened.project.timeline.keyframes[0].backgroundPanY).toBe(-0.4);
     expect(opened.project.settings.exportAudioPreset).toBe('compressed');
     expect(opened.project.settings.exportVideoPreset).toBe('fast');
-    expect(opened.project.settings.cameraSyncOffsetMs).toBe(145);
   });
 
   test('proxyPath round-trips through save and open as relative path', () => {
@@ -190,9 +186,7 @@ describe('main/services/project-service integration', () => {
       }
     });
 
-    const raw = JSON.parse(
-      fs.readFileSync(path.join(created.projectPath, 'project.json'), 'utf8')
-    );
+    const raw = JSON.parse(fs.readFileSync(path.join(created.projectPath, 'project.json'), 'utf8'));
     expect(raw.takes[0].cameraProxyPath).toBe('camera-proxy-v2.mp4');
 
     const opened = service.openProject(created.projectPath);
@@ -258,9 +252,7 @@ describe('main/services/project-service integration', () => {
       }
     });
 
-    const raw = JSON.parse(
-      fs.readFileSync(path.join(created.projectPath, 'project.json'), 'utf8')
-    );
+    const raw = JSON.parse(fs.readFileSync(path.join(created.projectPath, 'project.json'), 'utf8'));
     expect(raw.takes[0].screenStartOffsetMs).toBe(0);
     expect(raw.takes[0].cameraStartOffsetMs).toBe(187);
     expect(raw.takes[0].audioStartOffsetMs).toBe(0);

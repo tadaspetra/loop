@@ -23,7 +23,6 @@ Built with Electron, ffmpeg, and ElevenLabs Scribe, loop keeps the editing loop 
 - Lets you remove unwanted transcript segments before the first edit pass.
 - Builds timeline sections automatically from spoken content.
 - Provides a timeline editor for split, trim, undo/redo, playback, and section-level camera layout changes.
-- Lets you apply a per-project camera sync offset when facecam video arrives slightly late.
 - Renders the final video with ffmpeg, including camera picture-in-picture or fullscreen transitions.
 - Saves work as project data so recording sessions can be resumed and re-edited.
 
@@ -67,7 +66,7 @@ Automatic section building is just the starting point. You can still:
 
 ### Camera composition controls
 
-loop supports screen-only output, picture-in-picture camera, and fullscreen camera moments. Camera layout can be changed over time with section keyframes, and the timeline header includes a camera sync offset for delayed capture devices such as HDMI capture dongles.
+loop supports screen-only output, picture-in-picture camera, and fullscreen camera moments. Camera layout can be changed over time with section keyframes.
 
 ### Project-based workflow
 

@@ -8,7 +8,6 @@ import {
   normalizeAudioSource,
   normalizeBackgroundPan,
   normalizeBackgroundZoom,
-  normalizeCameraSyncOffsetMs,
   normalizeExportAudioPreset,
   normalizeExportVideoPreset,
   normalizeScreenTransform,
@@ -66,7 +65,6 @@ export interface RenderCompositeOptions {
   screenTransform?: unknown;
   exportAudioPreset?: ExportAudioPreset;
   exportVideoPreset?: ExportVideoPreset;
-  cameraSyncOffsetMs?: number;
   sourceWidth?: number;
   sourceHeight?: number;
   outputFolder?: string;
@@ -300,7 +298,7 @@ function buildShiftedVideoTrim(
   // For a meaningful shift, we still need tpad + trim=duration so the
   // shifted window can clone-pad across the source boundary it would
   // otherwise fall off. This path is only taken when recorder-start
-  // offsets or the user's camera-sync offset are non-trivial.
+  // offsets are non-trivial.
   const { sampleStart, sampleEnd, startPad, stopPad, duration } = computeShiftedTrimWindow(
     sectionStart,
     sectionEnd,
@@ -353,30 +351,23 @@ function buildShiftedAudioTrim(
 
 /**
  * Returns the ffmpeg filter chain that trims the camera input for a single
- * section, shifting the source window by the combined auto-measured recorder
- * start skew and the user's manual `cameraSyncOffsetMs` fine-tune.
+ * section, shifting the source window by the auto-measured recorder start
+ * skew.
  *
- * Sign conventions:
- * - `cameraStartOffsetMs` (auto): how much later than the anchor recorder the
- *   camera produced its first chunk. Positive means camera content is delayed
- *   relative to the anchor, so we sample it EARLIER to re-align.
- * - `cameraSyncOffsetMs` (user): positive means "advance the camera"
- *   (= sample later in the camera file), matching the editor-playback
- *   semantics of `resolveCameraPlaybackTargetTime(screenTime, offsetMs)`.
- *
- * Effective shift = userOffsetMs/1000 - cameraStartOffsetMs/1000.
+ * Sign convention: `cameraStartOffsetMs` is how much later than the anchor
+ * recorder the camera produced its first chunk. Positive means camera
+ * content is delayed relative to the anchor, so we sample it EARLIER to
+ * re-align.
  */
 export function buildCameraTrimFilter(
   cameraIdx: number,
   section: RenderSectionInput,
   targetFps: number,
   index: number,
-  cameraSyncOffsetMs: number,
   cameraStartOffsetMs = 0
 ): string {
-  const userOffsetSec = normalizeCameraSyncOffsetMs(cameraSyncOffsetMs) / 1000;
   const autoOffsetSec = Math.max(0, Number(cameraStartOffsetMs) || 0) / 1000;
-  const shiftSec = userOffsetSec - autoOffsetSec;
+  const shiftSec = -autoOffsetSec;
   return buildShiftedVideoTrim(
     `[${cameraIdx}:v]`,
     Number(section.sourceStart),
@@ -582,7 +573,6 @@ export async function renderComposite(
   const screenTransform = normalizeScreenTransform(opts.screenTransform);
   const exportAudioPreset = normalizeExportAudioPreset(opts.exportAudioPreset);
   const exportVideoPreset = normalizeExportVideoPreset(opts.exportVideoPreset);
-  const cameraSyncOffsetMs = normalizeCameraSyncOffsetMs(opts.cameraSyncOffsetMs);
   const sourceWidth = Number.isFinite(Number(opts.sourceWidth)) ? Number(opts.sourceWidth) : 1920;
   const sourceHeight = Number.isFinite(Number(opts.sourceHeight))
     ? Number(opts.sourceHeight)
@@ -815,14 +805,7 @@ export async function renderComposite(
       const duration = (Number(section.sourceEnd) - Number(section.sourceStart)).toFixed(3);
       if (cameraIdx >= 0) {
         filterParts.push(
-          buildCameraTrimFilter(
-            cameraIdx,
-            section,
-            targetFps,
-            index,
-            cameraSyncOffsetMs,
-            cameraStartOffsetMs
-          )
+          buildCameraTrimFilter(cameraIdx, section, targetFps, index, cameraStartOffsetMs)
         );
       } else {
         filterParts.push(

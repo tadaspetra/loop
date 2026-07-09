@@ -28,15 +28,12 @@ function defaultHashInput() {
         audioMtimeMs: null
       }
     ],
-    sections: [
-      { takeId: 'take-1', sourceStart: 0, sourceEnd: 5 }
-    ],
+    sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 5 }],
     keyframes: [
       { time: 0, pipX: 10, pipY: 20, pipVisible: true, cameraFullscreen: false }
     ] as Keyframe[],
     pipSize: 400,
     screenFitMode: 'fill' as const,
-    cameraSyncOffsetMs: 0,
     sourceWidth: 1920,
     sourceHeight: 1080
   };
@@ -173,7 +170,6 @@ describe('main/services/preview-render-service', () => {
           keyframes: [],
           pipSize: 400,
           screenFitMode: 'fill',
-          cameraSyncOffsetMs: 0,
           sourceWidth: 1920,
           sourceHeight: 1080
         },
@@ -196,7 +192,11 @@ describe('main/services/preview-render-service', () => {
       const hash = 'deadbeefcafebabe';
       const previewPath = derivePreviewPath(dir, hash);
 
-      const calls: Array<{ outputPath?: string; exportVideoPreset?: string; exportAudioPreset?: string }> = [];
+      const calls: Array<{
+        outputPath?: string;
+        exportVideoPreset?: string;
+        exportAudioPreset?: string;
+      }> = [];
       await generatePreview(
         {
           projectFolder: dir,
@@ -206,7 +206,6 @@ describe('main/services/preview-render-service', () => {
           keyframes: [],
           pipSize: 400,
           screenFitMode: 'fill',
-          cameraSyncOffsetMs: 0,
           sourceWidth: 1920,
           sourceHeight: 1080
         },

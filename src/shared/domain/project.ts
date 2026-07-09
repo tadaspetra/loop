@@ -1,13 +1,7 @@
 import path from 'node:path';
 
-import {
-  MAX_CAMERA_SYNC_OFFSET_MS,
-  MIN_CAMERA_SYNC_OFFSET_MS,
-  normalizeCameraSyncOffsetMs
-} from './camera-sync';
 import { normalizeScreenTransform, type ScreenTransform } from './screen-layout';
 
-export { MAX_CAMERA_SYNC_OFFSET_MS, MIN_CAMERA_SYNC_OFFSET_MS, normalizeCameraSyncOffsetMs };
 export { normalizeScreenTransform, type ScreenTransform };
 
 export const MIN_BACKGROUND_ZOOM = 1;
@@ -71,7 +65,6 @@ export interface ProjectSettings {
   hideFromRecording: boolean;
   exportAudioPreset: ExportAudioPreset;
   exportVideoPreset: ExportVideoPreset;
-  cameraSyncOffsetMs: number;
   pipSize: number;
   // Whether the user has asked to capture system/desktop audio alongside
   // screen video. Sticky per project so toggling during editing does not
@@ -344,7 +337,6 @@ export function createDefaultProject(name: unknown = 'Untitled Project'): Projec
       hideFromRecording: true,
       exportAudioPreset: EXPORT_AUDIO_PRESET_COMPRESSED,
       exportVideoPreset: EXPORT_VIDEO_PRESET_QUALITY,
-      cameraSyncOffsetMs: 0,
       pipSize: DEFAULT_PIP_SIZE,
       systemAudioEnabled: false
     },
@@ -389,7 +381,6 @@ export function normalizeProjectData(rawProject: unknown, projectFolder?: string
       hideFromRecording: rawSettings.hideFromRecording !== false,
       exportAudioPreset: normalizeExportAudioPreset(rawSettings.exportAudioPreset),
       exportVideoPreset: normalizeExportVideoPreset(rawSettings.exportVideoPreset),
-      cameraSyncOffsetMs: normalizeCameraSyncOffsetMs(rawSettings.cameraSyncOffsetMs),
       pipSize: normalizePipSize(rawSettings.pipSize),
       systemAudioEnabled: rawSettings.systemAudioEnabled === true
     },

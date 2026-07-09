@@ -26,20 +26,12 @@
             id="newProjectName"
             type="text"
             placeholder="Project name"
-            class="flex-1 bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-neutral-600 focus:border-neutral-600 placeholder:text-neutral-600 transition-colors"
+            class="field flex-1 px-3 py-2"
           />
-          <button
-            id="createProjectBtn"
-            type="button"
-            class="px-4 py-2 bg-white text-neutral-950 hover:bg-neutral-200 rounded-lg text-sm font-medium transition-colors"
-          >
+          <button id="createProjectBtn" type="button" class="btn btn-primary px-4 py-2">
             Create
           </button>
-          <button
-            id="openProjectBtn"
-            type="button"
-            class="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors"
-          >
+          <button id="openProjectBtn" type="button" class="btn btn-secondary px-4 py-2">
             Open Folder
           </button>
         </div>
@@ -59,10 +51,7 @@
             </div>
             <div class="text-xs text-neutral-500 truncate" id="lastProjectPath">-</div>
           </div>
-          <button
-            id="resumeLastBtn"
-            class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors shrink-0 ml-3"
-          >
+          <button id="resumeLastBtn" class="btn btn-secondary px-3 py-1.5 shrink-0 ml-3">
             Resume
           </button>
         </div>
@@ -79,8 +68,8 @@
       id="workspaceHeader"
       class="hidden border-b border-neutral-800/80 bg-neutral-950/95 backdrop-blur-md px-4 py-3"
     >
-      <div class="w-full flex items-center gap-3">
-        <div class="min-w-0 flex-1">
+      <div class="w-full flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div class="min-w-0 flex-1 basis-40">
           <div id="activeProjectName" class="text-sm font-semibold truncate">Project</div>
           <div
             id="activeProjectPath"
@@ -96,31 +85,11 @@
           </button>
         </div>
         <label
-          id="cameraSyncOffsetControl"
-          class="hidden items-center gap-2 text-xs text-neutral-400"
-          title="Positive values advance delayed camera video to match audio."
-        >
-          <span class="uppercase tracking-wider text-neutral-500">Camera sync</span>
-          <input
-            id="cameraSyncOffsetMs"
-            type="number"
-            min="-2000"
-            max="2000"
-            step="10"
-            value="0"
-            class="w-20 bg-neutral-900 border border-neutral-800 rounded-lg px-2.5 py-1.5 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-neutral-600 transition-colors"
-          />
-          <span class="text-neutral-500">ms</span>
-        </label>
-        <label
           id="exportAudioPresetControl"
           class="hidden items-center gap-2 text-xs text-neutral-400"
         >
           <span class="uppercase tracking-wider text-neutral-500">Export audio</span>
-          <select
-            id="exportAudioPreset"
-            class="bg-neutral-900 border border-neutral-800 rounded-lg px-2.5 py-1.5 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-neutral-600 transition-colors"
-          >
+          <select id="exportAudioPreset" class="field px-2.5 py-1.5">
             <option value="off">Off</option>
             <option value="compressed" selected>Compressed</option>
           </select>
@@ -131,17 +100,14 @@
           title="Use Fast for quick review exports and Quality for final delivery."
         >
           <span class="uppercase tracking-wider text-neutral-500">Export speed</span>
-          <select
-            id="exportVideoPreset"
-            class="bg-neutral-900 border border-neutral-800 rounded-lg px-2.5 py-1.5 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-neutral-600 transition-colors"
-          >
+          <select id="exportVideoPreset" class="field px-2.5 py-1.5">
             <option value="fast">Fast</option>
             <option value="quality" selected>Quality</option>
           </select>
         </label>
         <button
           id="recordBtn"
-          class="hidden px-4 py-1.5 bg-red-600 hover:bg-red-700 rounded-lg text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          class="hidden btn px-4 py-1.5 bg-red-600 hover:bg-red-700 font-medium"
           disabled
         >
           Record
@@ -149,23 +115,18 @@
         <span id="timer" class="hidden text-sm text-neutral-500 font-mono tabular-nums">00:00</span>
         <button
           id="editorExportPremiereBtn"
-          class="hidden px-4 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-neutral-100 rounded-lg text-sm font-medium transition-colors min-w-[140px] text-center"
+          class="hidden btn btn-secondary px-4 py-1.5 font-medium text-center min-w-[140px]"
           title="Export a Premiere Pro-compatible .xml with ProRes media"
         >
           Export to Premiere
         </button>
         <button
           id="editorRenderBtn"
-          class="hidden px-4 py-1.5 bg-white text-neutral-950 hover:bg-neutral-200 rounded-lg text-sm font-medium transition-colors min-w-[80px] text-center"
+          class="hidden btn btn-primary px-4 py-1.5 text-center min-w-[80px]"
         >
           Render
         </button>
-        <button
-          id="switchProjectBtn"
-          class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors"
-        >
-          Projects
-        </button>
+        <button id="switchProjectBtn" class="btn btn-secondary px-3 py-1.5">Projects</button>
       </div>
     </div>
 
@@ -176,51 +137,27 @@
         <!-- Source selectors -->
         <div class="space-y-2">
           <div>
-            <label class="block text-xs font-medium text-neutral-500 uppercase tracking-wider mb-1"
-              >Screen</label
-            >
-            <select
-              id="screenSource"
-              class="w-full bg-neutral-900 border border-neutral-800 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-neutral-600 transition-colors"
-            ></select>
+            <label class="form-label mb-1">Screen</label>
+            <select id="screenSource" class="field w-full px-2.5 py-1.5"></select>
             <label class="mt-1.5 flex items-center gap-2 text-xs text-neutral-400 cursor-pointer">
-              <input
-                type="checkbox"
-                id="systemAudioCheckbox"
-                class="accent-neutral-400"
-              />
+              <input type="checkbox" id="systemAudioCheckbox" class="accent-neutral-400" />
               <span>Include system audio</span>
             </label>
           </div>
           <div>
-            <label class="block text-xs font-medium text-neutral-500 uppercase tracking-wider mb-1"
-              >Mode</label
-            >
-            <select
-              id="screenFit"
-              class="w-full bg-neutral-900 border border-neutral-800 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-neutral-600 transition-colors"
-            >
+            <label class="form-label mb-1">Mode</label>
+            <select id="screenFit" class="field w-full px-2.5 py-1.5">
               <option value="fill">Fill</option>
               <option value="fit">Fit</option>
             </select>
           </div>
           <div>
-            <label class="block text-xs font-medium text-neutral-500 uppercase tracking-wider mb-1"
-              >Camera</label
-            >
-            <select
-              id="cameraSource"
-              class="w-full bg-neutral-900 border border-neutral-800 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-neutral-600 transition-colors"
-            ></select>
+            <label class="form-label mb-1">Camera</label>
+            <select id="cameraSource" class="field w-full px-2.5 py-1.5"></select>
           </div>
           <div>
-            <label class="block text-xs font-medium text-neutral-500 uppercase tracking-wider mb-1"
-              >Microphone</label
-            >
-            <select
-              id="audioSource"
-              class="w-full bg-neutral-900 border border-neutral-800 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-neutral-600 transition-colors"
-            ></select>
+            <label class="form-label mb-1">Microphone</label>
+            <select id="audioSource" class="field w-full px-2.5 py-1.5"></select>
           </div>
         </div>
 
@@ -233,13 +170,13 @@
             <span id="folderPath" class="text-xs truncate flex-1 text-neutral-500">Not set</span>
             <button
               id="openFolderBtn"
-              class="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-md text-xs transition-colors hidden"
+              class="hidden btn btn-secondary px-2 py-1 rounded-md text-xs"
             >
               Open
             </button>
             <button
               id="pickFolderBtn"
-              class="hidden px-2 py-1 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-md text-xs transition-colors"
+              class="hidden btn btn-secondary px-2 py-1 rounded-md text-xs"
             >
               Browse
             </button>
@@ -460,12 +397,12 @@
         </div>
 
         <!-- Playback controls -->
-        <div class="flex items-center justify-center gap-2">
+        <div class="flex flex-wrap items-center justify-center gap-2">
           <button
             id="editorUndoBtn"
             title="Ctrl+Z"
             disabled
-            class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors disabled:opacity-40 disabled:cursor-default disabled:hover:bg-neutral-800"
+            class="btn btn-secondary px-3.5 py-1.5"
           >
             Undo
           </button>
@@ -473,43 +410,23 @@
             id="editorRedoBtn"
             title="Ctrl+Shift+Z"
             disabled
-            class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors disabled:opacity-40 disabled:cursor-default disabled:hover:bg-neutral-800"
+            class="btn btn-secondary px-3.5 py-1.5"
           >
             Redo
           </button>
-          <button
-            id="editorPlayBtn"
-            title="Space"
-            class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors"
-          >
+          <button id="editorPlayBtn" title="Space" class="btn btn-secondary px-3.5 py-1.5">
             Play
           </button>
-          <button
-            id="editorSplitBtn"
-            title="S"
-            class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors"
-          >
+          <button id="editorSplitBtn" title="S" class="btn btn-secondary px-3.5 py-1.5">
             Split
           </button>
-          <button
-            id="editorToggleCamBtn"
-            title="C"
-            class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors"
-          >
+          <button id="editorToggleCamBtn" title="C" class="btn btn-secondary px-3.5 py-1.5">
             Camera
           </button>
-          <button
-            id="editorCamFullBtn"
-            title="F"
-            class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors"
-          >
+          <button id="editorCamFullBtn" title="F" class="btn btn-secondary px-3.5 py-1.5">
             Fullscreen
           </button>
-          <button
-            id="editorImageBtn"
-            title="I"
-            class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors"
-          >
+          <button id="editorImageBtn" title="I" class="btn btn-secondary px-3.5 py-1.5">
             Image
           </button>
           <div
@@ -532,17 +449,14 @@
             >
           </div>
           <div class="w-px h-5 bg-neutral-800 mx-1"></div>
-          <button
-            id="editorApplyFutureBtn"
-            class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors"
-          >
+          <button id="editorApplyFutureBtn" class="btn btn-secondary px-3.5 py-1.5">
             Apply to Future
           </button>
           <div class="w-px h-5 bg-neutral-800 mx-1"></div>
           <button
             id="transcribeCutBtn"
             title="Transcribe the take and cut out silences"
-            class="px-3.5 py-1.5 bg-neutral-100 hover:bg-white text-neutral-950 font-medium rounded-lg text-sm transition-colors disabled:opacity-40 disabled:cursor-default"
+            class="btn btn-primary px-3.5 py-1.5"
           >
             Transcribe &amp; Cut
           </button>
@@ -574,31 +488,21 @@
         <div>
           <h2 class="text-lg font-semibold">Unfinished recordings found</h2>
           <p id="orphanRecoveryDescription" class="text-xs text-neutral-400 mt-1">
-            We found recordings from a previous session that didn't finish saving. Recover them
-            into this project or discard them.
+            We found recordings from a previous session that didn't finish saving. Recover them into
+            this project or discard them.
           </p>
         </div>
-        <div
-          id="orphanRecoveryList"
-          class="space-y-1.5 max-h-60 overflow-y-auto text-sm"
-        ></div>
-        <div
-          id="orphanRecoveryStatus"
-          class="hidden text-xs text-neutral-400"
-        ></div>
+        <div id="orphanRecoveryList" class="space-y-1.5 max-h-60 overflow-y-auto text-sm"></div>
+        <div id="orphanRecoveryStatus" class="hidden text-xs text-neutral-400"></div>
         <div class="flex gap-2 justify-end pt-1">
           <button
             id="orphanRecoveryDiscardBtn"
             type="button"
-            class="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            class="btn btn-secondary px-3.5 py-1.5"
           >
             Discard all
           </button>
-          <button
-            id="orphanRecoveryRecoverBtn"
-            type="button"
-            class="px-3.5 py-1.5 bg-white text-neutral-950 hover:bg-neutral-200 rounded-lg text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          >
+          <button id="orphanRecoveryRecoverBtn" type="button" class="btn btn-primary px-3.5 py-1.5">
             Recover
           </button>
         </div>

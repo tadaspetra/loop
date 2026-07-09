@@ -5,32 +5,26 @@ import {
   computePlaybackSeekPlan,
   decideCameraSyncAction,
   DEFAULT_CAMERA_SYNC_THRESHOLDS,
-  normalizeCameraSyncOffsetMs,
   resolveCameraPlaybackTargetTime
 } from '../../src/renderer/features/timeline/camera-sync';
 
 describe('renderer/features/timeline/camera-sync', () => {
-  test('normalizeCameraSyncOffsetMs rounds and clamps the playback offset', () => {
-    expect(normalizeCameraSyncOffsetMs(undefined)).toBe(0);
-    expect(normalizeCameraSyncOffsetMs(118.6)).toBe(119);
-    expect(normalizeCameraSyncOffsetMs(-5000)).toBe(-2000);
-    expect(normalizeCameraSyncOffsetMs(5000)).toBe(2000);
+  test('resolveCameraPlaybackTargetTime clamps to the screen time', () => {
+    expect(resolveCameraPlaybackTargetTime(3)).toBe(3);
+    expect(resolveCameraPlaybackTargetTime(-0.05)).toBe(0);
+    expect(resolveCameraPlaybackTargetTime('bad')).toBe(0);
   });
 
-  test('resolveCameraPlaybackTargetTime advances late camera video', () => {
-    expect(resolveCameraPlaybackTargetTime(3, 120)).toBeCloseTo(3.12, 5);
-    expect(resolveCameraPlaybackTargetTime(0.05, -120)).toBe(0);
-  });
-
-  test('computeCameraPlaybackDrift compares camera time against the offset target', () => {
-    expect(computeCameraPlaybackDrift(5, 5, 120)).toBeCloseTo(0.12, 5);
-    expect(computeCameraPlaybackDrift(5, 5.1, 120)).toBeCloseTo(0.02, 5);
+  test('computeCameraPlaybackDrift compares camera time against the screen time', () => {
+    expect(computeCameraPlaybackDrift(5, 5)).toBe(0);
+    expect(computeCameraPlaybackDrift(5, 5.1)).toBeCloseTo(-0.1, 5);
+    expect(computeCameraPlaybackDrift(5, 4.8)).toBeCloseTo(0.2, 5);
   });
 
   test('computePlaybackSeekPlan seeks camera even when screen is already aligned', () => {
-    expect(computePlaybackSeekPlan(4, 4, 4, 120)).toEqual({
+    expect(computePlaybackSeekPlan(4, 4.2, 4)).toEqual({
       targetSourceTime: 4,
-      targetCameraTime: 4.12,
+      targetCameraTime: 4,
       screenNeedsSeek: false,
       cameraNeedsSeek: true,
       needsSeek: true
@@ -38,9 +32,9 @@ describe('renderer/features/timeline/camera-sync', () => {
   });
 
   test('computePlaybackSeekPlan skips seeks when screen and camera already match targets', () => {
-    expect(computePlaybackSeekPlan(4, 4.12, 4, 120)).toEqual({
+    expect(computePlaybackSeekPlan(4, 4, 4)).toEqual({
       targetSourceTime: 4,
-      targetCameraTime: 4.12,
+      targetCameraTime: 4,
       screenNeedsSeek: false,
       cameraNeedsSeek: false,
       needsSeek: false

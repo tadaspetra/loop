@@ -24,7 +24,6 @@ import {
   computePlaybackSeekPlan,
   computeCameraPlaybackDrift,
   decideCameraSyncAction,
-  normalizeCameraSyncOffsetMs,
   resolveCameraPlaybackTargetTime
 } from './features/timeline/camera-sync';
 import {
@@ -71,6 +70,17 @@ import {
 } from './features/editor/screen-transform';
 import { drawMirroredImage, getCenteredSquareCropRect } from './features/camera/camera-render';
 import { cleanupAllMedia } from './features/media-cleanup';
+import {
+  CONTENT_PROTECTION_ERROR_MESSAGE,
+  DEVICE_ENUMERATION_ERROR_MESSAGE,
+  PROJECT_SAVE_ERROR_MESSAGE,
+  bannerToneClasses,
+  exportButtonClass,
+  hasStatusText,
+  mediaInitFailureNotice,
+  previewStreamErrorMessage,
+  statusToneTextClass
+} from './features/ui/status';
 
 const projectHomeView = document.getElementById('projectHomeView');
 const workspaceHeader = document.getElementById('workspaceHeader');
@@ -92,9 +102,6 @@ const exportAudioPresetControl = document.getElementById('exportAudioPresetContr
 const exportAudioPresetSelect = document.getElementById('exportAudioPreset');
 const exportVideoPresetControl = document.getElementById('exportVideoPresetControl');
 const exportVideoPresetSelect = document.getElementById('exportVideoPreset');
-const cameraSyncOffsetControl = document.getElementById('cameraSyncOffsetControl');
-const cameraSyncOffsetInput = document.getElementById('cameraSyncOffsetMs');
-
 const screenSelect = document.getElementById('screenSource');
 const screenFitSelect = document.getElementById('screenFit');
 const systemAudioCheckbox = document.getElementById('systemAudioCheckbox');
@@ -762,8 +769,6 @@ function updateWorkspaceHeader() {
   );
   recordBtn.classList.toggle('hidden', activeWorkspaceView !== 'recording');
   timerEl.classList.toggle('hidden', activeWorkspaceView !== 'recording');
-  cameraSyncOffsetControl.classList.toggle('hidden', !showTimelineTools);
-  cameraSyncOffsetControl.classList.toggle('flex', showTimelineTools);
   exportAudioPresetControl.classList.toggle('hidden', !showTimelineTools);
   exportAudioPresetControl.classList.toggle('flex', showTimelineTools);
   exportVideoPresetControl.classList.toggle('hidden', !showTimelineTools);
@@ -944,7 +949,6 @@ function buildProjectSavePayload() {
       hideFromRecording: hideFromRecording === 'true',
       exportAudioPreset: normalizeExportAudioPreset(exportAudioPresetSelect.value),
       exportVideoPreset: normalizeExportVideoPreset(exportVideoPresetSelect.value),
-      cameraSyncOffsetMs: normalizeCameraSyncOffsetMs(cameraSyncOffsetInput.value),
       pipSize: editorState?.pipSize || PIP_SIZE,
       systemAudioEnabled: !!systemAudioCheckbox?.checked
     },
@@ -976,9 +980,24 @@ async function persistProjectNow() {
     })
     .catch((error) => {
       console.error('Failed to persist project:', error);
+      notifyProjectSaveError();
     });
 
   await persistQueue;
+}
+
+/**
+ * A failed save means edits may be lost on quit — never keep that silent.
+ * Routed to whichever status surface belongs to the active view.
+ */
+function notifyProjectSaveError() {
+  if (activeWorkspaceView === 'timeline') {
+    setTranscribeCutStatus(PROJECT_SAVE_ERROR_MESSAGE, 'error');
+  } else if (activeWorkspaceView === 'recording') {
+    showRecordingNotice(PROJECT_SAVE_ERROR_MESSAGE, 'error');
+  } else {
+    showProjectHomeMessage(PROJECT_SAVE_ERROR_MESSAGE, 'error');
+  }
 }
 
 async function saveRecoveryTake(take) {
@@ -1120,7 +1139,6 @@ function buildPreviewInputs() {
     pipSize: editorState.pipSize,
     screenFitMode: editorState.screenFitMode,
     screenTransform: editorState.screenTransform ?? null,
-    cameraSyncOffsetMs: editorState.cameraSyncOffsetMs,
     sourceWidth: editorState.sourceWidth || CANVAS_W,
     sourceHeight: editorState.sourceHeight || CANVAS_H
   };
@@ -1171,7 +1189,6 @@ function schedulePreviewRender() {
               Number(inputs.screenTransform.scale.toFixed(4))
             ]
           : null,
-        camSync: Math.round(inputs.cameraSyncOffsetMs || 0),
         w: Math.round(inputs.sourceWidth || 0),
         h: Math.round(inputs.sourceHeight || 0)
       });
@@ -1197,7 +1214,6 @@ function schedulePreviewRender() {
         pipSize: inputs.pipSize,
         screenFitMode: inputs.screenFitMode,
         screenTransform: inputs.screenTransform,
-        cameraSyncOffsetMs: inputs.cameraSyncOffsetMs,
         sourceWidth: inputs.sourceWidth,
         sourceHeight: inputs.sourceHeight
       });
@@ -1340,7 +1356,7 @@ function renderRecentProjects(meta) {
 
 function clearProjectHomeMessage() {
   projectHomeMessage.textContent = '';
-  projectHomeMessage.className = 'hidden rounded border px-3 py-2 text-sm';
+  projectHomeMessage.className = 'hidden rounded-lg border px-3 py-2 text-sm';
 }
 
 function showProjectHomeMessage(message, tone = 'error') {
@@ -1349,13 +1365,8 @@ function showProjectHomeMessage(message, tone = 'error') {
     return;
   }
 
-  const toneClass =
-    tone === 'info'
-      ? 'border-blue-500/40 bg-blue-500/10 text-blue-200'
-      : 'border-red-500/40 bg-red-500/10 text-red-200';
-
   projectHomeMessage.textContent = message;
-  projectHomeMessage.className = `rounded border px-3 py-2 text-sm ${toneClass}`;
+  projectHomeMessage.className = `rounded-lg border px-3 py-2 text-sm ${bannerToneClasses(tone)}`;
 }
 
 async function refreshRecentProjects() {
@@ -1387,9 +1398,6 @@ async function activateProject(projectPath, project, preferredView = 'recording'
   }
   exportAudioPresetSelect.value = normalizeExportAudioPreset(project.settings?.exportAudioPreset);
   exportVideoPresetSelect.value = normalizeExportVideoPreset(project.settings?.exportVideoPreset);
-  cameraSyncOffsetInput.value = String(
-    normalizeCameraSyncOffsetMs(project.settings?.cameraSyncOffsetMs)
-  );
   await syncContentProtection();
 
   if (
@@ -1404,7 +1412,6 @@ async function activateProject(projectPath, project, preferredView = 'recording'
       hasCamera: !!project.timeline.hasCamera,
       sourceWidth: project.timeline.sourceWidth || null,
       sourceHeight: project.timeline.sourceHeight || null,
-      cameraSyncOffsetMs: project.settings?.cameraSyncOffsetMs,
       screenTransform: project.settings?.screenTransform ?? null,
       initialView: preferredView === 'recording' ? 'recording' : 'timeline'
     });
@@ -1479,22 +1486,38 @@ async function activateProject(projectPath, project, preferredView = 'recording'
 async function ensureMediaInitialized() {
   if (mediaInitialized) return;
   mediaInitialized = true;
-  await enumerateDevices();
+  try {
+    await enumerateDevices();
+  } catch (error) {
+    console.error('Device enumeration failed:', error);
+    // Reset so reopening the recording view retries instead of leaving the
+    // selectors permanently empty.
+    mediaInitialized = false;
+    resetDeviceSelects();
+    showRecordingNotice(DEVICE_ENUMERATION_ERROR_MESSAGE, 'error');
+    return;
+  }
+  const failedStreams = [];
   try {
     await updateScreenStream();
   } catch (error) {
     console.warn('Screen source init failed:', error);
+    failedStreams.push('screen');
   }
   try {
     await updateCameraStream();
   } catch (error) {
     console.warn('Camera source init failed:', error);
+    failedStreams.push('camera');
   }
   try {
     await updateAudioStream();
   } catch (error) {
     console.warn('Audio source init failed:', error);
+    failedStreams.push('microphone');
   }
+  const failureNotice = mediaInitFailureNotice(failedStreams);
+  if (failureNotice) showRecordingNotice(failureNotice, 'warning');
   if (activeWorkspaceView === 'recording') updatePreview();
 }
 
@@ -1506,6 +1529,7 @@ async function syncContentProtection() {
     await window.electronAPI.setContentProtection(enabled);
   } catch (error) {
     console.error('Failed to update content protection:', error);
+    showRecordingNotice(CONTENT_PROTECTION_ERROR_MESSAGE, 'warning');
   }
 }
 
@@ -2304,7 +2328,21 @@ async function requestLocalMediaAccess() {
   }
 }
 
+function resetDeviceSelects(placeholder = 'None') {
+  for (const select of [screenSelect, cameraSelect, audioSelect]) {
+    select.innerHTML = '';
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = placeholder;
+    select.appendChild(opt);
+  }
+}
+
 async function enumerateDevices() {
+  // Permission prompts and device scans can take a while; make the wait
+  // visible instead of leaving empty dropdowns.
+  resetDeviceSelects('Loading devices…');
+
   await requestLocalMediaAccess();
 
   try {
@@ -2966,22 +3004,31 @@ function computeRecorderStartOffsetsMs(recorderList) {
 function showRecordingNotice(text, tone = 'warning') {
   if (!recordingNoticeEl) return;
 
-  const toneClasses = {
-    neutral: 'text-neutral-500',
-    success: 'text-emerald-400',
-    warning: 'text-amber-400',
-    error: 'text-red-400'
-  };
-  const resolvedTone = toneClasses[tone] || toneClasses.neutral;
-  const hasText = typeof text === 'string' && text.trim().length > 0;
-
-  recordingNoticeEl.className = `px-1 py-1.5 text-[11px] ${resolvedTone}`;
+  const hasText = hasStatusText(text);
+  recordingNoticeEl.className = `px-1 py-1.5 text-[11px] ${statusToneTextClass(tone)}`;
   recordingNoticeEl.classList.toggle('hidden', !hasText);
   recordingNoticeEl.textContent = hasText ? text : '';
 }
 
 function clearRecordingNotice() {
   showRecordingNotice('', 'neutral');
+}
+
+// Tracks whether the current recording notice is a device/stream error we
+// showed from a source-change handler, so it can be retired as soon as a
+// device change succeeds without clobbering unrelated notices.
+let previewStreamErrorNoticeShown = false;
+
+function reportPreviewStreamError(kind, error) {
+  console.error(`[Recorder] ${kind} stream failed:`, error);
+  previewStreamErrorNoticeShown = true;
+  showRecordingNotice(previewStreamErrorMessage(kind), 'error');
+}
+
+function clearPreviewStreamErrorNotice() {
+  if (!previewStreamErrorNoticeShown) return;
+  previewStreamErrorNoticeShown = false;
+  if (!recording) clearRecordingNotice();
 }
 
 /**
@@ -4161,13 +4208,11 @@ function enterEditor(rawSections, opts = {}) {
     rendering: false,
     renderProgress: 0,
     playbackSpeed: 1,
-    cameraSyncOffsetMs: normalizeCameraSyncOffsetMs(opts.cameraSyncOffsetMs),
     hasCamera: typeof opts.hasCamera === 'boolean' ? opts.hasCamera : false,
     sourceWidth: opts.sourceWidth || null,
     sourceHeight: opts.sourceHeight || null
   };
   screenFitSelect.value = editorState.screenFitMode === 'fit' ? 'fit' : 'fill';
-  cameraSyncOffsetInput.value = String(editorState.cameraSyncOffsetMs);
   updateSectionZoomControls();
 
   // Pre-create video elements for all referenced takes
@@ -4185,10 +4230,7 @@ function enterEditor(rawSections, opts = {}) {
     if (videos) {
       videos.screen.currentTime = firstSection.sourceStart;
       if (videos.camera) {
-        videos.camera.currentTime = resolveCameraPlaybackTargetTime(
-          firstSection.sourceStart,
-          editorState.cameraSyncOffsetMs
-        );
+        videos.camera.currentTime = resolveCameraPlaybackTargetTime(firstSection.sourceStart);
       }
       if (videos.audio) {
         videos.audio.currentTime = firstSection.sourceStart;
@@ -4384,8 +4426,7 @@ function switchPlaybackSection(nextSection, opts = {}) {
   const seekPlan = computePlaybackSeekPlan(
     nextVideos.screen.currentTime,
     nextVideos.camera?.currentTime,
-    targetSourceTime,
-    editorState.cameraSyncOffsetMs
+    targetSourceTime
   );
 
   if (!sameTake && previousTakeId) {
@@ -4466,15 +4507,8 @@ function syncCameraPlayback(videos) {
 
   const baseRate = editorState.playbackSpeed || 1;
   const now = performance.now();
-  const drift = computeCameraPlaybackDrift(
-    videos.screen.currentTime,
-    videos.camera.currentTime,
-    editorState.cameraSyncOffsetMs
-  );
-  const targetCameraTime = resolveCameraPlaybackTargetTime(
-    videos.screen.currentTime,
-    editorState.cameraSyncOffsetMs
-  );
+  const drift = computeCameraPlaybackDrift(videos.screen.currentTime, videos.camera.currentTime);
+  const targetCameraTime = resolveCameraPlaybackTargetTime(videos.screen.currentTime);
   const action = decideCameraSyncAction({
     drift,
     baseRate,
@@ -5000,9 +5034,7 @@ editorCanvas.addEventListener('mousedown', (e) => {
     const hit = hitTestScreenPlacement(x, y, placement);
     const dims = hit ? getCurrentScreenSourceDims() : null;
     if (hit && dims) {
-      const prevTransform = editorState.screenTransform
-        ? { ...editorState.screenTransform }
-        : null;
+      const prevTransform = editorState.screenTransform ? { ...editorState.screenTransform } : null;
       const startTransform =
         prevTransform ||
         defaultScreenTransform(
@@ -5017,9 +5049,7 @@ editorCanvas.addEventListener('mousedown', (e) => {
       const wsPointer = workspaceToEditorCoords(x, y);
       if (hit.kind === 'handle') {
         const anchor = oppositeCorner(placement, hit.corner);
-        const grabbed = placementCorners(placement).find(
-          (point) => point.corner === hit.corner
-        );
+        const grabbed = placementCorners(placement).find((point) => point.corner === hit.corner);
         screenTransformDrag = {
           mode: 'resize',
           corner: hit.corner,
@@ -5660,19 +5690,22 @@ editorRenderBtn.addEventListener('click', async () => {
 function setRenderBtnState(text, style = 'idle') {
   clearTimeout(editorRenderTimeout);
   editorRenderBtn.textContent = text;
-  if (style === 'busy') {
-    editorRenderBtn.className =
-      'px-4 py-1.5 bg-neutral-700 text-neutral-300 rounded-lg text-sm font-medium transition-colors min-w-[80px] text-center cursor-wait';
-  } else if (style === 'done') {
-    editorRenderBtn.className =
-      'px-4 py-1.5 bg-emerald-600 text-white rounded-lg text-sm font-medium transition-colors min-w-[80px] text-center';
-  } else if (style === 'error') {
-    editorRenderBtn.className =
-      'px-4 py-1.5 bg-red-600 text-white rounded-lg text-sm font-medium transition-colors min-w-[80px] text-center';
-  } else {
-    editorRenderBtn.className =
-      'px-4 py-1.5 bg-white text-neutral-950 hover:bg-neutral-200 rounded-lg text-sm font-medium transition-colors min-w-[80px] text-center';
-  }
+  setExportButtonAppearance(editorRenderBtn, style, {
+    idleClass: 'btn-primary',
+    minWidthClass: 'min-w-[80px]'
+  });
+}
+
+/**
+ * Swap an export button's lifecycle styling while preserving its `hidden`
+ * state: the reset-to-idle timers can fire after the user has switched views,
+ * and a plain className assignment would make the button reappear in a view
+ * where it does not belong.
+ */
+function setExportButtonAppearance(button, style, options) {
+  const wasHidden = button.classList.contains('hidden');
+  button.className = exportButtonClass(style, options);
+  button.classList.toggle('hidden', wasHidden);
 }
 
 async function renderVideo() {
@@ -5731,7 +5764,6 @@ async function renderVideo() {
       screenTransform: editorState.screenTransform ?? null,
       exportAudioPreset: normalizeExportAudioPreset(exportAudioPresetSelect.value),
       exportVideoPreset: normalizeExportVideoPreset(exportVideoPresetSelect.value),
-      cameraSyncOffsetMs: editorState.cameraSyncOffsetMs,
       sourceWidth: editorState.sourceWidth || CANVAS_W,
       sourceHeight: editorState.sourceHeight || CANVAS_H,
       outputFolder: saveFolder
@@ -5769,19 +5801,10 @@ let editorPremiereTimeout = null;
 function setPremiereBtnState(text, style = 'idle') {
   clearTimeout(editorPremiereTimeout);
   editorExportPremiereBtn.textContent = text;
-  if (style === 'busy') {
-    editorExportPremiereBtn.className =
-      'px-4 py-1.5 bg-neutral-700 text-neutral-300 rounded-lg text-sm font-medium transition-colors min-w-[140px] text-center cursor-wait';
-  } else if (style === 'done') {
-    editorExportPremiereBtn.className =
-      'px-4 py-1.5 bg-emerald-600 text-white rounded-lg text-sm font-medium transition-colors min-w-[140px] text-center';
-  } else if (style === 'error') {
-    editorExportPremiereBtn.className =
-      'px-4 py-1.5 bg-red-600 text-white rounded-lg text-sm font-medium transition-colors min-w-[140px] text-center';
-  } else {
-    editorExportPremiereBtn.className =
-      'px-4 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-neutral-100 rounded-lg text-sm font-medium transition-colors min-w-[140px] text-center';
-  }
+  setExportButtonAppearance(editorExportPremiereBtn, style, {
+    idleClass: 'btn-secondary',
+    minWidthClass: 'min-w-[140px]'
+  });
 }
 
 function getPremiereExportSections() {
@@ -5848,7 +5871,6 @@ async function exportPremiere() {
       sourceWidth: editorState.sourceWidth || CANVAS_W,
       sourceHeight: editorState.sourceHeight || CANVAS_H,
       screenTransform: editorState.screenTransform ?? null,
-      cameraSyncOffsetMs: editorState.cameraSyncOffsetMs,
       takes,
       sections: premiereSections,
       keyframes: getRenderKeyframes()
@@ -5883,14 +5905,8 @@ let transcribeCutInFlight = false;
 
 function setTranscribeCutStatus(text, tone = 'neutral') {
   if (!transcribeCutStatusEl) return;
-  const toneClasses = {
-    neutral: 'text-neutral-500',
-    success: 'text-emerald-400',
-    warning: 'text-amber-400',
-    error: 'text-red-400'
-  };
-  const hasText = typeof text === 'string' && text.trim().length > 0;
-  transcribeCutStatusEl.className = `text-[11px] ${toneClasses[tone] || toneClasses.neutral}`;
+  const hasText = hasStatusText(text);
+  transcribeCutStatusEl.className = `text-[11px] ${statusToneTextClass(tone)}`;
   transcribeCutStatusEl.classList.toggle('hidden', !hasText);
   transcribeCutStatusEl.textContent = hasText ? text : '';
 }
@@ -5942,8 +5958,7 @@ async function transcribeAndCutTake() {
       window.electronAPI.transcribeRecording({ sourcePath: source.sourcePath }),
       new Promise((_, reject) => {
         setTimeout(
-          () =>
-            reject(new Error(`transcription timed out after ${Math.round(timeoutMs / 1000)}s`)),
+          () => reject(new Error(`transcription timed out after ${Math.round(timeoutMs / 1000)}s`)),
           timeoutMs
         );
       })
@@ -6114,7 +6129,6 @@ contentProtectionToggle.addEventListener('change', async () => {
   scheduleProjectSave();
 });
 
-
 exportAudioPresetSelect.addEventListener('change', () => {
   exportAudioPresetSelect.value = normalizeExportAudioPreset(exportAudioPresetSelect.value);
   if (activeProject?.settings) {
@@ -6127,19 +6141,6 @@ exportVideoPresetSelect.addEventListener('change', () => {
   exportVideoPresetSelect.value = normalizeExportVideoPreset(exportVideoPresetSelect.value);
   if (activeProject?.settings) {
     activeProject.settings.exportVideoPreset = exportVideoPresetSelect.value;
-  }
-  scheduleProjectSave();
-});
-
-cameraSyncOffsetInput.addEventListener('change', () => {
-  const normalized = normalizeCameraSyncOffsetMs(cameraSyncOffsetInput.value);
-  cameraSyncOffsetInput.value = String(normalized);
-  if (activeProject?.settings) {
-    activeProject.settings.cameraSyncOffsetMs = normalized;
-  }
-  if (editorState) {
-    editorState.cameraSyncOffsetMs = normalized;
-    editorSeek(editorState.currentTime);
   }
   scheduleProjectSave();
 });
@@ -6158,10 +6159,11 @@ screenFitSelect.addEventListener('change', () => {
 });
 
 screenSelect.addEventListener('change', async () => {
+  clearPreviewStreamErrorNotice();
   try {
     await updateScreenStream();
   } catch (e) {
-    console.error(e);
+    reportPreviewStreamError('screen', e);
   }
   updatePreview();
 });
@@ -6175,29 +6177,32 @@ if (systemAudioCheckbox) {
       activeProject.settings.systemAudioEnabled = !!systemAudioCheckbox.checked;
       scheduleProjectSave();
     }
+    clearPreviewStreamErrorNotice();
     try {
       await updateScreenStream();
     } catch (e) {
-      console.error(e);
+      reportPreviewStreamError('screen', e);
     }
     updatePreview();
   });
 }
 
 cameraSelect.addEventListener('change', async () => {
+  clearPreviewStreamErrorNotice();
   try {
     await updateCameraStream();
   } catch (e) {
-    console.error(e);
+    reportPreviewStreamError('camera', e);
   }
   updatePreview();
 });
 
 audioSelect.addEventListener('change', async () => {
+  clearPreviewStreamErrorNotice();
   try {
     await updateAudioStream();
   } catch (e) {
-    console.error(e);
+    reportPreviewStreamError('microphone', e);
   }
 });
 

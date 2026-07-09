@@ -1,9 +1,3 @@
-import { normalizeCameraSyncOffsetMs } from '../../../shared/domain/camera-sync';
-
-// Re-export the shared normalization so the renderer keeps a single import
-// site while domain rules stay in src/shared/.
-export { normalizeCameraSyncOffsetMs };
-
 export interface PlaybackSeekPlan {
   targetSourceTime: number;
   targetCameraTime: number;
@@ -12,27 +6,20 @@ export interface PlaybackSeekPlan {
   needsSeek: boolean;
 }
 
-export function resolveCameraPlaybackTargetTime(
-  screenTime: unknown,
-  cameraSyncOffsetMs = 0
-): number {
+export function resolveCameraPlaybackTargetTime(screenTime: unknown): number {
   const baseTime = Number(screenTime);
   if (!Number.isFinite(baseTime)) return 0;
-  return Math.max(0, baseTime + normalizeCameraSyncOffsetMs(cameraSyncOffsetMs) / 1000);
+  return Math.max(0, baseTime);
 }
 
 export function computePlaybackSeekPlan(
   currentScreenTime: unknown,
   currentCameraTime: unknown,
   targetSourceTime: unknown,
-  cameraSyncOffsetMs = 0,
   seekThreshold = 0.01
 ): PlaybackSeekPlan {
   const safeTargetSourceTime = Number(targetSourceTime);
-  const targetCameraTime = resolveCameraPlaybackTargetTime(
-    safeTargetSourceTime,
-    cameraSyncOffsetMs
-  );
+  const targetCameraTime = resolveCameraPlaybackTargetTime(safeTargetSourceTime);
   const screenTime = Number(currentScreenTime);
   const cameraTime = Number(currentCameraTime);
   const safeSeekThreshold = Number.isFinite(Number(seekThreshold))
@@ -53,12 +40,8 @@ export function computePlaybackSeekPlan(
   };
 }
 
-export function computeCameraPlaybackDrift(
-  screenTime: unknown,
-  cameraTime: unknown,
-  cameraSyncOffsetMs = 0
-): number {
-  const targetTime = resolveCameraPlaybackTargetTime(screenTime, cameraSyncOffsetMs);
+export function computeCameraPlaybackDrift(screenTime: unknown, cameraTime: unknown): number {
+  const targetTime = resolveCameraPlaybackTargetTime(screenTime);
   const actualTime = Number(cameraTime);
   if (!Number.isFinite(actualTime)) return targetTime;
   return targetTime - actualTime;

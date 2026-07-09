@@ -4,6 +4,32 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer components {
+  /* Shared button shape; pair with .btn-primary / .btn-secondary and
+     per-context padding utilities. */
+  .btn {
+    @apply rounded-lg text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  .btn-primary {
+    @apply bg-white font-medium text-neutral-950 hover:bg-neutral-200 disabled:hover:bg-white;
+  }
+
+  .btn-secondary {
+    @apply border border-neutral-700 bg-neutral-800 hover:bg-neutral-700 disabled:hover:bg-neutral-800;
+  }
+
+  /* Shared look for text inputs, number inputs, and selects. */
+  .field {
+    @apply rounded-lg border border-neutral-800 bg-neutral-900 text-sm transition-colors placeholder:text-neutral-600 focus:border-neutral-600 focus:outline-none focus:ring-1 focus:ring-neutral-600;
+  }
+
+  /* Small uppercase section/control label used across sidebars. */
+  .form-label {
+    @apply block text-xs font-medium uppercase tracking-wider text-neutral-500;
+  }
+}
+
 select {
   appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23737373' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");

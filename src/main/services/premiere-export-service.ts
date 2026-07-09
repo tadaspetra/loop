@@ -5,7 +5,6 @@ import ffmpegStatic from 'ffmpeg-static';
 import { atomicWriteFileSync, ensureDirectory, fs } from '../infra/file-system';
 import {
   normalizeAudioSource,
-  normalizeCameraSyncOffsetMs,
   normalizeScreenTransform,
   toProjectAbsolutePath,
   type AudioSource,
@@ -19,11 +18,7 @@ import {
   type VideoDimensions
 } from './fps-service';
 import { runFfmpeg, type FfmpegProgress } from './ffmpeg-runner';
-import {
-  buildPremiereXml,
-  type PremiereSection,
-  type PremiereTake
-} from './premiere-xml-service';
+import { buildPremiereXml, type PremiereSection, type PremiereTake } from './premiere-xml-service';
 
 export interface PremiereExportTakeInput {
   id: string;
@@ -53,7 +48,6 @@ export interface PremiereExportOptions {
   // Free placement of the screen recording inside the 16:9 sequence; the
   // legacy cover behavior applies when absent.
   screenTransform?: unknown;
-  cameraSyncOffsetMs: number;
   takes: PremiereExportTakeInput[];
   sections: PremiereExportSectionInput[];
   keyframes: Keyframe[];
@@ -178,23 +172,12 @@ function buildScreenTranscodeArgs(
 function buildCameraTranscodeArgs(
   inputPath: string,
   outputPath: string,
-  cameraSyncOffsetMs: number,
   includeAudio: boolean,
   targetFps: number
 ): string[] {
   // Mirror horizontally + force CFR. Preserves native dimensions so the user
   // can expand / re-crop the full camera frame in Premiere.
-  const offsetSec = normalizeCameraSyncOffsetMs(cameraSyncOffsetMs) / 1000;
-  const args = [
-    '-progress',
-    'pipe:1',
-    '-nostats',
-    '-fflags',
-    '+genpts'
-  ];
-  if (Math.abs(offsetSec) > 0.0005) {
-    args.push('-itsoffset', (-offsetSec).toFixed(3));
-  }
+  const args = ['-progress', 'pipe:1', '-nostats', '-fflags', '+genpts'];
   args.push(
     '-i',
     inputPath,
@@ -334,11 +317,7 @@ export async function exportPremiereProject(
         includeCameraAudio: cameraOwnsAudio
       });
     }
-    if (
-      takeAudioSource === 'external' &&
-      take.audioPath &&
-      fs.existsSync(take.audioPath)
-    ) {
+    if (takeAudioSource === 'external' && take.audioPath && fs.existsSync(take.audioPath)) {
       jobs.push({
         kind: 'audio',
         takeId,
@@ -397,7 +376,6 @@ export async function exportPremiereProject(
       args = buildCameraTranscodeArgs(
         job.inputPath,
         job.outputPath,
-        opts.cameraSyncOffsetMs,
         job.includeCameraAudio === true,
         targetFps
       );
