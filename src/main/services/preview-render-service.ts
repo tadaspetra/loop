@@ -2,11 +2,12 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 
 import { fs } from '../infra/file-system';
-import type {
-  Keyframe,
-  ScreenFitMode,
-  ExportAudioPreset,
-  ExportVideoPreset
+import {
+  normalizeScreenTransform,
+  type Keyframe,
+  type ScreenFitMode,
+  type ExportAudioPreset,
+  type ExportVideoPreset
 } from '../../shared/domain/project';
 import {
   renderComposite,
@@ -59,6 +60,7 @@ export interface ComputeTimelineHashInput {
   keyframes: Keyframe[];
   pipSize: number;
   screenFitMode: ScreenFitMode;
+  screenTransform?: unknown;
   cameraSyncOffsetMs: number;
   sourceWidth: number;
   sourceHeight: number;
@@ -122,12 +124,16 @@ export function computeTimelineHash(input: ComputeTimelineHashInput): string {
   const sections = Array.isArray(input?.sections) ? input.sections.map(normalizeSection) : [];
   const keyframes = Array.isArray(input?.keyframes) ? input.keyframes.map(normalizeKeyframe) : [];
 
+  const transform = normalizeScreenTransform(input?.screenTransform);
   const payload = {
     takes,
     sections,
     keyframes,
     pipSize: Math.round(Number(input?.pipSize) || 0),
     fit: input?.screenFitMode === 'fit' ? 'fit' : 'fill',
+    st: transform
+      ? [round(transform.x, 2), round(transform.y, 2), round(transform.scale, 4)]
+      : null,
     camSync: Math.round(Number(input?.cameraSyncOffsetMs) || 0),
     w: Math.round(Number(input?.sourceWidth) || 0),
     h: Math.round(Number(input?.sourceHeight) || 0)
@@ -156,6 +162,7 @@ export interface GeneratePreviewOpts {
   keyframes: Keyframe[];
   pipSize: number;
   screenFitMode: ScreenFitMode;
+  screenTransform?: unknown;
   cameraSyncOffsetMs: number;
   sourceWidth: number;
   sourceHeight: number;
@@ -210,6 +217,7 @@ export async function generatePreview(
       keyframes: opts.keyframes,
       pipSize: opts.pipSize,
       screenFitMode: opts.screenFitMode,
+      screenTransform: opts.screenTransform,
       exportAudioPreset,
       exportVideoPreset,
       cameraSyncOffsetMs: opts.cameraSyncOffsetMs,

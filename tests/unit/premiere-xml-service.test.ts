@@ -654,10 +654,18 @@ describe('main/services/premiere-xml-service', () => {
     );
   });
 
-  test('centerPxToFcpCenter maps canvas center to (0,0) and edges to +/-1', () => {
-    expect(centerPxToFcpCenter(960, 540, 1920, 1080)).toEqual({ horiz: 0, vert: 0 });
-    expect(centerPxToFcpCenter(0, 0, 1920, 1080)).toEqual({ horiz: -1, vert: -1 });
-    expect(centerPxToFcpCenter(1920, 1080, 1920, 1080)).toEqual({ horiz: 1, vert: 1 });
+  test('centerPxToFcpCenter maps canvas offsets into media-relative units', () => {
+    // Premiere resolves Position = seqCenter + center × mediaDim, so the
+    // emitted units divide the canvas offset by the MEDIA dimensions.
+    expect(centerPxToFcpCenter(960, 540, 1920, 1080, 1920, 1080)).toEqual({ horiz: 0, vert: 0 });
+    expect(centerPxToFcpCenter(0, 0, 1920, 1080, 1920, 1080)).toEqual({ horiz: -0.5, vert: -0.5 });
+    // 4K media: the same canvas offset is a smaller fraction of the media.
+    expect(centerPxToFcpCenter(1920, 1080, 1920, 1080, 3840, 2160)).toEqual({
+      horiz: 0.25,
+      vert: 0.25
+    });
+    // Degenerate media dims fall back to centered.
+    expect(centerPxToFcpCenter(500, 500, 1920, 1080, 0, 0)).toEqual({ horiz: 0, vert: 0 });
   });
 
   test('buildPremiereXml positions camera PiP center to match editor square PiP center', () => {
@@ -743,6 +751,66 @@ describe('main/services/premiere-xml-service', () => {
     );
     const leftValue = Number(leftParam!.getElementsByTagName('value')[0].textContent);
     expect(leftValue).toBeCloseTo(21.875, 3);
+  });
+
+  test('buildPremiereXml keeps a 4K camera PiP on-screen in a 1080p sequence', () => {
+    // Regression: with sequence-relative center units, a 4K camera PiP at the
+    // default bottom-right corner imported at Position ≈ (3876, 1776) — off
+    // the program monitor. Premiere resolves Position = seqCenter + center ×
+    // mediaDim, so the intended center (1689, 849) must be emitted as
+    // (729/3840, 309/2160).
+    const input = baseInput({
+      pipSize: 422,
+      keyframes: [
+        {
+          time: 0,
+          pipX: 1478,
+          pipY: 638,
+          pipVisible: true,
+          cameraFullscreen: false,
+          backgroundZoom: 1,
+          backgroundPanX: 0,
+          backgroundPanY: 0,
+          sectionId: null,
+          autoSection: false
+        }
+      ],
+      takes: [
+        {
+          id: 'take-1',
+          screenPath: '/tmp/proj/media/screen-take-1.mov',
+          cameraPath: '/tmp/proj/media/camera-take-1.mov',
+          audioPath: null,
+          audioSource: 'screen',
+          hasSystemAudio: false,
+          screenDurationSec: 10,
+          cameraDurationSec: 10,
+          screenWidth: 3840,
+          screenHeight: 2160,
+          cameraWidth: 3840,
+          cameraHeight: 2160
+        }
+      ]
+    });
+
+    const doc = parseXml(buildPremiereXml(input));
+    const videoTracks = getAllByTag(doc, 'video')[0].getElementsByTagName('track');
+    const cameraClip = videoTracks[1].getElementsByTagName('clipitem')[0];
+    const basicMotion = Array.from(cameraClip.getElementsByTagName('effect')).find(
+      (e) => e.getElementsByTagName('effectid')[0]?.textContent === 'basic'
+    );
+    const center = Array.from(basicMotion!.getElementsByTagName('parameter')).find(
+      (p) => p.getElementsByTagName('parameterid')[0]?.textContent === 'center'
+    );
+    const firstValue = center!.getElementsByTagName('value')[0];
+    const horiz = Number(firstValue.getElementsByTagName('horiz')[0].textContent);
+    const vert = Number(firstValue.getElementsByTagName('vert')[0].textContent);
+    expect(horiz).toBeCloseTo(729 / 3840, 5);
+    expect(vert).toBeCloseTo(309 / 2160, 5);
+    // Sanity: the resolved Premiere Position stays inside the 1920×1080 frame
+    // (tolerance covers the 6-decimal XML rounding amplified by mediaW).
+    expect(960 + horiz * 3840).toBeCloseTo(1689, 1);
+    expect(540 + vert * 2160).toBeCloseTo(849, 1);
   });
 
   test('buildPremiereXml keyframes Crop to zero when camera switches to fullscreen', () => {
@@ -1208,6 +1276,156 @@ describe('main/services/premiere-xml-service', () => {
     // coverScale (50) * zoom: 50 at zoom=1, 100 at zoom=2.
     expect(scaleValues.some((v) => Math.abs(v - 50) < 0.01)).toBe(true);
     expect(scaleValues.some((v) => Math.abs(v - 100) < 0.01)).toBe(true);
+  });
+
+  test('buildPremiereXml places the screen clip from the screen transform', () => {
+    const input = baseInput({
+      hasCamera: false,
+      screenTransform: { x: 480, y: 270, scale: 0.5 },
+      takes: [
+        {
+          id: 'take-1',
+          screenPath: '/tmp/proj/media/screen-take-1.mov',
+          cameraPath: null,
+          audioPath: null,
+          audioSource: 'screen',
+          hasSystemAudio: false,
+          screenDurationSec: 5,
+          cameraDurationSec: 0,
+          screenWidth: 3840,
+          screenHeight: 2160,
+          cameraWidth: null,
+          cameraHeight: null
+        }
+      ],
+      keyframes: [
+        {
+          time: 0,
+          pipX: 0,
+          pipY: 0,
+          pipVisible: false,
+          cameraFullscreen: false,
+          backgroundZoom: 1,
+          backgroundPanX: 0,
+          backgroundPanY: 0,
+          sectionId: null,
+          autoSection: false
+        }
+      ]
+    });
+
+    const doc = parseXml(buildPremiereXml(input));
+    const videoTracks = getAllByTag(doc, 'video')[0].getElementsByTagName('track');
+    const screenClip = videoTracks[0].getElementsByTagName('clipitem')[0];
+    const basicMotion = Array.from(screenClip.getElementsByTagName('effect')).find(
+      (e) => e.getElementsByTagName('effectid')[0]?.textContent === 'basic'
+    );
+    expect(basicMotion).toBeDefined();
+
+    const params = Array.from(basicMotion!.getElementsByTagName('parameter'));
+    const scale = params.find(
+      (p) => p.getElementsByTagName('parameterid')[0]?.textContent === 'scale'
+    );
+    // Placement: 4K source at half fit size in the top-left quadrant →
+    // 960px drawn width / 3840px native = 25% Motion scale.
+    expect(Number(scale!.getElementsByTagName('value')[0].textContent)).toBeCloseTo(25, 3);
+    expect(scale!.getElementsByTagName('keyframe')).toHaveLength(0);
+
+    const center = params.find(
+      (p) => p.getElementsByTagName('parameterid')[0]?.textContent === 'center'
+    );
+    const horiz = center!.getElementsByTagName('horiz')[0];
+    const vert = center!.getElementsByTagName('vert')[0];
+    // Center (480, 270) on a 1920×1080 sequence is a -480/-270 px offset,
+    // expressed in media units (3840×2160) → (-0.125, -0.125).
+    expect(Number(horiz.textContent)).toBeCloseTo(-0.125, 5);
+    expect(Number(vert.textContent)).toBeCloseTo(-0.125, 5);
+  });
+
+  test('buildPremiereXml composes background zoom on top of the screen transform placement', () => {
+    const input = baseInput({
+      hasCamera: false,
+      screenTransform: { x: 480, y: 270, scale: 0.5 },
+      sections: [
+        { takeId: 'take-1', timelineStart: 0, timelineEnd: 4, sourceStart: 0, sourceEnd: 4 }
+      ],
+      takes: [
+        {
+          id: 'take-1',
+          screenPath: '/tmp/proj/media/screen-take-1.mov',
+          cameraPath: null,
+          audioPath: null,
+          audioSource: 'screen',
+          hasSystemAudio: false,
+          screenDurationSec: 5,
+          cameraDurationSec: 0,
+          screenWidth: 3840,
+          screenHeight: 2160,
+          cameraWidth: null,
+          cameraHeight: null
+        }
+      ],
+      keyframes: [
+        {
+          time: 0,
+          pipX: 0,
+          pipY: 0,
+          pipVisible: false,
+          cameraFullscreen: false,
+          backgroundZoom: 1,
+          backgroundPanX: 0,
+          backgroundPanY: 0,
+          sectionId: null,
+          autoSection: false
+        },
+        {
+          time: 2,
+          pipX: 0,
+          pipY: 0,
+          pipVisible: false,
+          cameraFullscreen: false,
+          backgroundZoom: 2,
+          backgroundPanX: 0,
+          backgroundPanY: 0,
+          sectionId: null,
+          autoSection: false
+        }
+      ]
+    });
+
+    const doc = parseXml(buildPremiereXml(input));
+    const videoTracks = getAllByTag(doc, 'video')[0].getElementsByTagName('track');
+    const screenClip = videoTracks[0].getElementsByTagName('clipitem')[0];
+    const basicMotion = Array.from(screenClip.getElementsByTagName('effect')).find(
+      (e) => e.getElementsByTagName('effectid')[0]?.textContent === 'basic'
+    );
+    const params = Array.from(basicMotion!.getElementsByTagName('parameter'));
+    const scale = params.find(
+      (p) => p.getElementsByTagName('parameterid')[0]?.textContent === 'scale'
+    );
+    const scaleValues = Array.from(scale!.getElementsByTagName('keyframe')).map((kf) =>
+      Number(kf.getElementsByTagName('value')[0]?.textContent)
+    );
+    // placement scale (25) * zoom: 25 at zoom=1, 50 at zoom=2.
+    expect(scaleValues.some((v) => Math.abs(v - 25) < 0.01)).toBe(true);
+    expect(scaleValues.some((v) => Math.abs(v - 50) < 0.01)).toBe(true);
+
+    // At zoom=2 focused on canvas center, the placement center (480, 270)
+    // maps to canvas (0, 0): a (-960, -540) px offset in media units
+    // (3840×2160) → (-0.25, -0.25); unzoomed it is (-0.125, -0.125).
+    const center = params.find(
+      (p) => p.getElementsByTagName('parameterid')[0]?.textContent === 'center'
+    );
+    const centerKfs = Array.from(center!.getElementsByTagName('keyframe')).map((kf) => ({
+      horiz: Number(kf.getElementsByTagName('horiz')[0]?.textContent),
+      vert: Number(kf.getElementsByTagName('vert')[0]?.textContent)
+    }));
+    expect(
+      centerKfs.some((c) => Math.abs(c.horiz + 0.125) < 0.001 && Math.abs(c.vert + 0.125) < 0.001)
+    ).toBe(true);
+    expect(
+      centerKfs.some((c) => Math.abs(c.horiz + 0.25) < 0.001 && Math.abs(c.vert + 0.25) < 0.001)
+    ).toBe(true);
   });
 
   test('buildPremiereXml emits a static (non-keyframed) Crop when the PiP never goes fullscreen', () => {

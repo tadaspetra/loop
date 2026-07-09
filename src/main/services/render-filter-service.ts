@@ -1,4 +1,5 @@
-import type { Keyframe, ScreenFitMode } from '../../shared/domain/project';
+import type { Keyframe, ScreenFitMode, ScreenTransform } from '../../shared/domain/project';
+import { computeScreenPlacement } from '../../shared/domain/screen-layout';
 
 export const TRANSITION_DURATION = 0.3;
 const AUTHORING_CANVAS_W = 1920;
@@ -190,15 +191,68 @@ export function buildCamFullAlphaExpr(keyframes: Keyframe[]): string {
   return expr;
 }
 
+/**
+ * Filter chain (no stream labels) that places the screen source onto the
+ * canvas according to a free ScreenTransform: aspect-fit scale to the
+ * placement size, crop any offscreen overflow, then pad onto the black
+ * canvas at the placement offset. Returns null when no transform is set so
+ * callers fall back to the legacy fill/fit chains.
+ */
+export function buildScreenPlacementChain(
+  sourceWidth: number,
+  sourceHeight: number,
+  canvasW: number,
+  canvasH: number,
+  screenTransform: ScreenTransform | null
+): string | null {
+  if (!screenTransform) return null;
+  const { outW, outH } = resolveOutputSize(canvasW, canvasH);
+  const placement = computeScreenPlacement(
+    sourceWidth,
+    sourceHeight,
+    outW,
+    outH,
+    'fill',
+    screenTransform
+  );
+  if (!placement) return null;
+
+  const pw = Math.max(2, roundToEven(placement.width));
+  const ph = Math.max(2, roundToEven(placement.height));
+  // Keep the placement center stable after even-rounding the size.
+  const left = Math.round(placement.left + (placement.width - pw) / 2);
+  const top = Math.round(placement.top + (placement.height - ph) / 2);
+
+  const cropX = Math.max(0, -left);
+  const cropY = Math.max(0, -top);
+  const padX = Math.max(0, left);
+  const padY = Math.max(0, top);
+  const visibleW = Math.max(2, Math.min(pw - cropX, outW - padX));
+  const visibleH = Math.max(2, Math.min(ph - cropY, outH - padY));
+
+  const parts = [
+    `scale=${pw}:${ph}:flags=lanczos:force_original_aspect_ratio=decrease`,
+    `pad=${pw}:${ph}:'(ow-iw)/2':'(oh-ih)/2':color=black`
+  ];
+  if (cropX > 0 || cropY > 0 || visibleW !== pw || visibleH !== ph) {
+    parts.push(`crop=${visibleW}:${visibleH}:${cropX}:${cropY}`);
+  }
+  if (visibleW !== outW || visibleH !== outH || padX > 0 || padY > 0) {
+    parts.push(`pad=${outW}:${outH}:${padX}:${padY}:color=black`);
+  }
+  return parts.join(',');
+}
+
 export function buildScreenFilter(
   keyframes: Keyframe[],
   screenFitMode: ScreenFitMode,
-  _sourceWidth: number,
-  _sourceHeight: number,
+  sourceWidth: number,
+  sourceHeight: number,
   canvasW: number,
   canvasH: number,
   outputLabel = '[screen]',
-  targetFps = 30
+  targetFps = 30,
+  screenTransform: ScreenTransform | null = null
 ): string {
   const { outW, outH } = resolveOutputSize(canvasW, canvasH);
   const normalizedKeyframes = (Array.isArray(keyframes) ? keyframes : []).map((keyframe) => ({
@@ -216,8 +270,16 @@ export function buildScreenFilter(
     backgroundFocusY: panToFocusCoord(keyframe?.backgroundZoom, keyframe?.backgroundPanY, 0.5)
   }));
 
-  const baseFilter =
-    screenFitMode === 'fill'
+  const placementChain = buildScreenPlacementChain(
+    sourceWidth,
+    sourceHeight,
+    canvasW,
+    canvasH,
+    screenTransform
+  );
+  const baseFilter = placementChain
+    ? `[0:v]${placementChain}[screen_base]`
+    : screenFitMode === 'fill'
       ? `[0:v]scale=${outW}:${outH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${outW}:${outH}[screen_base]`
       : `[0:v]scale=${outW}:${outH}:flags=lanczos:force_original_aspect_ratio=decrease,pad=${outW}:${outH}:'(ow-iw)/2':'(oh-ih)/2':color=black[screen_base]`;
 
@@ -248,7 +310,8 @@ export function buildFilterComplex(
   sourceHeight: number,
   canvasW: number,
   canvasH: number,
-  targetFps = 30
+  targetFps = 30,
+  screenTransform: ScreenTransform | null = null
 ): string {
   const { outW, outH } = resolveOutputSize(canvasW, canvasH);
   const scaleX = outW / AUTHORING_CANVAS_W;
@@ -276,7 +339,8 @@ export function buildFilterComplex(
     canvasW,
     canvasH,
     '[screen]',
-    targetFps
+    targetFps,
+    screenTransform
   );
 
   const hasPip = keyframes.some((keyframe) => keyframe.pipVisible);

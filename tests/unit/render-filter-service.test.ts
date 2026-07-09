@@ -6,6 +6,8 @@ import {
   buildFilterComplex,
   buildNumericExpr,
   buildPosExpr,
+  buildScreenFilter,
+  buildScreenPlacementChain,
   panToFocusCoord
 } from '../../src/main/services/render-filter-service';
 import type { Keyframe } from '../../src/shared/domain/project';
@@ -244,6 +246,138 @@ describe('main/services/render-filter-service', () => {
     expect(filter).toContain(
       'scale=2560:1440:flags=lanczos:force_original_aspect_ratio=increase,crop=2560:1440'
     );
+  });
+
+  test('buildScreenPlacementChain scales the source to the transform placement and pads', () => {
+    // 4K source at half fit size, centered in the top-left quadrant: placement
+    // rect is exactly the top-left 960x540 corner, no crop needed.
+    const chain = buildScreenPlacementChain(3840, 2160, 1920, 1080, {
+      x: 480,
+      y: 270,
+      scale: 0.5
+    });
+    expect(chain).toContain('scale=960:540:flags=lanczos:force_original_aspect_ratio=decrease');
+    expect(chain).not.toContain('crop=');
+    expect(chain).toContain('pad=1920:1080:0:0:color=black');
+
+    // Centered placement pads with the placement offset.
+    const centered = buildScreenPlacementChain(3840, 2160, 1920, 1080, {
+      x: 960,
+      y: 540,
+      scale: 0.5
+    });
+    expect(centered).toContain('pad=1920:1080:480:270:color=black');
+  });
+
+  test('buildScreenPlacementChain crops overflow when the placement extends offscreen', () => {
+    // Full-size 4K placement centered on the left edge: half the screen hangs
+    // off-canvas and must be cropped before padding back onto the canvas.
+    const chain = buildScreenPlacementChain(3840, 2160, 1920, 1080, {
+      x: 0,
+      y: 540,
+      scale: 1
+    });
+    expect(chain).toContain('crop=960:1080:960:0');
+    expect(chain).toContain('pad=1920:1080:0:0:color=black');
+  });
+
+  test('buildScreenPlacementChain returns null without a transform', () => {
+    expect(buildScreenPlacementChain(3840, 2160, 1920, 1080, null)).toBeNull();
+  });
+
+  test('buildScreenFilter keeps legacy fill/fit chains when no transform is set', () => {
+    const filter = buildScreenFilter(
+      [{ time: 0, pipX: 0, pipY: 0, pipVisible: false, cameraFullscreen: false }] as Keyframe[],
+      'fill',
+      3840,
+      2160,
+      1920,
+      1080
+    );
+    expect(filter).toBe(
+      '[0:v]scale=1920:1080:flags=lanczos:force_original_aspect_ratio=increase,crop=1920:1080[screen]'
+    );
+  });
+
+  test('buildScreenFilter uses the placement chain when a transform is set', () => {
+    const filter = buildScreenFilter(
+      [{ time: 0, pipX: 0, pipY: 0, pipVisible: false, cameraFullscreen: false }] as Keyframe[],
+      'fill',
+      3840,
+      2160,
+      1920,
+      1080,
+      '[screen]',
+      30,
+      { x: 480, y: 270, scale: 0.5 }
+    );
+    expect(filter).toContain('scale=960:540');
+    expect(filter).toContain('pad=1920:1080:0:0:color=black');
+    expect(filter).toContain('[screen]');
+  });
+
+  test('buildScreenFilter composes zoom animation on top of the placement chain', () => {
+    const filter = buildScreenFilter(
+      [
+        {
+          time: 0,
+          pipX: 0,
+          pipY: 0,
+          pipVisible: false,
+          cameraFullscreen: false,
+          backgroundZoom: 1,
+          backgroundPanX: 0,
+          backgroundPanY: 0
+        },
+        {
+          time: 2,
+          pipX: 0,
+          pipY: 0,
+          pipVisible: false,
+          cameraFullscreen: false,
+          backgroundZoom: 2,
+          backgroundPanX: 0,
+          backgroundPanY: 0
+        }
+      ] as Keyframe[],
+      'fill',
+      3840,
+      2160,
+      1920,
+      1080,
+      '[screen]',
+      30,
+      { x: 960, y: 540, scale: 0.5 }
+    );
+    expect(filter).toContain('pad=1920:1080:480:270:color=black[screen_base]');
+    expect(filter).toContain('zoompan=');
+  });
+
+  test('buildFilterComplex forwards the screen transform to the screen chain', () => {
+    const filter = buildFilterComplex(
+      [
+        {
+          time: 0,
+          pipX: 100,
+          pipY: 100,
+          pipVisible: true,
+          cameraFullscreen: false,
+          backgroundZoom: 1,
+          backgroundPanX: 0,
+          backgroundPanY: 0
+        }
+      ] as Keyframe[],
+      320,
+      'fill',
+      3840,
+      2160,
+      1920,
+      1080,
+      30,
+      { x: 480, y: 270, scale: 0.5 }
+    );
+    expect(filter).toContain('scale=960:540:flags=lanczos:force_original_aspect_ratio=decrease');
+    expect(filter).toContain('pad=1920:1080:0:0:color=black');
   });
 
   test('buildAlphaExpr collapses redundant visibility anchors for long timelines', () => {

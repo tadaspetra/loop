@@ -44,6 +44,25 @@ import {
 } from './features/recording/recorder-utils';
 import { CLOSE_PROMPT_MESSAGE, getCloseRequestedAction } from './features/recording/close-request';
 import { resolveTakeAudio } from '../shared/domain/take-audio';
+import {
+  computeScreenPlacement,
+  defaultScreenTransform,
+  normalizeScreenTransform
+} from '../shared/domain/screen-layout';
+import {
+  clientPointToCanvasCoords,
+  cursorForScreenHit,
+  getWorkspaceView,
+  handleAnchorPoints,
+  hitTestScreenPlacement,
+  moveScreenTransform,
+  oppositeCorner,
+  placementCorners,
+  resizeScreenTransform,
+  snapMovedScreenTransform,
+  snapResizeCursor,
+  workspaceToEditorCoords
+} from './features/editor/screen-transform';
 import { drawMirroredImage, getCenteredSquareCropRect } from './features/camera/camera-render';
 import { cleanupAllMedia } from './features/media-cleanup';
 
@@ -533,6 +552,10 @@ let sectionZoomDragActive = false;
 let draggingBackground = false;
 let backgroundDragMoved = false;
 let backgroundDragState = null;
+// OBS-style screen layer drag: move (body) or aspect-locked resize (corner
+// handles). `hover` drives the outline/handles overlay and cursor feedback.
+let screenTransformDrag = null;
+let screenTransformHover = false;
 let takeAudioBufferCache = new Map(); // takeId -> AudioBuffer (mic audio)
 // Separate cache for the system-audio track that lives on the screen webm
 // when a take was recorded with "Include system audio" enabled. Kept distinct
@@ -910,6 +933,9 @@ function buildProjectSavePayload() {
     ...activeProject,
     settings: {
       screenFitMode: screenFitSelect.value || 'fill',
+      screenTransform: editorState
+        ? (editorState.screenTransform ?? null)
+        : (activeProject.settings?.screenTransform ?? null),
       hideFromRecording: hideFromRecording === 'true',
       exportAudioPreset: normalizeExportAudioPreset(exportAudioPresetSelect.value),
       exportVideoPreset: normalizeExportVideoPreset(exportVideoPresetSelect.value),
@@ -1089,6 +1115,7 @@ function buildPreviewInputs() {
     })),
     pipSize: editorState.pipSize,
     screenFitMode: editorState.screenFitMode,
+    screenTransform: editorState.screenTransform ?? null,
     cameraSyncOffsetMs: editorState.cameraSyncOffsetMs,
     sourceWidth: editorState.sourceWidth || CANVAS_W,
     sourceHeight: editorState.sourceHeight || CANVAS_H
@@ -1131,6 +1158,15 @@ function schedulePreviewRender() {
         })),
         pipSize: Math.round(inputs.pipSize || 0),
         fit: inputs.screenFitMode === 'fit' ? 'fit' : 'fill',
+        // Must mirror preview-render-service's normalization (position + key
+        // order) so renderer and main compute identical hashes.
+        st: inputs.screenTransform
+          ? [
+              Number(inputs.screenTransform.x.toFixed(2)),
+              Number(inputs.screenTransform.y.toFixed(2)),
+              Number(inputs.screenTransform.scale.toFixed(4))
+            ]
+          : null,
         camSync: Math.round(inputs.cameraSyncOffsetMs || 0),
         w: Math.round(inputs.sourceWidth || 0),
         h: Math.round(inputs.sourceHeight || 0)
@@ -1156,6 +1192,7 @@ function schedulePreviewRender() {
         keyframes: inputs.keyframes,
         pipSize: inputs.pipSize,
         screenFitMode: inputs.screenFitMode,
+        screenTransform: inputs.screenTransform,
         cameraSyncOffsetMs: inputs.cameraSyncOffsetMs,
         sourceWidth: inputs.sourceWidth,
         sourceHeight: inputs.sourceHeight
@@ -1207,7 +1244,8 @@ function snapshotTimeline() {
     keyframes: editorState.keyframes.map((kf) => ({ ...kf })),
     selectedSectionId: editorState.selectedSectionId,
     selectedSectionIds: new Set(editorState.selectedSectionIds || []),
-    duration: editorState.duration
+    duration: editorState.duration,
+    screenTransform: editorState.screenTransform ? { ...editorState.screenTransform } : null
   };
 }
 
@@ -1218,6 +1256,7 @@ function restoreSnapshot(snapshot) {
   editorState.selectedSectionIds =
     snapshot.selectedSectionIds || new Set([snapshot.selectedSectionId].filter(Boolean));
   editorState.duration = snapshot.duration;
+  editorState.screenTransform = snapshot.screenTransform ?? null;
   recalculateTimelinePositions();
   syncSectionAnchorKeyframes();
   renderSectionMarkers();
@@ -1365,6 +1404,7 @@ async function activateProject(projectPath, project, preferredView = 'recording'
       sourceWidth: project.timeline.sourceWidth || null,
       sourceHeight: project.timeline.sourceHeight || null,
       cameraSyncOffsetMs: project.settings?.cameraSyncOffsetMs,
+      screenTransform: project.settings?.screenTransform ?? null,
       initialView: preferredView === 'recording' ? 'recording' : 'timeline'
     });
   } else {
@@ -2547,6 +2587,24 @@ function drawFill(targetCtx, video, x, y, w, h) {
   targetCtx.restore();
 }
 
+// Base draw of the screen layer onto the 16:9 editor canvas. With a free
+// screen transform the recording is drawn at its placement rect (OBS-style);
+// otherwise the legacy fill/fit behavior applies.
+function drawEditorScreenBase(targetCtx, video, fitMode) {
+  const transform = editorState?.screenTransform || null;
+  if (transform) {
+    const vw = getSourceWidth(video);
+    const vh = getSourceHeight(video);
+    const placement = computeScreenPlacement(vw, vh, CANVAS_W, CANVAS_H, 'fill', transform);
+    if (placement) {
+      targetCtx.drawImage(video, placement.left, placement.top, placement.width, placement.height);
+      return;
+    }
+  }
+  const drawBase = fitMode === 'fill' ? drawFill : drawFit;
+  drawBase(targetCtx, video, 0, 0, CANVAS_W, CANVAS_H);
+}
+
 function drawEditorScreenWithZoom(
   targetCtx,
   video,
@@ -2559,16 +2617,15 @@ function drawEditorScreenWithZoom(
 ) {
   if (!editorZoomBufferCtx) return;
   const zoom = clampSectionZoom(backgroundZoom);
-  const drawBase = fitMode === 'fill' ? drawFill : drawFit;
 
   if (zoom <= 1.0001) {
-    drawBase(targetCtx, video, 0, 0, CANVAS_W, CANVAS_H);
+    drawEditorScreenBase(targetCtx, video, fitMode);
     return;
   }
 
   editorZoomBufferCtx.fillStyle = '#000';
   editorZoomBufferCtx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-  drawBase(editorZoomBufferCtx, video, 0, 0, CANVAS_W, CANVAS_H);
+  drawEditorScreenBase(editorZoomBufferCtx, video, fitMode);
 
   const { sourceW, sourceH } = resolveZoomCrop(zoom, backgroundPanX, backgroundPanY);
   const focusX = backgroundFocusX ?? panToFocusCoord(zoom, backgroundPanX, 0.5);
@@ -3774,6 +3831,7 @@ function appendTakeToTimeline({
     selectedSectionId: appendedSections[0]?.id || editorState?.selectedSectionId,
     hasCamera: keepCamera,
     screenFitMode: editorState?.screenFitMode,
+    screenTransform: editorState?.screenTransform ?? null,
     sourceWidth: editorState?.sourceWidth,
     sourceHeight: editorState?.sourceHeight,
     initialView: 'timeline'
@@ -4231,6 +4289,11 @@ function enterEditor(rawSections, opts = {}) {
       [opts.selectedSectionId || sections[0]?.id || null].filter(Boolean)
     ),
     screenFitMode: opts.screenFitMode || screenFitSelect.value,
+    screenTransform: normalizeScreenTransform(
+      opts.screenTransform !== undefined
+        ? opts.screenTransform
+        : activeProject?.settings?.screenTransform
+    ),
     rendering: false,
     renderProgress: 0,
     playbackSpeed: 1,
@@ -4741,8 +4804,14 @@ function editorDrawLoop() {
     updateScrubberPosition();
   }
 
-  // Draw composite frame
-  editorCtx.fillStyle = '#000';
+  // Draw composite frame. While the screen layer is being dragged the whole
+  // composition renders zoomed out (workspace view) so content hanging
+  // outside the 16:9 frame stays visible as a dimmed ghost around it.
+  const workspace = screenTransformDrag ? getWorkspaceView() : null;
+
+  // The frame reads by background contrast alone: lighter workspace
+  // surroundings vs the black 16:9 frame — no border lines.
+  editorCtx.fillStyle = workspace ? '#2e2e33' : '#000';
   editorCtx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
   const activeVideos = activeTakeId ? getOrCreateTakeVideos(activeTakeId) : null;
@@ -4763,6 +4832,29 @@ function editorDrawLoop() {
   const sectionImage = currentSection?.imagePath
     ? sectionImageCache.get(currentSection.imagePath)
     : null;
+
+  if (workspace) {
+    // Ghost pass: the full screen layer (including the parts outside the
+    // frame) at reduced opacity, then the real composition clipped to the
+    // frame on top — anything dimmed is what gets cropped away.
+    const ghostSource = sectionImage || (hasScreen ? activeVideos.screen : null);
+    if (ghostSource) {
+      editorCtx.save();
+      editorCtx.translate(workspace.offsetX, workspace.offsetY);
+      editorCtx.scale(workspace.scale, workspace.scale);
+      editorCtx.globalAlpha = 0.3;
+      drawEditorScreenBase(editorCtx, ghostSource, editorState.screenFitMode);
+      editorCtx.restore();
+    }
+    editorCtx.save();
+    editorCtx.translate(workspace.offsetX, workspace.offsetY);
+    editorCtx.scale(workspace.scale, workspace.scale);
+    editorCtx.beginPath();
+    editorCtx.rect(0, 0, CANVAS_W, CANVAS_H);
+    editorCtx.clip();
+    editorCtx.fillStyle = '#000';
+    editorCtx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  }
 
   if (sectionImage) {
     drawEditorScreenWithZoom(
@@ -4814,6 +4906,12 @@ function editorDrawLoop() {
       editorCtx.restore();
     }
   }
+
+  if (workspace) {
+    editorCtx.restore();
+  }
+
+  drawScreenTransformOverlay(state, workspace);
 
   scheduleEditorDrawLoop();
 }
@@ -4898,16 +4996,114 @@ function commitSectionZoomChange() {
   scheduleProjectSave();
 }
 
+// ===== Screen layer transform (OBS-style move/resize) =====
+
+// Dimensions of whatever currently fills the screen layer: the active
+// section's still image when present, else the active take's screen video,
+// falling back to the probed source resolution before metadata loads.
+function getCurrentScreenSourceDims() {
+  if (!editorState) return null;
+  const currentSection = findSectionForTime(editorState.currentTime);
+  const sectionImage = currentSection?.imagePath
+    ? sectionImageCache.get(currentSection.imagePath)
+    : null;
+  const activeVideos = activeTakeId ? getOrCreateTakeVideos(activeTakeId) : null;
+  const source = sectionImage || activeVideos?.screen || null;
+  const width = (source ? getSourceWidth(source) : 0) || editorState.sourceWidth || 0;
+  const height = (source ? getSourceHeight(source) : 0) || editorState.sourceHeight || 0;
+  if (!width || !height) return null;
+  return { width, height };
+}
+
+function getCurrentScreenPlacement() {
+  if (!editorState) return null;
+  const dims = getCurrentScreenSourceDims();
+  if (!dims) return null;
+  return computeScreenPlacement(
+    dims.width,
+    dims.height,
+    CANVAS_W,
+    CANVAS_H,
+    editorState.screenFitMode === 'fit' ? 'fit' : 'fill',
+    editorState.screenTransform || null
+  );
+}
+
+// The screen layer can be grabbed only while the camera is not covering it
+// and no zoom crop is active (zoomed sections use drag for panning instead).
+function screenTransformInteractionAllowed(state) {
+  if (!editorState || editorState.rendering) return false;
+  if (state.backgroundZoom > 1.0001) return false;
+  if (state.cameraFullscreen && state.opacity > 0) return false;
+  return true;
+}
+
+function drawScreenTransformOverlay(state, workspace = null) {
+  if (!screenTransformHover && !screenTransformDrag) return;
+  if (!screenTransformInteractionAllowed(state)) return;
+  const placement = getCurrentScreenPlacement();
+  if (!placement) return;
+
+  editorCtx.save();
+  if (workspace) {
+    editorCtx.translate(workspace.offsetX, workspace.offsetY);
+    editorCtx.scale(workspace.scale, workspace.scale);
+  }
+
+  // Snap guide lines (frame edges / center) while a drag has a snap engaged.
+  const drag = screenTransformDrag;
+  if (drag && (drag.guideX !== null || drag.guideY !== null)) {
+    editorCtx.strokeStyle = 'rgba(244, 114, 182, 0.9)';
+    editorCtx.lineWidth = 2;
+    editorCtx.beginPath();
+    if (drag.guideX !== null) {
+      editorCtx.moveTo(drag.guideX, 0);
+      editorCtx.lineTo(drag.guideX, CANVAS_H);
+    }
+    if (drag.guideY !== null) {
+      editorCtx.moveTo(0, drag.guideY);
+      editorCtx.lineTo(CANVAS_W, drag.guideY);
+    }
+    editorCtx.stroke();
+  }
+
+  editorCtx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+  editorCtx.lineWidth = 3;
+  editorCtx.setLineDash([14, 10]);
+  editorCtx.strokeRect(placement.left, placement.top, placement.width, placement.height);
+  editorCtx.setLineDash([]);
+
+  const handleSize = 22;
+  editorCtx.fillStyle = '#ffffff';
+  editorCtx.strokeStyle = 'rgba(0, 0, 0, 0.6)';
+  editorCtx.lineWidth = 2;
+  // In the normal view handles are clamped into the frame so an overflowing
+  // placement stays resizable; the workspace view shows the true corners.
+  for (const point of handleAnchorPoints(placement, !workspace)) {
+    editorCtx.fillRect(point.x - handleSize / 2, point.y - handleSize / 2, handleSize, handleSize);
+    editorCtx.strokeRect(
+      point.x - handleSize / 2,
+      point.y - handleSize / 2,
+      handleSize,
+      handleSize
+    );
+  }
+  editorCtx.restore();
+}
+
 // ===== PiP drag-to-reposition =====
 
 function canvasToEditorCoords(clientX, clientY) {
   const rect = editorCanvas.getBoundingClientRect();
-  const scaleX = CANVAS_W / rect.width;
-  const scaleY = CANVAS_H / rect.height;
-  return {
-    x: (clientX - rect.left) * scaleX,
-    y: (clientY - rect.top) * scaleY
-  };
+  // Account for the object-contain letterboxing of the 16:9 bitmap inside
+  // the canvas element — the element box alone skews coordinates when the
+  // container is not exactly 16:9.
+  const { x, y } = clientPointToCanvasCoords(clientX, clientY, rect, CANVAS_W, CANVAS_H);
+  // While a screen-layer drag is active the canvas renders the zoomed-out
+  // workspace view, so pointer positions map through its inverse to stay
+  // aligned with the frame coordinates the drag math works in.
+  if (screenTransformDrag) return workspaceToEditorCoords(x, y);
+  return { x, y };
 }
 
 editorCanvas.addEventListener('mousedown', (e) => {
@@ -4923,6 +5119,71 @@ editorCanvas.addEventListener('mousedown', (e) => {
       pipDragMoved = false;
       pushUndo();
       draggingPip = true;
+      e.preventDefault();
+      return;
+    }
+  }
+
+  // OBS-style screen layer grab: corner handles resize, body drag moves.
+  // Zoomed sections keep drag-to-pan (below), so the layer grab only applies
+  // at zoom <= 1 while the camera is not covering the frame.
+  if (screenTransformInteractionAllowed(kf)) {
+    const placement = getCurrentScreenPlacement();
+    const hit = hitTestScreenPlacement(x, y, placement);
+    const dims = hit ? getCurrentScreenSourceDims() : null;
+    if (hit && dims) {
+      const prevTransform = editorState.screenTransform
+        ? { ...editorState.screenTransform }
+        : null;
+      const startTransform =
+        prevTransform ||
+        defaultScreenTransform(
+          editorState.screenFitMode === 'fit' ? 'fit' : 'fill',
+          dims.width,
+          dims.height
+        );
+      pushUndo();
+      // The moment the drag engages, the canvas switches to the zoomed-out
+      // workspace view, so all stored pointer references are converted into
+      // workspace-mapped frame coordinates to avoid a jump on the first move.
+      const wsPointer = workspaceToEditorCoords(x, y);
+      if (hit.kind === 'handle') {
+        const anchor = oppositeCorner(placement, hit.corner);
+        const grabbed = placementCorners(placement).find(
+          (point) => point.corner === hit.corner
+        );
+        screenTransformDrag = {
+          mode: 'resize',
+          corner: hit.corner,
+          anchorX: anchor.x,
+          anchorY: anchor.y,
+          // Keep the grabbed corner glued to the cursor across the view switch.
+          cursorOffsetX: grabbed.x - wsPointer.x,
+          cursorOffsetY: grabbed.y - wsPointer.y,
+          sourceW: dims.width,
+          sourceH: dims.height,
+          prevTransform,
+          moved: false,
+          guideX: null,
+          guideY: null
+        };
+      } else {
+        screenTransformDrag = {
+          mode: 'move',
+          startMouseX: wsPointer.x,
+          startMouseY: wsPointer.y,
+          startTransform,
+          sourceW: dims.width,
+          sourceH: dims.height,
+          prevTransform,
+          moved: false,
+          guideX: null,
+          guideY: null
+        };
+      }
+      // Materialize the transform right away so the draw path switches to
+      // placement mode for live feedback (it matches the current look).
+      editorState.screenTransform = startTransform;
       e.preventDefault();
       return;
     }
@@ -4946,6 +5207,56 @@ editorCanvas.addEventListener('mousedown', (e) => {
 });
 
 window.addEventListener('mousemove', (e) => {
+  if (screenTransformDrag && editorState) {
+    const { x, y } = canvasToEditorCoords(e.clientX, e.clientY);
+    const drag = screenTransformDrag;
+    const snapEnabled = !e.altKey;
+    let next;
+    drag.guideX = null;
+    drag.guideY = null;
+    if (drag.mode === 'move') {
+      next = moveScreenTransform(drag.startTransform, x - drag.startMouseX, y - drag.startMouseY);
+      if (next && snapEnabled) {
+        const snapped = snapMovedScreenTransform(next, drag.sourceW, drag.sourceH);
+        next = snapped.transform;
+        drag.guideX = snapped.guideX;
+        drag.guideY = snapped.guideY;
+      }
+    } else {
+      let cursorX = x + drag.cursorOffsetX;
+      let cursorY = y + drag.cursorOffsetY;
+      if (snapEnabled) {
+        const snapped = snapResizeCursor(cursorX, cursorY);
+        cursorX = snapped.x;
+        cursorY = snapped.y;
+        drag.guideX = snapped.guideX;
+        drag.guideY = snapped.guideY;
+      }
+      next = resizeScreenTransform({
+        corner: drag.corner,
+        anchorX: drag.anchorX,
+        anchorY: drag.anchorY,
+        cursorX,
+        cursorY,
+        sourceW: drag.sourceW,
+        sourceH: drag.sourceH
+      });
+    }
+    if (next) {
+      const current = editorState.screenTransform;
+      if (
+        !current ||
+        Math.abs(next.x - current.x) > 0.01 ||
+        Math.abs(next.y - current.y) > 0.01 ||
+        Math.abs(next.scale - current.scale) > 0.0001
+      ) {
+        editorState.screenTransform = next;
+        drag.moved = true;
+      }
+    }
+    return;
+  }
+
   if (draggingBackground && editorState && backgroundDragState) {
     const { x, y } = canvasToEditorCoords(e.clientX, e.clientY);
     const deltaX = x - backgroundDragState.startMouseX;
@@ -4976,6 +5287,20 @@ window.addEventListener('mousemove', (e) => {
 });
 
 window.addEventListener('mouseup', () => {
+  if (screenTransformDrag) {
+    const drag = screenTransformDrag;
+    screenTransformDrag = null;
+    if (drag.moved) {
+      scheduleProjectSave();
+    } else {
+      // Click without movement: restore whatever was set before the grab so
+      // a plain click does not silently materialize a transform.
+      if (editorState) editorState.screenTransform = drag.prevTransform;
+      undoStack.pop();
+      updateUndoRedoButtons();
+    }
+  }
+
   const wasDraggingBackground = draggingBackground;
   draggingBackground = false;
   backgroundDragState = null;
@@ -5000,6 +5325,77 @@ window.addEventListener('mouseup', () => {
     }
     pipDragMoved = false;
   }
+});
+
+// Hover feedback for the screen layer: show the outline + handles and swap
+// the cursor while the pointer is over the (grabbable) screen placement.
+editorCanvas.addEventListener('mousemove', (e) => {
+  if (!editorState || editorState.rendering) {
+    screenTransformHover = false;
+    editorCanvas.style.cursor = '';
+    return;
+  }
+  if (screenTransformDrag) {
+    screenTransformHover = true;
+    return;
+  }
+  if (draggingPip || draggingBackground) return;
+
+  const { x, y } = canvasToEditorCoords(e.clientX, e.clientY);
+  const state = getStateAtTime(editorState.currentTime);
+
+  // The PiP owns the pointer inside its box.
+  if (
+    editorState.hasCamera &&
+    state.pipVisible &&
+    state.camTransition <= 0 &&
+    x >= state.pipX &&
+    x <= state.pipX + editorState.pipSize &&
+    y >= state.pipY &&
+    y <= state.pipY + editorState.pipSize
+  ) {
+    screenTransformHover = false;
+    editorCanvas.style.cursor = 'grab';
+    return;
+  }
+
+  if (!screenTransformInteractionAllowed(state)) {
+    screenTransformHover = false;
+    editorCanvas.style.cursor = '';
+    return;
+  }
+
+  const hit = hitTestScreenPlacement(x, y, getCurrentScreenPlacement());
+  screenTransformHover = !!hit;
+  editorCanvas.style.cursor = cursorForScreenHit(hit);
+});
+
+editorCanvas.addEventListener('mouseleave', () => {
+  screenTransformHover = false;
+  editorCanvas.style.cursor = '';
+});
+
+// Double-click the screen layer to reset it back to the plain Fill/Fit mode.
+editorCanvas.addEventListener('dblclick', (e) => {
+  if (!editorState || editorState.rendering || !editorState.screenTransform) return;
+  const { x, y } = canvasToEditorCoords(e.clientX, e.clientY);
+  const state = getStateAtTime(editorState.currentTime);
+  if (!screenTransformInteractionAllowed(state)) return;
+  if (
+    editorState.hasCamera &&
+    state.pipVisible &&
+    state.camTransition <= 0 &&
+    x >= state.pipX &&
+    x <= state.pipX + editorState.pipSize &&
+    y >= state.pipY &&
+    y <= state.pipY + editorState.pipSize
+  ) {
+    return;
+  }
+  if (!hitTestScreenPlacement(x, y, getCurrentScreenPlacement())) return;
+  pushUndo();
+  editorState.screenTransform = null;
+  scheduleProjectSave();
 });
 
 // ===== Timeline scrubber =====
@@ -5464,6 +5860,7 @@ async function renderVideo() {
       keyframes: renderKeyframes,
       pipSize: editorState.pipSize,
       screenFitMode: editorState.screenFitMode,
+      screenTransform: editorState.screenTransform ?? null,
       exportAudioPreset: normalizeExportAudioPreset(exportAudioPresetSelect.value),
       exportVideoPreset: normalizeExportVideoPreset(exportVideoPresetSelect.value),
       cameraSyncOffsetMs: editorState.cameraSyncOffsetMs,
@@ -5582,6 +5979,7 @@ async function exportPremiere() {
       pipSize: editorState.pipSize,
       sourceWidth: editorState.sourceWidth || CANVAS_W,
       sourceHeight: editorState.sourceHeight || CANVAS_H,
+      screenTransform: editorState.screenTransform ?? null,
       cameraSyncOffsetMs: editorState.cameraSyncOffsetMs,
       takes,
       sections: premiereSections,
@@ -5728,7 +6126,13 @@ cameraSyncOffsetInput.addEventListener('change', () => {
 
 // Source change handlers
 screenFitSelect.addEventListener('change', () => {
-  if (editorState) editorState.screenFitMode = screenFitSelect.value;
+  if (editorState) {
+    editorState.screenFitMode = screenFitSelect.value;
+    // Picking a plain Fill/Fit mode hands control back to the select; any
+    // free screen placement is cleared so the mode visibly applies.
+    editorState.screenTransform = null;
+  }
+  if (activeProject?.settings) activeProject.settings.screenTransform = null;
   updatePreview();
   scheduleProjectSave();
 });

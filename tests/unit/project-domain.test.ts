@@ -111,6 +111,24 @@ describe('shared/domain/project', () => {
     expect(project.settings.exportAudioPreset).toBe('compressed');
     expect(project.settings.exportVideoPreset).toBe('quality');
     expect(project.settings.autoCutSilences).toBe(true);
+    expect(project.settings.screenTransform).toBeNull();
+  });
+
+  test('normalizeProjectData normalizes the screen transform and defaults it to null', () => {
+    const project = normalizeProjectData({
+      settings: {
+        screenTransform: { x: '800', y: 9999, scale: 1.25 }
+      }
+    });
+    expect(project.settings.screenTransform).toEqual({ x: 800, y: 1080, scale: 1.25 });
+
+    const invalid = normalizeProjectData({
+      settings: {
+        screenTransform: { x: 10, y: 10 }
+      }
+    });
+    expect(invalid.settings.screenTransform).toBeNull();
+    expect(createDefaultProject('Demo').settings.screenTransform).toBeNull();
   });
 
   test('normalizeProjectData preserves automatic silence-cutting preference', () => {

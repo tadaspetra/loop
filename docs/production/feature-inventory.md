@@ -170,6 +170,42 @@ Acceptance criteria:
 - Camera state transitions remain deterministic at section boundaries.
 - Applying style to future updates only forward sections from current selection.
 
+### E5. Screen layer placement (OBS-style)
+
+- The editor canvas is a fixed 16:9 (1920×1080 authoring) frame. The screen
+  recording keeps its native capture resolution and can be freely placed
+  inside the frame: drag the screen layer to move it, drag a corner handle to
+  resize (aspect-locked), double-click to reset to the plain Fill/Fit mode.
+- The placement is stored as `settings.screenTransform` (`{x, y, scale}`:
+  center in 1920×1080 authoring space, scale relative to the aspect-fit
+  size); `null` keeps the legacy `screenFitMode` behavior.
+- Selecting Fill/Fit in the Mode select clears the transform.
+- Layer grabbing is disabled while a zoomed section uses drag-to-pan or while
+  the camera is fullscreen over the frame.
+- While dragging, the editor zooms out to a workspace view: the 16:9 frame
+  reads by background contrast (black frame on a lighter workspace, no border
+  lines) and content hanging outside it stays visible as a dimmed ghost
+  (dimmed = cropped from output).
+- Corner handles are clamped into the frame in the normal view, so an
+  overflowing placement (e.g. Fill on a 16:10 capture) stays resizable even
+  when its true corners sit off-frame; the workspace view shows true corners.
+- Moving snaps the layer's edges/center to the frame edges and center lines
+  (pink guide lines show engaged snaps); resizing snaps the dragged corner to
+  the frame. Holding Alt disables snapping.
+
+Acceptance criteria:
+
+- Placement math is shared (`src/shared/domain/screen-layout.ts`) so editor
+  preview, MP4 render, preview proxy, and Premiere export agree pixel-wise.
+- Invalid/malformed transforms normalize to `null` (legacy behavior).
+- MP4/preview renders reproduce the placement via a scale/crop/pad chain;
+  legacy projects without a transform produce unchanged filter graphs.
+- Premiere export expresses the placement as Basic Motion scale/center on the
+  screen clip in the 1920×1080 sequence, composed with background zoom/pan.
+- The camera PiP imports into Premiere with square corners (no rounding).
+  Rounded-corner mattes via xmeml were attempted and intentionally reverted —
+  see the Premiere xmeml notes in `AGENTS.md` before re-attempting.
+
 ## F. Render/Export
 
 ### F1. Composite render

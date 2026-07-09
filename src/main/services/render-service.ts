@@ -11,6 +11,7 @@ import {
   normalizeCameraSyncOffsetMs,
   normalizeExportAudioPreset,
   normalizeExportVideoPreset,
+  normalizeScreenTransform,
   type AudioSource,
   type ExportAudioPreset,
   type ExportVideoPreset,
@@ -20,7 +21,11 @@ import {
 import type { RenderProgressUpdate } from '../../shared/electron-api';
 import { chooseRenderFps, probeVideoFpsWithFfmpeg } from './fps-service';
 import { runFfmpeg, type FfmpegProgress } from './ffmpeg-runner';
-import { buildFilterComplex, buildScreenFilter } from './render-filter-service';
+import {
+  buildFilterComplex,
+  buildScreenFilter,
+  buildScreenPlacementChain
+} from './render-filter-service';
 
 export interface RenderSectionInput {
   takeId: string | null;
@@ -56,6 +61,9 @@ export interface RenderCompositeOptions {
   keyframes?: Keyframe[];
   pipSize?: number;
   screenFitMode?: ScreenFitMode;
+  // Free placement of the screen recording inside the 16:9 canvas; overrides
+  // screenFitMode when set. Normalized via normalizeScreenTransform.
+  screenTransform?: unknown;
   exportAudioPreset?: ExportAudioPreset;
   exportVideoPreset?: ExportVideoPreset;
   cameraSyncOffsetMs?: number;
@@ -571,6 +579,7 @@ export async function renderComposite(
   const keyframes = Array.isArray(opts.keyframes) ? opts.keyframes : [];
   const pipSize = Number.isFinite(Number(opts.pipSize)) ? Number(opts.pipSize) : 422;
   const screenFitMode = opts.screenFitMode === 'fit' ? 'fit' : 'fill';
+  const screenTransform = normalizeScreenTransform(opts.screenTransform);
   const exportAudioPreset = normalizeExportAudioPreset(opts.exportAudioPreset);
   const exportVideoPreset = normalizeExportVideoPreset(opts.exportVideoPreset);
   const cameraSyncOffsetMs = normalizeCameraSyncOffsetMs(opts.cameraSyncOffsetMs);
@@ -680,16 +689,31 @@ export async function renderComposite(
     // gaps from static-screen capture (see buildShiftedVideoTrim comment
     // for the drift mechanism we're avoiding).
     const screenShiftSec = -screenStartOffsetMs / 1000;
+    // When a screen transform is set, every section (video or image) is
+    // normalized to the canvas with the same free placement chain before
+    // concat; the shared screen filter then no-ops its own base scaling so
+    // the placement is not applied twice.
+    const sectionPlacementChain = buildScreenPlacementChain(
+      sourceWidth,
+      sourceHeight,
+      canvasW,
+      canvasH,
+      screenTransform
+    );
     if (imageIdx >= 0) {
       const imageScale =
-        screenFitMode === 'fill'
+        sectionPlacementChain ??
+        (screenFitMode === 'fill'
           ? `scale=${canvasW}:${canvasH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH}`
-          : `scale=${canvasW}:${canvasH}:flags=lanczos:force_original_aspect_ratio=decrease,pad=${canvasW}:${canvasH}:(ow-iw)/2:(oh-ih)/2:black`;
+          : `scale=${canvasW}:${canvasH}:flags=lanczos:force_original_aspect_ratio=decrease,pad=${canvasW}:${canvasH}:(ow-iw)/2:(oh-ih)/2:black`);
       filterParts.push(
         `[${imageIdx}:v]${imageScale},format=yuv420p,setpts=PTS-STARTPTS,setsar=1[sv${index}]`
       );
     } else if (hasImageSections) {
-      const tail = `scale=${canvasW}:${canvasH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH},setsar=1`;
+      const tail = `${
+        sectionPlacementChain ??
+        `scale=${canvasW}:${canvasH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH}`
+      },setsar=1`;
       filterParts.push(
         buildShiftedVideoTrim(
           `[${screenIdx}:v]`,
@@ -817,7 +841,11 @@ export async function renderComposite(
       sourceHeight,
       canvasW,
       canvasH,
-      targetFps
+      targetFps,
+      // With image sections the placement was already applied per-section
+      // (streams are canvas-sized), so the base screen chain must stay a
+      // fill no-op instead of re-placing an already-placed frame.
+      hasImageSections ? null : screenTransform
     );
     assertOverlayFilterSize(overlayFilter);
     const adaptedOverlay = overlayFilter
@@ -833,7 +861,8 @@ export async function renderComposite(
       canvasW,
       canvasH,
       '[out]',
-      targetFps
+      targetFps,
+      hasImageSections ? null : screenTransform
     ).replace(/\[0:v\]/g, '[screen_raw]');
     filterParts.push(screenOnlyFilter);
   }

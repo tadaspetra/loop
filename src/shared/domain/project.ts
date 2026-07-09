@@ -5,8 +5,10 @@ import {
   MIN_CAMERA_SYNC_OFFSET_MS,
   normalizeCameraSyncOffsetMs
 } from './camera-sync';
+import { normalizeScreenTransform, type ScreenTransform } from './screen-layout';
 
 export { MAX_CAMERA_SYNC_OFFSET_MS, MIN_CAMERA_SYNC_OFFSET_MS, normalizeCameraSyncOffsetMs };
+export { normalizeScreenTransform, type ScreenTransform };
 
 export const MIN_BACKGROUND_ZOOM = 1;
 export const MAX_BACKGROUND_ZOOM = 3;
@@ -63,6 +65,9 @@ export interface Keyframe {
 
 export interface ProjectSettings {
   screenFitMode: ScreenFitMode;
+  // Free placement of the screen recording inside the 16:9 canvas (OBS-style).
+  // null keeps the legacy screenFitMode behavior.
+  screenTransform: ScreenTransform | null;
   hideFromRecording: boolean;
   exportAudioPreset: ExportAudioPreset;
   exportVideoPreset: ExportVideoPreset;
@@ -338,6 +343,7 @@ export function createDefaultProject(name: unknown = 'Untitled Project'): Projec
     updatedAt: now,
     settings: {
       screenFitMode: 'fill',
+      screenTransform: null,
       hideFromRecording: true,
       exportAudioPreset: EXPORT_AUDIO_PRESET_COMPRESSED,
       exportVideoPreset: EXPORT_VIDEO_PRESET_QUALITY,
@@ -383,6 +389,7 @@ export function normalizeProjectData(rawProject: unknown, projectFolder?: string
     updatedAt: typeof project.updatedAt === 'string' ? project.updatedAt : now,
     settings: {
       screenFitMode: rawSettings.screenFitMode === 'fit' ? 'fit' : 'fill',
+      screenTransform: normalizeScreenTransform(rawSettings.screenTransform),
       hideFromRecording: rawSettings.hideFromRecording !== false,
       exportAudioPreset: normalizeExportAudioPreset(rawSettings.exportAudioPreset),
       exportVideoPreset: normalizeExportVideoPreset(rawSettings.exportVideoPreset),
