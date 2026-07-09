@@ -22,6 +22,7 @@ src/
       render-service.js
       sections-service.js
       scribe-service.js
+      transcription-service.js
       media-service.js
     infra/
       file-system.js
@@ -33,9 +34,12 @@ src/
     features/
       transcript/
         transcript-utils.js
+        batch-transcript.js
       timeline/
         section-utils.js
         keyframe-utils.js
+        transcribe-cut.js
+        playback-advance.js
     services/
       electron-api.js
       project-session.js
@@ -59,7 +63,7 @@ flowchart LR
   mainIpc --> recoveryService["services/recovery-service.js"]
   mainIpc --> renderService["services/render-service.js"]
   mainIpc --> sectionsService["services/sections-service.js"]
-  mainIpc --> scribeService["services/scribe-service.js"]
+  mainIpc --> transcriptionService["services/transcription-service.js"]
   projectService --> sharedDomain["shared/domain/*.js"]
   recoveryService --> sharedDomain
   renderService --> sharedDomain

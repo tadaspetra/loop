@@ -224,20 +224,8 @@
           </div>
         </div>
 
-        <!-- Transcript panel (shown during recording) -->
-        <div id="transcriptPanel" class="hidden flex-1 flex flex-col min-h-0">
-          <div class="flex items-center justify-between px-1 py-1.5">
-            <span class="text-xs font-medium text-neutral-500 uppercase tracking-wider"
-              >Transcript</span
-            >
-            <span id="segmentBadge" class="text-xs text-neutral-500 tabular-nums">0 segments</span>
-          </div>
-          <div id="transcriptStatus" class="hidden px-1 pb-1 text-[11px] text-neutral-500"></div>
-          <div
-            id="transcriptContent"
-            class="flex-1 overflow-y-auto text-sm leading-relaxed min-h-0"
-          ></div>
-        </div>
+        <!-- Recording notices (recorder failures, capture warnings) -->
+        <div id="recordingNotice" class="hidden px-1 py-1.5 text-[11px] text-neutral-500"></div>
 
         <!-- Settings -->
         <div id="settingsPanel" class="space-y-3">
@@ -269,14 +257,6 @@
                 >Turn off to capture screenshots of this window.</span
               >
             </span>
-          </label>
-          <label class="flex items-start gap-2 text-xs text-neutral-400 cursor-pointer select-none">
-            <input
-              id="keepSilencesToggle"
-              type="checkbox"
-              class="mt-0.5 rounded border-neutral-700 bg-neutral-800 text-neutral-50 focus:ring-neutral-600"
-            />
-            <span>Keep silences</span>
           </label>
         </div>
       </div>
@@ -558,6 +538,15 @@
           >
             Apply to Future
           </button>
+          <div class="w-px h-5 bg-neutral-800 mx-1"></div>
+          <button
+            id="transcribeCutBtn"
+            title="Transcribe the take and cut out silences"
+            class="px-3.5 py-1.5 bg-neutral-100 hover:bg-white text-neutral-950 font-medium rounded-lg text-sm transition-colors disabled:opacity-40 disabled:cursor-default"
+          >
+            Transcribe &amp; Cut
+          </button>
+          <span id="transcribeCutStatus" class="hidden text-[11px] text-neutral-500"></span>
         </div>
         <div class="text-[11px] text-neutral-600 text-center">
           <span class="text-neutral-500">⌘Z</span> undo ·

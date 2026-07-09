@@ -5,11 +5,8 @@ export interface MediaRefs {
   audioStream?: MediaStream | null;
   recorders?: MediaRecorder[];
   screenRecInterval?: ReturnType<typeof setInterval> | null;
-  audioSendInterval?: ReturnType<typeof setInterval> | null;
   timerInterval?: ReturnType<typeof setInterval> | null;
   audioContext?: AudioContext | null;
-  scribeWorkletNode?: AudioWorkletNode | null;
-  scribeWs?: WebSocket | null;
   drawRAF?: number | null;
   meterRAF?: number | null;
   cancelEditorDrawLoop?: (() => void) | null;
@@ -37,10 +34,6 @@ export function cleanupAllMedia(refs: MediaRefs | null | undefined): void {
     clearInterval(refs.screenRecInterval);
     refs.screenRecInterval = null;
   }
-  if (refs.audioSendInterval) {
-    clearInterval(refs.audioSendInterval);
-    refs.audioSendInterval = null;
-  }
   if (refs.timerInterval) {
     clearInterval(refs.timerInterval);
     refs.timerInterval = null;
@@ -57,24 +50,6 @@ export function cleanupAllMedia(refs: MediaRefs | null | undefined): void {
     refs.recorders = [];
   }
 
-  if (refs.scribeWorkletNode) {
-    try {
-      refs.scribeWorkletNode.disconnect();
-    } catch {
-      // Already disconnected.
-    }
-    refs.scribeWorkletNode = null;
-  }
-
-  if (refs.scribeWs) {
-    try {
-      refs.scribeWs.close();
-    } catch {
-      // Already closed.
-    }
-    refs.scribeWs = null;
-  }
-
   if (typeof refs.stopAudioMeter === 'function') {
     try {
       refs.stopAudioMeter();
@@ -85,9 +60,16 @@ export function cleanupAllMedia(refs: MediaRefs | null | undefined): void {
 
   if (refs.audioContext) {
     try {
-      refs.audioContext.close();
+      // stopAudioMeter (called above via refs.stopAudioMeter) may already
+      // have closed this context; close() on a closed context REJECTS its
+      // promise, which a sync try/catch cannot intercept. Guard on state and
+      // swallow the rejection.
+      if (refs.audioContext.state !== 'closed') {
+        const closing = refs.audioContext.close();
+        if (closing && typeof closing.catch === 'function') closing.catch(() => {});
+      }
     } catch {
-      // Already closed.
+      // Already closed or torn down.
     }
     refs.audioContext = null;
   }

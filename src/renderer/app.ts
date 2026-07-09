@@ -1,13 +1,9 @@
 // @ts-nocheck
+import { normalizeTranscriptText } from './features/transcript/transcript-utils';
 import {
-  normalizeTranscriptText,
-  stripNonSpeechAnnotations,
-  extractSpokenWordTokens
-} from './features/transcript/transcript-utils';
-import {
-  getScribeStatusFromCloseEvent,
-  getScribeStatusFromMessage
-} from './features/transcript/scribe-status';
+  buildSegmentsFromWords,
+  getTranscriptionTimeoutMs
+} from './features/transcript/batch-transcript';
 import {
   roundMs,
   buildRemappedSectionsFromSegments,
@@ -31,6 +27,12 @@ import {
   normalizeCameraSyncOffsetMs,
   resolveCameraPlaybackTargetTime
 } from './features/timeline/camera-sync';
+import {
+  replaceTakeSections,
+  resolveTargetTakeId,
+  resolveTranscriptionSource
+} from './features/timeline/transcribe-cut';
+import { resolvePlaybackAdvance } from './features/timeline/playback-advance';
 import { getTakePlaybackSources } from './features/timeline/take-playback-sources';
 import { getWaveformDecodeSources } from './features/timeline/waveform-sources';
 import {
@@ -112,12 +114,8 @@ const folderPathEl = document.getElementById('folderPath');
 const openFolderBtn = document.getElementById('openFolderBtn');
 const pickFolderBtn = document.getElementById('pickFolderBtn');
 const contentProtectionToggle = document.getElementById('contentProtectionToggle');
-const keepSilencesToggle = document.getElementById('keepSilencesToggle');
 const recordingView = document.getElementById('recordingView');
-const transcriptPanel = document.getElementById('transcriptPanel');
-const transcriptContent = document.getElementById('transcriptContent');
-const transcriptStatus = document.getElementById('transcriptStatus');
-const segmentBadge = document.getElementById('segmentBadge');
+const recordingNoticeEl = document.getElementById('recordingNotice');
 const processingView = document.getElementById('processingView');
 const processingTitle = document.getElementById('processingTitle');
 const processingStatus = document.getElementById('processingStatus');
@@ -186,6 +184,10 @@ let systemAudioRAF = null;
 let systemAudioActivitySegments = [];
 let systemAudioActivityOpen = null;
 let systemAudioLastActiveSec = 0;
+// System-audio "keep" regions captured per take during this app session,
+// consumed by the on-demand Transcribe & Cut action. Not persisted: after an
+// app restart a cut simply proceeds without them.
+const takeSystemAudioActivity = new Map();
 const SYSTEM_AUDIO_RMS_ACTIVE_THRESHOLD = 0.01;
 const SYSTEM_AUDIO_RELEASE_MS = 400;
 /**
@@ -214,13 +216,6 @@ let saveDebounceTimer = null;
 let persistQueue = Promise.resolve();
 let mediaInitialized = false;
 let mediaIdleTimer = null;
-let scribeWs = null;
-let scribeWorkletNode = null;
-let speechSegments = [];
-let audioChunkBuffer = [];
-let audioSendInterval = null;
-let scribeLastFailureReason = null;
-let scribeManualClose = false;
 let micSourceNode = null;
 const MEDIA_IDLE_TIMEOUT_MS = 30000;
 
@@ -258,10 +253,6 @@ function resetMediaRefsAfterCleanup() {
   meterRAF = null;
   drawRAF = null;
   lastCompositeDrawAt = 0;
-  scribeWs = null;
-  scribeWorkletNode = null;
-  audioChunkBuffer = [];
-  audioSendInterval = null;
   micSourceNode = null;
   mediaInitialized = false;
   screenVideo.srcObject = null;
@@ -276,11 +267,8 @@ function cleanupRendererMediaResources() {
     audioStream,
     recorders,
     screenRecInterval,
-    audioSendInterval,
     timerInterval,
     audioContext,
-    scribeWorkletNode,
-    scribeWs,
     drawRAF,
     meterRAF,
     cancelEditorDrawLoop,
@@ -435,9 +423,6 @@ if (typeof window.electronAPI.onProxyProgress === 'function') {
     }
   });
 }
-let scribeAudioOffset = 0; // seconds between recording start and first audio sent to Scribe
-let workletRegistered = null; // tracks which AudioContext has the worklet registered
-
 const CANVAS_W = 1920;
 const CANVAS_H = 1080;
 const PIP_FRACTION = 0.22;
@@ -961,8 +946,7 @@ function buildProjectSavePayload() {
       exportVideoPreset: normalizeExportVideoPreset(exportVideoPresetSelect.value),
       cameraSyncOffsetMs: normalizeCameraSyncOffsetMs(cameraSyncOffsetInput.value),
       pipSize: editorState?.pipSize || PIP_SIZE,
-      systemAudioEnabled: !!systemAudioCheckbox?.checked,
-      autoCutSilences: keepSilencesToggle?.checked !== true
+      systemAudioEnabled: !!systemAudioCheckbox?.checked
     },
     timeline: getProjectTimelineSnapshot()
   };
@@ -1400,9 +1384,6 @@ async function activateProject(projectPath, project, preferredView = 'recording'
   hideFromRecording = project.settings?.hideFromRecording === false ? 'false' : 'true';
   if (systemAudioCheckbox) {
     systemAudioCheckbox.checked = project.settings?.systemAudioEnabled === true;
-  }
-  if (keepSilencesToggle) {
-    keepSilencesToggle.checked = project.settings?.autoCutSilences === false;
   }
   exportAudioPresetSelect.value = normalizeExportAudioPreset(project.settings?.exportAudioPreset);
   exportVideoPresetSelect.value = normalizeExportVideoPreset(project.settings?.exportVideoPreset);
@@ -2427,10 +2408,7 @@ async function updateScreenStream() {
       // stream the user will actually record.
       if (systemAudioFallbackNoticeShown) {
         systemAudioFallbackNoticeShown = false;
-        if (!recording) {
-          setTranscriptStatus('', 'neutral');
-          transcriptPanel?.classList.add('hidden');
-        }
+        if (!recording) clearRecordingNotice();
       }
     } catch (error) {
       console.warn(
@@ -2691,8 +2669,12 @@ function stopAudioMeter() {
   meterRAF = null;
   micSourceNode = null;
   if (audioContext) {
-    if (workletRegistered === audioContext) workletRegistered = null;
-    audioContext.close();
+    // close() rejects (async) on an already-closed context, so both guard on
+    // state and swallow the promise — cleanup paths can overlap.
+    if (audioContext.state !== 'closed') {
+      const closing = audioContext.close();
+      if (closing && typeof closing.catch === 'function') closing.catch(() => {});
+    }
     audioContext = null;
   }
   audioMeter.style.width = '0%';
@@ -2977,20 +2959,12 @@ function computeRecorderStartOffsetsMs(recorderList) {
   };
 }
 
-function mergeInt16Arrays(arrays) {
-  let totalLength = 0;
-  for (const arr of arrays) totalLength += arr.length;
-  const merged = new Int16Array(totalLength);
-  let offset = 0;
-  for (const arr of arrays) {
-    merged.set(arr, offset);
-    offset += arr.length;
-  }
-  return merged;
-}
-
-function setTranscriptStatus(text, tone = 'neutral') {
-  if (!transcriptStatus) return;
+/**
+ * Surface a recording notice (recorder failures, capture warnings) on the
+ * compact status line in the recording sidebar. Empty text hides the line.
+ */
+function showRecordingNotice(text, tone = 'warning') {
+  if (!recordingNoticeEl) return;
 
   const toneClasses = {
     neutral: 'text-neutral-500',
@@ -3001,33 +2975,13 @@ function setTranscriptStatus(text, tone = 'neutral') {
   const resolvedTone = toneClasses[tone] || toneClasses.neutral;
   const hasText = typeof text === 'string' && text.trim().length > 0;
 
-  transcriptStatus.className = `px-1 pb-1 text-[11px] ${resolvedTone}`;
-  transcriptStatus.classList.toggle('hidden', !hasText);
-  transcriptStatus.textContent = hasText ? text : '';
+  recordingNoticeEl.className = `px-1 py-1.5 text-[11px] ${resolvedTone}`;
+  recordingNoticeEl.classList.toggle('hidden', !hasText);
+  recordingNoticeEl.textContent = hasText ? text : '';
 }
 
-function applyScribeStatus(status) {
-  if (!status) return;
-
-  if (status.failureReason) {
-    scribeLastFailureReason = status.failureReason;
-  } else if (status.tone === 'success') {
-    scribeLastFailureReason = null;
-  }
-
-  setTranscriptStatus(status.text, status.tone);
-}
-
-/**
- * Surface a recording notice on the existing transcript status line. The
- * status line lives inside the transcript panel (hidden outside recording),
- * so un-hide the panel when a notice must be visible before recording starts
- * (e.g. the system-audio fallback during source selection).
- */
-function showRecordingNotice(text, tone = 'warning') {
-  const hasText = typeof text === 'string' && text.trim().length > 0;
-  if (hasText && transcriptPanel) transcriptPanel.classList.remove('hidden');
-  setTranscriptStatus(text, tone);
+function clearRecordingNotice() {
+  showRecordingNotice('', 'neutral');
 }
 
 /**
@@ -3051,20 +3005,20 @@ function handleRecorderFailure(kind, suffix) {
 
 async function startRecording() {
   if (!activeProjectPath) return;
+  // The previous take's stop flow now includes batch transcription, so it can
+  // still be running when Record is pressed again. Overlapping take flows
+  // would race on the shared recovery checkpoint (.pending-recording.json)
+  // and the Stop guard, so refuse to start until the previous take settles.
+  if (stopRecordingInFlight) {
+    showRecordingNotice('Still processing the previous take — try again in a moment.', 'warning');
+    return;
+  }
   recorders = [];
-  speechSegments = [];
   // Fresh take: forget any activity windows captured before Record was
   // pressed so only the actual recording window drives section keep logic.
   systemAudioActivitySegments = [];
   systemAudioActivityOpen = null;
   systemAudioLastActiveSec = 0;
-  audioChunkBuffer = [];
-  scribeLastFailureReason = null;
-  scribeManualClose = false;
-  // Reset scribe audio timestamp offset and worklet registration per take so
-  // timestamps are never carried over from a previous recording session.
-  scribeAudioOffset = 0;
-  workletRegistered = null;
 
   // The takeId is generated once for this recording session and shared by
   // both recorders, so the on-disk temp files can be matched back to the
@@ -3098,7 +3052,7 @@ async function startRecording() {
         recorders.push(await createRecorder(screenOnly, 'screen', takeId));
       } catch (err) {
         console.error('[Recorder] Failed to prepare screen recorder:', err);
-        setTranscriptStatus(
+        showRecordingNotice(
           `Could not start screen recording: ${err instanceof Error ? err.message : String(err)}`,
           'error'
         );
@@ -3149,7 +3103,7 @@ async function startRecording() {
         recorders.push(await createRecorder(audioOnly, 'audio', takeId));
       } catch (err) {
         console.error('[Recorder] Failed to prepare audio-only recorder:', err);
-        setTranscriptStatus(
+        showRecordingNotice(
           `Could not start microphone recording: ${err instanceof Error ? err.message : String(err)}`,
           'error'
         );
@@ -3197,186 +3151,9 @@ async function startRecording() {
   if (systemAudioCheckbox) systemAudioCheckbox.disabled = true;
   cameraSelect.disabled = true;
   audioSelect.disabled = true;
-  if (keepSilencesToggle) keepSilencesToggle.disabled = true;
 
   startTime = Date.now();
   timerInterval = setInterval(updateTimer, 200);
-
-  // Show transcript panel and clear previous content
-  transcriptPanel.classList.remove('hidden');
-  transcriptContent.innerHTML = '';
-  segmentBadge.textContent = '0 segments';
-  setTranscriptStatus('Transcription connecting...', 'neutral');
-
-  // Set up Scribe via direct WebSocket
-  if (audioContext && audioStream && micSourceNode) {
-    try {
-      const token = await window.electronAPI.getScribeToken();
-      const sampleRate = audioContext.sampleRate;
-
-      // Map sample rate to ElevenLabs audio_format parameter
-      const formatMap = {
-        8000: 'pcm_8000',
-        16000: 'pcm_16000',
-        22050: 'pcm_22050',
-        24000: 'pcm_24000',
-        44100: 'pcm_44100',
-        48000: 'pcm_48000'
-      };
-      const audioFormat = formatMap[sampleRate] || 'pcm_16000';
-
-      const wsUrl =
-        `wss://api.elevenlabs.io/v1/speech-to-text/realtime` +
-        `?model_id=scribe_v2_realtime` +
-        `&token=${token}` +
-        `&audio_format=${audioFormat}` +
-        `&commit_strategy=vad` +
-        `&include_timestamps=true` +
-        `&vad_silence_threshold_secs=1.5` +
-        `&vad_threshold=0.8` +
-        `&min_speech_duration_ms=200` +
-        `&language_code=eng`;
-
-      scribeWs = new WebSocket(wsUrl);
-
-      scribeWs.onopen = () => {
-        setTranscriptStatus('Transcription connecting...', 'neutral');
-      };
-
-      scribeWs.onmessage = (event) => {
-        let msg;
-        try {
-          msg = JSON.parse(event.data);
-        } catch (error) {
-          console.warn('Failed to parse Scribe message:', error);
-          return;
-        }
-
-        applyScribeStatus(getScribeStatusFromMessage(msg));
-
-        if (msg.message_type === 'partial_transcript') {
-          updatePartialTranscript(msg.text || '');
-        } else if (msg.message_type === 'committed_transcript_with_timestamps') {
-          commitTranscript(msg);
-        }
-      };
-
-      scribeWs.onerror = (err) => {
-        console.error('Scribe WebSocket error:', err);
-        if (!scribeManualClose) {
-          setTranscriptStatus('Transcription connection error', 'error');
-        }
-      };
-
-      scribeWs.onclose = (event) => {
-        console.warn('Scribe WebSocket closed:', {
-          code: event.code,
-          reason: event.reason,
-          wasClean: event.wasClean,
-          lastFailureReason: scribeLastFailureReason,
-          manualClose: scribeManualClose
-        });
-        if (!scribeManualClose) {
-          applyScribeStatus(getScribeStatusFromCloseEvent(event, scribeLastFailureReason));
-        }
-      };
-
-      // Set up AudioWorklet for PCM capture (only register module once per AudioContext)
-      if (workletRegistered !== audioContext) {
-        await audioContext.audioWorklet.addModule(
-          new URL('./audio-processor.js', window.location.href).toString()
-        );
-        workletRegistered = audioContext;
-      }
-      scribeWorkletNode = new AudioWorkletNode(audioContext, 'audio-capture');
-      micSourceNode.connect(scribeWorkletNode);
-
-      scribeWorkletNode.port.onmessage = (e) => {
-        if (e.data.pcm) {
-          audioChunkBuffer.push(new Int16Array(e.data.pcm));
-        }
-      };
-
-      // Record the offset: time between recording start and first audio send
-      scribeAudioOffset = (Date.now() - startTime) / 1000;
-
-      // Send accumulated audio every ~100ms
-      audioSendInterval = setInterval(() => {
-        if (audioChunkBuffer.length === 0 || !scribeWs || scribeWs.readyState !== WebSocket.OPEN)
-          return;
-        const merged = mergeInt16Arrays(audioChunkBuffer);
-        audioChunkBuffer = [];
-        const bytes = new Uint8Array(merged.buffer);
-        const CHUNK = 8192;
-        let binary = '';
-        for (let i = 0; i < bytes.length; i += CHUNK) {
-          binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
-        }
-        const base64 = btoa(binary);
-        scribeWs.send(
-          JSON.stringify({
-            message_type: 'input_audio_chunk',
-            audio_base_64: base64,
-            sample_rate: sampleRate,
-            commit: false
-          })
-        );
-      }, 100);
-    } catch (err) {
-      console.warn('Scribe setup failed:', err);
-      const reason = err instanceof Error ? err.message : 'setup failed';
-      setTranscriptStatus(`Transcription unavailable: ${reason}`, 'error');
-    }
-  } else {
-    setTranscriptStatus('Transcription unavailable: microphone not ready', 'warning');
-  }
-}
-
-function updatePartialTranscript(text) {
-  let partial = document.getElementById('partialText');
-  if (!partial) {
-    partial = document.createElement('div');
-    partial.id = 'partialText';
-    partial.className = 'text-neutral-600 italic';
-    transcriptContent.prepend(partial);
-  }
-  partial.textContent = stripNonSpeechAnnotations(text);
-  transcriptContent.scrollTop = 0;
-}
-
-function commitTranscript(data) {
-  // Remove partial display
-  const partial = document.getElementById('partialText');
-  if (partial) partial.remove();
-
-  const spokenWords = extractSpokenWordTokens(data.words);
-  if (spokenWords.length === 0) return;
-
-  // Build clean text from spoken words only, excluding non-speech annotations.
-  const cleanText = stripNonSpeechAnnotations(spokenWords.map((w) => w.text).join(' '));
-  if (!cleanText) return;
-
-  // Shift timestamps by the offset between recording start and first audio sent
-  speechSegments.push({
-    start: spokenWords[0].start + scribeAudioOffset,
-    end: spokenWords[spokenWords.length - 1].end + scribeAudioOffset,
-    text: cleanText
-  });
-
-  // Add committed text
-  const div = document.createElement('div');
-  div.className =
-    'mb-2 text-neutral-300 cursor-pointer rounded-md px-1.5 py-0.5 -mx-1 hover:bg-neutral-800/60 transition-colors';
-  div.dataset.segmentIndex = speechSegments.length - 1;
-  div.textContent = cleanText;
-  div.addEventListener('click', () => {
-    const idx = parseInt(div.dataset.segmentIndex, 10);
-    selectSegment(selectedSegmentIndex === idx ? -1 : idx);
-  });
-  transcriptContent.prepend(div);
-  transcriptContent.scrollTop = 0;
-
-  updateSegmentBadge();
 }
 
 /**
@@ -4073,37 +3850,6 @@ async function stopRecordingImpl() {
   for (const cleanup of trackEndedCleanups) cleanup();
   trackEndedCleanups = [];
 
-  // Stop audio send interval
-  if (audioSendInterval) {
-    clearInterval(audioSendInterval);
-    audioSendInterval = null;
-  }
-
-  // Disconnect worklet (must sever micSourceNode→worklet input, not just worklet outputs)
-  if (scribeWorkletNode) {
-    scribeWorkletNode.port.onmessage = null;
-    if (micSourceNode) micSourceNode.disconnect(scribeWorkletNode);
-    scribeWorkletNode.disconnect();
-    scribeWorkletNode = null;
-  }
-
-  // Send final commit and close WebSocket.
-  // Detach onmessage first so late-arriving transcripts cannot mutate
-  // speechSegments after we snapshot them for section computation.
-  const hadScribe = !!scribeWs;
-  scribeManualClose = true;
-  if (scribeWs) {
-    scribeWs.onmessage = null;
-    if (scribeWs.readyState === WebSocket.OPEN) {
-      scribeWs.send(JSON.stringify({ message_type: 'commit' }));
-      await new Promise((r) => setTimeout(r, 1000));
-      scribeWs.close();
-    }
-  }
-  scribeWs = null;
-  scribeLastFailureReason = null;
-  audioChunkBuffer = [];
-
   if (screenRecInterval) {
     clearInterval(screenRecInterval);
     screenRecInterval = null;
@@ -4159,12 +3905,7 @@ async function stopRecordingImpl() {
   if (systemAudioCheckbox) systemAudioCheckbox.disabled = false;
   cameraSelect.disabled = false;
   audioSelect.disabled = false;
-  if (keepSilencesToggle) keepSilencesToggle.disabled = false;
   timerEl.textContent = '00:00';
-
-  // Hide transcript panel
-  transcriptPanel.classList.add('hidden');
-  setTranscriptStatus('', 'neutral');
 
   // Enter editor if we have at least a screen recording
   if (results.screen?.path) {
@@ -4196,22 +3937,23 @@ async function stopRecordingImpl() {
     pendingRecordingAudioSource = null;
     const audioPath = audioSource === 'external' ? audioOnlyPath : null;
 
-    // Compute sections from speech segments (instant, no FFmpeg). If any
-    // system audio activity was detected during the take, flush any still-
-    // open window and merge those "keep" regions alongside speech so the
-    // section builder never trims across audible system sound (e.g. music,
-    // screen narration, tutorial demos) just because the mic was quiet.
+    // Flush any still-open system-audio activity window and stash the
+    // captured "keep" regions for this take. The on-demand Transcribe & Cut
+    // action merges them alongside speech so the section builder never trims
+    // across audible system sound (music, screen narration, demos) just
+    // because the mic was quiet.
     closeSystemAudioActivityWindow();
-    const autoCutSilences = keepSilencesToggle?.checked !== true;
-    const activeSegments = [
-      ...speechSegments.filter((s) => !s.deleted),
-      ...systemAudioActivitySegments
-    ];
-    let sectionsForTimeline = buildRecordingSectionsForTimeline({
-      recordedDuration,
-      activeSegments,
-      autoCutSilences
-    });
+    takeSystemAudioActivity.set(takeId, [...systemAudioActivitySegments]);
+
+    // The take enters the timeline as one full-length section immediately —
+    // no transcription, no network. Cutting happens later, on demand, via the
+    // editor's Transcribe & Cut button. The recovery checkpoint saved here
+    // (plus the finalized files) is everything needed to restore the full
+    // recording if anything later fails.
+    let sectionsForTimeline = buildDefaultSectionsForDuration(recordedDuration).map((s) => ({
+      ...s,
+      takeId
+    }));
     await saveRecoveryTake({
       id: takeId,
       createdAt: takeCreatedAt,
@@ -4222,34 +3964,8 @@ async function stopRecordingImpl() {
       hasSystemAudio,
       recordedDuration,
       sections: sectionsForTimeline,
-      trimSegments: activeSegments
+      trimSegments: []
     });
-    if (autoCutSilences && activeSegments.length > 0) {
-      try {
-        const computed = await window.electronAPI.computeSections({
-          segments: activeSegments
-        });
-        sectionsForTimeline = buildRecordingSectionsForTimeline({
-          recordedDuration,
-          activeSegments,
-          autoCutSilences,
-          computedSections: computed?.sections
-        });
-        if (!matchesActiveProjectSession(projectSession)) return;
-      } catch (err) {
-        console.warn('Section computation failed, using fallback sections:', err);
-        sectionsForTimeline = buildRecordingSectionsForTimeline({
-          recordedDuration,
-          activeSegments,
-          autoCutSilences
-        });
-      }
-    } else if (autoCutSilences && hadScribe) {
-      console.warn('No speech detected, using full recording');
-    }
-
-    // Set takeId on all sections
-    sectionsForTimeline = sectionsForTimeline.map((s) => ({ ...s, takeId }));
 
     // Add take to project before entering editor (video pool needs it)
     if (activeProject) {
@@ -4348,7 +4064,7 @@ async function stopRecordingImpl() {
     console.error('Recording finalize failed:', finalizeErrors);
     // Best-effort: drop any remaining temp files so the project folder stays
     // clean. The user will have already seen this error surfaced in the
-    // transcript status.
+    // recording notice.
     if (pendingRecordingTakeId) {
       for (const suffix of ['screen', 'camera', 'audio']) {
         window.electronAPI
@@ -4918,34 +4634,38 @@ function editorDrawLoop() {
     const videos = getOrCreateTakeVideos(activeTakeId);
     if (videos) {
       const sourceTime = videos.screen.currentTime;
-      const timelineTime =
-        activePlaybackSection.start + (sourceTime - activePlaybackSection.sourceStart);
-      editorState.currentTime = timelineTime;
+      const advance = resolvePlaybackAdvance({
+        sections: editorState.sections,
+        activeSectionId: activePlaybackSection.id,
+        sourceTime
+      });
 
-      // Check if we've passed the current section's end
-      if (sourceTime >= activePlaybackSection.sourceEnd - 0.01) {
-        const currentIdx = editorState.sections.indexOf(activePlaybackSection);
-        const nextSection = editorState.sections[currentIdx + 1];
+      if (advance.status === 'stale') {
+        // The active section is gone from the timeline (sections were
+        // replaced under us, e.g. by Transcribe & Cut or undo). Re-resolve
+        // from the current timeline time instead of guessing an index.
+        editorSeek(Math.min(editorState.currentTime, editorState.duration));
+      } else {
+        // Always track the CURRENT array's section object so geometry stays
+        // correct even when the timeline holds fresh copies (undo/redo).
+        activePlaybackSection = editorState.sections[advance.activeIndex];
+        editorState.currentTime = advance.timelineTime;
 
-        if (nextSection) {
-          const fromSectionId = activePlaybackSection?.id;
-          const sameTake = activeTakeId === nextSection.takeId;
-          const contiguousSource =
-            sameTake && Math.abs(sourceTime - nextSection.sourceStart) <= 0.05;
+        if (advance.status === 'boundary') {
+          const nextSection = editorState.sections.find((s) => s.id === advance.nextSectionId);
           switchPlaybackSection(nextSection, {
-            sourceTime: contiguousSource ? sourceTime : nextSection.sourceStart,
+            sourceTime: advance.targetSourceTime,
             resumePlayback: true,
             logSwitch: true,
             reason: 'boundary',
-            fromSectionId
+            fromSectionId: activePlaybackSection.id
           });
-        } else {
-          // End of timeline
+        } else if (advance.status === 'end') {
           editorPause();
         }
-      }
 
-      syncCameraPlayback(videos);
+        syncCameraPlayback(videos);
+      }
     }
 
     updateEditorTimeDisplay();
@@ -6155,93 +5875,180 @@ editorExportPremiereBtn.addEventListener('click', async () => {
   await exportPremiere();
 });
 
-// ===== Segment selection =====
+// ===== Transcribe & Cut =====
 
-transcriptContent.addEventListener('click', (e) => {
-  if (!e.target.closest('[data-segment-index]')) selectSegment(-1);
-});
+const transcribeCutBtn = document.getElementById('transcribeCutBtn');
+const transcribeCutStatusEl = document.getElementById('transcribeCutStatus');
+let transcribeCutInFlight = false;
 
-let selectedSegmentIndex = -1;
-const recordingUndoStack = [];
+function setTranscribeCutStatus(text, tone = 'neutral') {
+  if (!transcribeCutStatusEl) return;
+  const toneClasses = {
+    neutral: 'text-neutral-500',
+    success: 'text-emerald-400',
+    warning: 'text-amber-400',
+    error: 'text-red-400'
+  };
+  const hasText = typeof text === 'string' && text.trim().length > 0;
+  transcribeCutStatusEl.className = `text-[11px] ${toneClasses[tone] || toneClasses.neutral}`;
+  transcribeCutStatusEl.classList.toggle('hidden', !hasText);
+  transcribeCutStatusEl.textContent = hasText ? text : '';
+}
 
-function selectSegment(index) {
-  // Deselect previous
-  if (selectedSegmentIndex >= 0) {
-    const prev = transcriptContent.querySelector(`[data-segment-index="${selectedSegmentIndex}"]`);
-    if (prev) prev.style.outline = '';
+/**
+ * On-demand transcription and silence cutting for a take already on the
+ * timeline. The take's media files are never touched: on success its timeline
+ * sections are replaced with speech-cut ones (a single undo step), and any
+ * failure, timeout, or mid-flight timeline edit leaves the timeline exactly
+ * as it was.
+ */
+async function transcribeAndCutTake() {
+  if (!editorState || editorState.rendering || transcribeCutInFlight) return;
+  const projectSession = getActiveProjectSession();
+
+  const takeId = resolveTargetTakeId({
+    sections: editorState.sections,
+    selectedSectionId: editorState.selectedSectionId,
+    takes: activeProject?.takes || []
+  });
+  const take = takeId ? activeProject?.takes?.find((t) => t.id === takeId) : null;
+  if (!take) {
+    setTranscribeCutStatus('No take on the timeline to transcribe', 'warning');
+    return;
   }
-  selectedSegmentIndex = index;
-  if (index >= 0) {
-    const el = transcriptContent.querySelector(`[data-segment-index="${index}"]`);
-    if (el) el.style.outline = '2px solid rgba(255, 255, 255, 0.3)';
+  const source = resolveTranscriptionSource(take);
+  if (!source) {
+    setTranscribeCutStatus('This take has no microphone audio to transcribe', 'warning');
+    return;
+  }
+
+  // Snapshot which sections belong to the take right now, so timeline edits
+  // made while the transcription is in flight abort the cut instead of being
+  // clobbered by it.
+  const sectionIdsAtStart = editorState.sections
+    .filter((s) => s.takeId === takeId)
+    .map((s) => s.id)
+    .join('|');
+
+  transcribeCutInFlight = true;
+  transcribeCutBtn.disabled = true;
+  const originalLabel = transcribeCutBtn.textContent;
+  transcribeCutBtn.textContent = 'Transcribing…';
+  setTranscribeCutStatus('', 'neutral');
+  try {
+    const takeDuration = Math.max(0, Number(take.duration) || 0);
+    const timeoutMs = getTranscriptionTimeoutMs(takeDuration);
+    const result = await Promise.race([
+      window.electronAPI.transcribeRecording({ sourcePath: source.sourcePath }),
+      new Promise((_, reject) => {
+        setTimeout(
+          () =>
+            reject(new Error(`transcription timed out after ${Math.round(timeoutMs / 1000)}s`)),
+          timeoutMs
+        );
+      })
+    ]);
+    if (!matchesActiveProjectSession(projectSession) || !editorState) return;
+
+    const speechSegments = buildSegmentsFromWords(result?.words || [], {
+      offsetSec: source.offsetSec
+    });
+    // Merge system-audio "keep" regions captured while this take recorded so
+    // audible screen sound is never trimmed just because the mic was quiet.
+    const activeSegments = [...speechSegments, ...(takeSystemAudioActivity.get(takeId) || [])];
+    if (activeSegments.length === 0) {
+      setTranscribeCutStatus('No speech detected — nothing to cut', 'warning');
+      return;
+    }
+
+    let computedSections;
+    try {
+      const computed = await window.electronAPI.computeSections({ segments: activeSegments });
+      computedSections = computed?.sections;
+    } catch (err) {
+      console.warn('Section computation failed, falling back to local remap:', err);
+    }
+    if (!matchesActiveProjectSession(projectSession) || !editorState) return;
+
+    const cutSections = buildRecordingSectionsForTimeline({
+      recordedDuration: takeDuration,
+      activeSegments,
+      autoCutSilences: true,
+      computedSections
+    }).map((section) => ({ ...section, id: generateSectionId(), takeId }));
+    if (cutSections.length === 0) {
+      setTranscribeCutStatus('No speech detected — nothing to cut', 'warning');
+      return;
+    }
+    // Snapshot take-local coordinates now: the same section objects get
+    // remapped to timeline-absolute positions once spliced into the editor.
+    const takeLocalSections = cutSections.map((s) => ({ ...s }));
+
+    const sectionIdsNow = editorState.sections
+      .filter((s) => s.takeId === takeId)
+      .map((s) => s.id)
+      .join('|');
+    if (sectionIdsNow !== sectionIdsAtStart) {
+      setTranscribeCutStatus('Timeline changed while transcribing — no cuts applied', 'warning');
+      return;
+    }
+
+    const { sections, replacedCount } = replaceTakeSections(
+      editorState.sections,
+      takeId,
+      cutSections
+    );
+    if (replacedCount === 0) {
+      setTranscribeCutStatus('Take is no longer on the timeline — no cuts applied', 'warning');
+      return;
+    }
+
+    pushUndo();
+    editorState.sections = sections;
+    reindexSections(editorState.sections);
+    editorState.selectedSectionId = cutSections[0].id;
+    editorState.selectedSectionIds = new Set([cutSections[0].id]);
+    recalculateTimelinePositions();
+    syncSectionAnchorKeyframes();
+    renderSectionMarkers();
+    updateSectionZoomControls();
+    refreshWaveform();
+    // Drop the playback tracker before re-seeking: every section object it
+    // could point at was just replaced, and the seek below re-establishes it
+    // against the new list.
+    activePlaybackSection = null;
+    editorSeek(Math.min(editorState.currentTime, editorState.duration));
+
+    // Keep the persisted take snapshot in sync with the cut (take-local
+    // coordinates), matching what the recording flow stamps at append time.
+    take.sections = takeLocalSections;
+    scheduleProjectSave();
+    setTranscribeCutStatus(
+      `Cut into ${cutSections.length} section${cutSections.length !== 1 ? 's' : ''}`,
+      'success'
+    );
+  } catch (err) {
+    console.error('Transcribe & Cut failed:', err);
+    const reason = err instanceof Error ? err.message : String(err);
+    setTranscribeCutStatus(`Transcription failed: ${reason}`, 'error');
+  } finally {
+    transcribeCutInFlight = false;
+    transcribeCutBtn.disabled = false;
+    transcribeCutBtn.textContent = originalLabel;
   }
 }
 
-function applySegmentDeletedStyle(el, deleted) {
-  el.style.textDecoration = deleted ? 'line-through' : '';
-  el.style.opacity = deleted ? '0.4' : '';
+if (transcribeCutBtn) {
+  transcribeCutBtn.addEventListener('click', () => {
+    transcribeAndCutTake().catch((err) => {
+      console.error('Transcribe & Cut crashed:', err);
+    });
+  });
 }
 
 // ===== Keyboard shortcuts =====
 
-function updateSegmentBadge() {
-  const total = speechSegments.length;
-  const removed = speechSegments.filter((s) => s.deleted).length;
-  const active = total - removed;
-  if (removed > 0) {
-    segmentBadge.textContent = `${active} segment${active !== 1 ? 's' : ''} (${removed} removed)`;
-  } else {
-    segmentBadge.textContent = `${total} segment${total !== 1 ? 's' : ''}`;
-  }
-}
-
 document.addEventListener('keydown', (e) => {
-  // Backspace during recording: toggle delete on selected segment, or remove last non-deleted
-  if (recording && e.code === 'Backspace') {
-    e.preventDefault();
-    if (selectedSegmentIndex >= 0 && selectedSegmentIndex < speechSegments.length) {
-      // Toggle delete on selected segment
-      const seg = speechSegments[selectedSegmentIndex];
-      recordingUndoStack.push({ segmentIndex: selectedSegmentIndex, wasDeleted: seg.deleted });
-      seg.deleted = !seg.deleted;
-      const el = transcriptContent.querySelector(`[data-segment-index="${selectedSegmentIndex}"]`);
-      if (el) applySegmentDeletedStyle(el, seg.deleted);
-      updateSegmentBadge();
-    } else {
-      // No selection: delete last non-deleted segment
-      for (let i = speechSegments.length - 1; i >= 0; i--) {
-        if (!speechSegments[i].deleted) {
-          recordingUndoStack.push({ segmentIndex: i, wasDeleted: false });
-          speechSegments[i].deleted = true;
-          const el = transcriptContent.querySelector(`[data-segment-index="${i}"]`);
-          if (el) applySegmentDeletedStyle(el, true);
-          updateSegmentBadge();
-          break;
-        }
-      }
-    }
-    return;
-  }
-
-  // Ctrl+Z during recording: undo last delete/undelete action
-  if (recording && e.code === 'KeyZ' && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
-    e.preventDefault();
-    const action = recordingUndoStack.pop();
-    if (action) {
-      speechSegments[action.segmentIndex].deleted = action.wasDeleted;
-      const el = transcriptContent.querySelector(`[data-segment-index="${action.segmentIndex}"]`);
-      if (el) applySegmentDeletedStyle(el, action.wasDeleted);
-      updateSegmentBadge();
-    }
-    return;
-  }
-
-  // Escape during recording: deselect segment
-  if (recording && e.code === 'Escape') {
-    selectSegment(-1);
-    return;
-  }
-
   if (!editorState || editorState.rendering || activeWorkspaceView !== 'timeline') return;
   // Don't capture if focus is in an input
   if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') return;
@@ -6307,14 +6114,6 @@ contentProtectionToggle.addEventListener('change', async () => {
   scheduleProjectSave();
 });
 
-if (keepSilencesToggle) {
-  keepSilencesToggle.addEventListener('change', () => {
-    if (activeProject?.settings) {
-      activeProject.settings.autoCutSilences = !keepSilencesToggle.checked;
-    }
-    scheduleProjectSave();
-  });
-}
 
 exportAudioPresetSelect.addEventListener('change', () => {
   exportAudioPresetSelect.value = normalizeExportAudioPreset(exportAudioPresetSelect.value);

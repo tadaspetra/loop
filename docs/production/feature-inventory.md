@@ -78,23 +78,19 @@ Acceptance criteria:
 
 ## C. Transcript And Trim
 
-### C1. Realtime transcript
+### C1. On-demand Transcribe & Cut
 
-- During recording, app sends PCM chunks to Scribe realtime websocket and displays partial + committed text.
-
-Acceptance criteria:
-
-- Committed transcript segments store `start/end/text`.
-- Non-speech annotations (e.g. bracketed cues) are stripped from user-visible transcript and segment content.
-
-### C2. Segment editing
-
-- User can select transcript segments and toggle deletion with keyboard shortcuts.
+- Stopping a recording puts the take on the timeline immediately as one full-length section — no transcription and no network call in the stop flow.
+- The timeline toolbar's "Transcribe & Cut" button batch-transcribes the target take's mic audio (audio-only file, or audio extracted from the camera file via ffmpeg stream copy) with ElevenLabs Scribe in the main process, groups word timestamps into speech segments, and replaces the take's timeline sections with speech-cut sections.
+- The target take is the selected section's take, falling back to the most recent take still on the timeline.
 
 Acceptance criteria:
 
-- Deleted segments are excluded from trim input.
-- Badge reflects active vs removed count.
+- The recording view shows no transcript panel and no silence-cutting option; recorder failures surface on a compact notice line.
+- The stop flow performs no transcription work; the finalized files and the recovery checkpoint are on disk before the take enters the timeline.
+- Transcribe & Cut applies as a single undo step; failure, timeout, no-speech, or a timeline edit made while transcription was in flight leaves the timeline unchanged and reports a visible status.
+- Word timestamps map into take time using the per-file recorder start offsets; non-speech annotations are stripped; system-audio "keep" regions captured during the same app session are respected.
+- Takes without mic audio report a visible message and trigger no network call.
 
 ### C3. Section computation
 
