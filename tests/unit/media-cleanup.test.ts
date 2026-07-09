@@ -15,8 +15,8 @@ function makeFakeRecorder(state = 'recording') {
   return { state, stop: vi.fn() };
 }
 
-function makeFakeAudioContext() {
-  return { close: vi.fn() };
+function makeFakeAudioContext(state = 'running') {
+  return { state, close: vi.fn() };
 }
 
 type FakeMediaRefs = MediaRefs & {
@@ -168,6 +168,34 @@ describe('cleanupAllMedia', () => {
 
     expect(refs.stopAudioMeter).toHaveBeenCalledOnce();
     expect(audioContext.close).toHaveBeenCalledOnce();
+    expect(refs.audioContext).toBeNull();
+  });
+
+  test('does not close an already-closed audio context', () => {
+    // stopAudioMeter may have closed the shared context before cleanupAllMedia
+    // runs; a second close() rejects with InvalidStateError.
+    const refs = makeFullRefs();
+    const audioContext = makeFakeAudioContext('closed');
+    refs.audioContext = audioContext as unknown as FakeMediaRefs['audioContext'];
+
+    cleanupAllMedia(refs);
+
+    expect(audioContext.close).not.toHaveBeenCalled();
+    expect(refs.audioContext).toBeNull();
+  });
+
+  test('swallows a rejected close() promise instead of leaving it unhandled', async () => {
+    const refs = makeFullRefs();
+    const rejection = Promise.reject(new Error('InvalidStateError'));
+    refs.audioContext = {
+      state: 'running',
+      close: vi.fn(() => rejection)
+    } as unknown as FakeMediaRefs['audioContext'];
+
+    expect(() => cleanupAllMedia(refs)).not.toThrow();
+    // Give the swallowed rejection a microtask turn; an unhandled rejection
+    // here would fail the test run.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(refs.audioContext).toBeNull();
   });
 

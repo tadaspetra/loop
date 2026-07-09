@@ -39,6 +39,7 @@ src/
         section-utils.js
         keyframe-utils.js
         transcribe-cut.js
+        playback-advance.js
     services/
       electron-api.js
       project-session.js

@@ -60,9 +60,16 @@ export function cleanupAllMedia(refs: MediaRefs | null | undefined): void {
 
   if (refs.audioContext) {
     try {
-      refs.audioContext.close();
+      // stopAudioMeter (called above via refs.stopAudioMeter) may already
+      // have closed this context; close() on a closed context REJECTS its
+      // promise, which a sync try/catch cannot intercept. Guard on state and
+      // swallow the rejection.
+      if (refs.audioContext.state !== 'closed') {
+        const closing = refs.audioContext.close();
+        if (closing && typeof closing.catch === 'function') closing.catch(() => {});
+      }
     } catch {
-      // Already closed.
+      // Already closed or torn down.
     }
     refs.audioContext = null;
   }

@@ -32,6 +32,7 @@ import {
   resolveTargetTakeId,
   resolveTranscriptionSource
 } from './features/timeline/transcribe-cut';
+import { resolvePlaybackAdvance } from './features/timeline/playback-advance';
 import { getTakePlaybackSources } from './features/timeline/take-playback-sources';
 import { getWaveformDecodeSources } from './features/timeline/waveform-sources';
 import {
@@ -2668,7 +2669,12 @@ function stopAudioMeter() {
   meterRAF = null;
   micSourceNode = null;
   if (audioContext) {
-    audioContext.close();
+    // close() rejects (async) on an already-closed context, so both guard on
+    // state and swallow the promise — cleanup paths can overlap.
+    if (audioContext.state !== 'closed') {
+      const closing = audioContext.close();
+      if (closing && typeof closing.catch === 'function') closing.catch(() => {});
+    }
     audioContext = null;
   }
   audioMeter.style.width = '0%';
@@ -4628,34 +4634,38 @@ function editorDrawLoop() {
     const videos = getOrCreateTakeVideos(activeTakeId);
     if (videos) {
       const sourceTime = videos.screen.currentTime;
-      const timelineTime =
-        activePlaybackSection.start + (sourceTime - activePlaybackSection.sourceStart);
-      editorState.currentTime = timelineTime;
+      const advance = resolvePlaybackAdvance({
+        sections: editorState.sections,
+        activeSectionId: activePlaybackSection.id,
+        sourceTime
+      });
 
-      // Check if we've passed the current section's end
-      if (sourceTime >= activePlaybackSection.sourceEnd - 0.01) {
-        const currentIdx = editorState.sections.indexOf(activePlaybackSection);
-        const nextSection = editorState.sections[currentIdx + 1];
+      if (advance.status === 'stale') {
+        // The active section is gone from the timeline (sections were
+        // replaced under us, e.g. by Transcribe & Cut or undo). Re-resolve
+        // from the current timeline time instead of guessing an index.
+        editorSeek(Math.min(editorState.currentTime, editorState.duration));
+      } else {
+        // Always track the CURRENT array's section object so geometry stays
+        // correct even when the timeline holds fresh copies (undo/redo).
+        activePlaybackSection = editorState.sections[advance.activeIndex];
+        editorState.currentTime = advance.timelineTime;
 
-        if (nextSection) {
-          const fromSectionId = activePlaybackSection?.id;
-          const sameTake = activeTakeId === nextSection.takeId;
-          const contiguousSource =
-            sameTake && Math.abs(sourceTime - nextSection.sourceStart) <= 0.05;
+        if (advance.status === 'boundary') {
+          const nextSection = editorState.sections.find((s) => s.id === advance.nextSectionId);
           switchPlaybackSection(nextSection, {
-            sourceTime: contiguousSource ? sourceTime : nextSection.sourceStart,
+            sourceTime: advance.targetSourceTime,
             resumePlayback: true,
             logSwitch: true,
             reason: 'boundary',
-            fromSectionId
+            fromSectionId: activePlaybackSection.id
           });
-        } else {
-          // End of timeline
+        } else if (advance.status === 'end') {
           editorPause();
         }
-      }
 
-      syncCameraPlayback(videos);
+        syncCameraPlayback(videos);
+      }
     }
 
     updateEditorTimeDisplay();
@@ -6003,6 +6013,10 @@ async function transcribeAndCutTake() {
     renderSectionMarkers();
     updateSectionZoomControls();
     refreshWaveform();
+    // Drop the playback tracker before re-seeking: every section object it
+    // could point at was just replaced, and the seek below re-establishes it
+    // against the new list.
+    activePlaybackSection = null;
     editorSeek(Math.min(editorState.currentTime, editorState.duration));
 
     // Keep the persisted take snapshot in sync with the cut (take-local
