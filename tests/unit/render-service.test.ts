@@ -174,6 +174,90 @@ describe('main/services/render-service', () => {
     );
   });
 
+  test('renderComposite applies the screen transform placement to the filter graph', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-transform-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+
+    const execCalls: { args: string[] }[] = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        takes: [{ id: 'take-1', screenPath, cameraPath: null }],
+        sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1 }],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }
+        ] as Keyframe[],
+        sourceWidth: 3840,
+        sourceHeight: 2160,
+        screenFitMode: 'fill',
+        screenTransform: { x: 480, y: 270, scale: 0.5 }
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 123,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        runFfmpeg: createRunFfmpegStub(({ args }) => {
+          execCalls.push({ args });
+        })
+      }
+    );
+
+    expect(execCalls).toHaveLength(1);
+    const filter = execCalls[0].args.join(' ');
+    // 2560x1440 quality canvas: half-fit placement lands in the top-left
+    // quadrant at 1280x720, padded onto the full canvas.
+    expect(filter).toContain('scale=1280:720:flags=lanczos:force_original_aspect_ratio=decrease');
+    expect(filter).toContain('pad=2560:1440:0:0:color=black');
+    // Legacy cover chain must not run when a transform is set.
+    expect(filter).not.toContain('force_original_aspect_ratio=increase');
+  });
+
+  test('renderComposite applies the screen transform per-section when image sections exist', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-transform-image-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    const imagePath = path.join(tmpDir, 'section.png');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+    fs.writeFileSync(imagePath, 'image', 'utf8');
+
+    const execCalls: { args: string[] }[] = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        takes: [{ id: 'take-1', screenPath, cameraPath: null }],
+        sections: [
+          { takeId: 'take-1', sourceStart: 0, sourceEnd: 1 },
+          { takeId: 'take-1', sourceStart: 1, sourceEnd: 2, imagePath }
+        ],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }
+        ] as Keyframe[],
+        sourceWidth: 3840,
+        sourceHeight: 2160,
+        screenFitMode: 'fill',
+        screenTransform: { x: 480, y: 270, scale: 0.5 }
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 123,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        runFfmpeg: createRunFfmpegStub(({ args }) => {
+          execCalls.push({ args });
+        })
+      }
+    );
+
+    expect(execCalls).toHaveLength(1);
+    const filterArg = execCalls[0].args[execCalls[0].args.indexOf('-filter_complex') + 1];
+    // Both the video section and the image section get the placement chain,
+    // and the shared screen filter does not re-apply it to the already-placed
+    // canvas-sized concat output.
+    expect(filterArg.split('pad=2560:1440:0:0:color=black').length - 1).toBe(2);
+    expect(filterArg.split('scale=1280:720').length - 1).toBe(2);
+  });
+
   test('renderComposite uses fast export preset for faster sanity-check renders', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-fast-preset-'));
     const outputDir = path.join(tmpDir, 'out');

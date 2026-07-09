@@ -98,6 +98,21 @@ describe('main/services/preview-render-service', () => {
       expect(computeTimelineHash(shifted)).not.toBe(computeTimelineHash(base));
     });
 
+    test('changes when the screen transform changes and ignores invalid transforms', () => {
+      const base = defaultHashInput();
+      const moved = {
+        ...base,
+        screenTransform: { x: 480, y: 270, scale: 0.5 }
+      };
+      expect(computeTimelineHash(moved)).not.toBe(computeTimelineHash(base));
+
+      const invalid = {
+        ...base,
+        screenTransform: { x: 480 }
+      };
+      expect(computeTimelineHash(invalid)).toBe(computeTimelineHash(base));
+    });
+
     test('changes when source file mtime changes (e.g. proxy regeneration)', () => {
       const base = defaultHashInput();
       const newerScreen = {

@@ -178,6 +178,40 @@ describe('main/services/premiere-export-service', () => {
     expect(result.outputFolder).toBe(opts.outputFolder);
   });
 
+  test('exportPremiereProject writes the screen transform placement into the XML', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'premiere-export-transform-'));
+    const calls: FfmpegCall[] = [];
+    const opts = makeBaseOpts(tmpDir, {
+      // Half-fit 4K capture centered in the top-left quadrant of the 16:9
+      // sequence, exactly as placed in the editor.
+      screenTransform: { x: 480, y: 270, scale: 0.5 },
+      keyframes: [baseKeyframe({ time: 0, pipVisible: false })]
+    });
+
+    await exportPremiereProject(opts, {
+      ffmpegPath: '/usr/bin/ffmpeg',
+      probeVideoFpsWithFfmpeg: async () => 30,
+      probeVideoDimensionsWithFfmpeg: async () => ({ width: 3840, height: 2160 }),
+      runFfmpeg: createRunFfmpegStub(calls, (call) => {
+        const outPath = call.args[call.args.length - 1];
+        if (outPath && outPath.endsWith('.mp4')) {
+          fs.mkdirSync(path.dirname(outPath), { recursive: true });
+          fs.writeFileSync(outPath, 'mp4-data', 'utf8');
+        }
+      })
+    });
+
+    const xml = fs.readFileSync(path.join(opts.outputFolder, 'My Project.xml'), 'utf8');
+    // Placement width 960 over native 3840 → 25% Motion scale, centered at
+    // (480, 270): a (-480, -270) px offset in media units (3840×2160) →
+    // (-0.125, -0.125) in Premiere's media-relative center units.
+    expect(xml).toMatch(
+      /<parameterid>scale<\/parameterid>\s*<name>Scale<\/name>[\s\S]*?<value>25\.000<\/value>/
+    );
+    expect(xml).toContain('<horiz>-0.125000</horiz>');
+    expect(xml).toContain('<vert>-0.125000</vert>');
+  });
+
   test('exportPremiereProject skips camera transcode when take has no camera', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'premiere-export-nocam-'));
     const calls: FfmpegCall[] = [];
@@ -334,4 +368,5 @@ describe('main/services/premiere-export-service', () => {
 
     expect(calls).toHaveLength(2);
   });
+
 });

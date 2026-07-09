@@ -1,5 +1,6 @@
-import type { AudioSource, Keyframe } from '../../shared/domain/project';
-import { TRANSITION_DURATION } from './render-filter-service';
+import type { AudioSource, Keyframe, ScreenTransform } from '../../shared/domain/project';
+import { computeScreenPlacement } from '../../shared/domain/screen-layout';
+import { panToFocusCoord, TRANSITION_DURATION } from './render-filter-service';
 
 export { TRANSITION_DURATION };
 
@@ -43,6 +44,9 @@ export interface PremiereXmlInput {
   sections: PremiereSection[];
   keyframes: Keyframe[];
   hasCamera: boolean;
+  // Free placement of the screen recording inside the 16:9 sequence
+  // (OBS-style). When absent the screen keeps the legacy cover behavior.
+  screenTransform?: ScreenTransform | null;
 }
 
 const AUTHORING_CANVAS_W = 1920;
@@ -275,14 +279,23 @@ export function computeScreenCoverScalePercent(
   return cover * 100;
 }
 
+/**
+ * Premiere imports xmeml Basic Motion `<center>` in units of the MEDIA frame
+ * size, not the sequence frame: Position = seqCenter + center × mediaDim.
+ * (Verified empirically: a 4K camera PiP emitted with sequence-relative units
+ * landed at 960 + horiz×3840 — off screen.) Convert a desired on-canvas
+ * center (px) into those media-relative units.
+ */
 export function centerPxToFcpCenter(
   centerPxX: number,
   centerPxY: number,
   canvasW: number,
-  canvasH: number
+  canvasH: number,
+  mediaW: number,
+  mediaH: number
 ): { horiz: number; vert: number } {
-  const horiz = canvasW > 0 ? (2 * centerPxX - canvasW) / canvasW : 0;
-  const vert = canvasH > 0 ? (2 * centerPxY - canvasH) / canvasH : 0;
+  const horiz = mediaW > 0 ? (centerPxX - canvasW / 2) / mediaW : 0;
+  const vert = mediaH > 0 ? (centerPxY - canvasH / 2) / mediaH : 0;
   return { horiz, vert };
 }
 
@@ -376,7 +389,9 @@ function emitCameraFilter(
       geom.centerPxX,
       geom.centerPxY,
       canvasW,
-      canvasH
+      canvasH,
+      cameraWidth,
+      cameraHeight
     );
 
     scaleKfs.push(numericKeyframeXml(kf.frame, geom.scalePct));
@@ -400,7 +415,9 @@ function emitCameraFilter(
     firstGeom.centerPxX,
     firstGeom.centerPxY,
     canvasW,
-    canvasH
+    canvasH,
+    cameraWidth,
+    cameraHeight
   );
   const firstOpacity = first ? (first.pipVisible ? 100 : 0) : 100;
   const firstCrop = first ? cropForKf(first) : squareCrop;
@@ -506,56 +523,144 @@ function emitCameraFilter(
   );
 }
 
-function emitScreenFilter(
+interface ScreenGeom {
+  scalePct: number;
+  centerPxX: number;
+  centerPxY: number;
+}
+
+/**
+ * Effective screen geometry for one keyframe when a free ScreenTransform is
+ * set. The editor composes the placement first, then the background zoom
+ * crops a window of the composed canvas and scales it back up. In screen
+ * space that is p' = (p - windowOrigin) * zoom, so the clip's Motion center
+ * and scale can express the exact same result.
+ */
+function screenGeomAt(
+  kf: ClipLocalKeyframe,
+  baseScalePct: number,
+  baseCenterX: number,
+  baseCenterY: number,
+  canvasW: number,
+  canvasH: number
+): ScreenGeom {
+  const zoom = Math.max(1, kf.backgroundZoom ?? 1);
+  const focusX = panToFocusCoord(zoom, kf.backgroundPanX ?? 0, 0.5);
+  const focusY = panToFocusCoord(zoom, kf.backgroundPanY ?? 0, 0.5);
+  const originX = Math.max(
+    0,
+    Math.min(canvasW - canvasW / zoom, focusX * canvasW - canvasW / (2 * zoom))
+  );
+  const originY = Math.max(
+    0,
+    Math.min(canvasH - canvasH / zoom, focusY * canvasH - canvasH / (2 * zoom))
+  );
+  return {
+    scalePct: baseScalePct * zoom,
+    centerPxX: (baseCenterX - originX) * zoom,
+    centerPxY: (baseCenterY - originY) * zoom
+  };
+}
+
+/**
+ * Basic Motion for the screen clip. Covers both the legacy cover placement
+ * (no transform) and the free ScreenTransform placement, with background
+ * zoom/pan composed exactly the way the editor renders them.
+ */
+function emitScreenMotionFilter(
   localKeyframes: ClipLocalKeyframe[],
-  coverScale: number
+  input: PremiereXmlInput,
+  screenWidth: number,
+  screenHeight: number
 ): string | null {
-  const hasChange = localKeyframes.some((kf) => {
+  const transform = input.screenTransform ?? null;
+  // With no transform the screen keeps the legacy behavior: cover the
+  // sequence frame, preserving aspect.
+  const placement = computeScreenPlacement(
+    screenWidth,
+    screenHeight,
+    input.canvasW,
+    input.canvasH,
+    'fill',
+    transform
+  );
+  if (!placement) return null;
+
+  // Motion scale is relative to the media's native pixel size, so the drawn
+  // placement width over the native width gives the uniform base scale.
+  const baseScalePct = (placement.width / screenWidth) * 100;
+  const baseCenterX = placement.left + placement.width / 2;
+  const baseCenterY = placement.top + placement.height / 2;
+
+  const hasZoomPan = localKeyframes.some((kf) => {
     return (
       Math.abs((kf.backgroundZoom ?? 1) - 1) > 0.0001 ||
       Math.abs(kf.backgroundPanX ?? 0) > 0.0001 ||
       Math.abs(kf.backgroundPanY ?? 0) > 0.0001
     );
   });
-  // When the media already matches the sequence resolution (coverScale ~100)
-  // and there is no zoom/pan animation, the clip needs no Motion at all.
-  if (!hasChange && Math.abs(coverScale - 100) < 0.01) return null;
+  // Media that already covers the sequence 1:1, with no zoom/pan animation
+  // and no free placement, needs no Motion at all — the editor can treat the
+  // clip as untouched.
+  if (!transform && !hasZoomPan && Math.abs(baseScalePct - 100) < 0.01) return null;
+
+  const geoms = localKeyframes.map((kf) =>
+    screenGeomAt(kf, baseScalePct, baseCenterX, baseCenterY, input.canvasW, input.canvasH)
+  );
+  const firstGeom = geoms[0] ?? {
+    scalePct: baseScalePct,
+    centerPxX: baseCenterX,
+    centerPxY: baseCenterY
+  };
+  const varies = geoms.some(
+    (geom) =>
+      Math.abs(geom.scalePct - firstGeom.scalePct) > 0.001 ||
+      Math.abs(geom.centerPxX - firstGeom.centerPxX) > 0.01 ||
+      Math.abs(geom.centerPxY - firstGeom.centerPxY) > 0.01
+  );
 
   const scaleKfs: string[] = [];
   const centerKfs: string[] = [];
-
-  // The cover scale fits the (potentially higher-res) screen capture into the
-  // 1080p sequence; background zoom multiplies it on top so a 2x zoom on a 4K
-  // source in a 1080p sequence reads as 100% (50% cover * 2).
-  if (hasChange) {
-    for (const kf of localKeyframes) {
-      const zoomPct = coverScale * Math.max(1, kf.backgroundZoom ?? 1);
-      const horiz = kf.backgroundPanX ?? 0;
-      const vert = kf.backgroundPanY ?? 0;
-
-      scaleKfs.push(
-        `          <keyframe>\n` +
-          `            <when>${kf.frame}</when>\n` +
-          `            <value>${zoomPct.toFixed(3)}</value>\n` +
-          `          </keyframe>`
+  if (varies) {
+    localKeyframes.forEach((kf, index) => {
+      const geom = geoms[index];
+      const { horiz, vert } = centerPxToFcpCenter(
+        geom.centerPxX,
+        geom.centerPxY,
+        input.canvasW,
+        input.canvasH,
+        screenWidth,
+        screenHeight
       );
-      centerKfs.push(
-        `          <keyframe>\n` +
-          `            <when>${kf.frame}</when>\n` +
-          `            <value>\n` +
-          `              <horiz>${horiz.toFixed(6)}</horiz>\n` +
-          `              <vert>${vert.toFixed(6)}</vert>\n` +
-          `            </value>\n` +
-          `          </keyframe>`
-      );
-    }
+      scaleKfs.push(numericKeyframeXml(kf.frame, geom.scalePct));
+      centerKfs.push(centerKeyframeXml(kf.frame, horiz, vert));
+    });
   }
 
-  const first = localKeyframes[0];
-  const firstScale = coverScale * (first ? Math.max(1, first.backgroundZoom ?? 1) : 1);
-  const firstHoriz = first ? first.backgroundPanX ?? 0 : 0;
-  const firstVert = first ? first.backgroundPanY ?? 0 : 0;
+  const firstCenter = centerPxToFcpCenter(
+    firstGeom.centerPxX,
+    firstGeom.centerPxY,
+    input.canvasW,
+    input.canvasH,
+    screenWidth,
+    screenHeight
+  );
+  return screenBasicMotionFilterXml(
+    firstGeom.scalePct,
+    firstCenter.horiz,
+    firstCenter.vert,
+    scaleKfs,
+    centerKfs
+  );
+}
 
+function screenBasicMotionFilterXml(
+  firstScale: number,
+  firstHoriz: number,
+  firstVert: number,
+  scaleKfs: string[],
+  centerKfs: string[]
+): string {
   return (
     `    <filter>\n` +
     `      <effect>\n` +
@@ -690,13 +795,12 @@ function emitScreenClip(params: {
   );
 
   const localKfs = clipLocalKeyframesForSection(input.keyframes, section, fps);
-  const coverScale = computeScreenCoverScalePercent(
-    input.canvasW,
-    input.canvasH,
+  const screenFilter = emitScreenMotionFilter(
+    localKfs,
+    input,
     take.screenWidth,
     take.screenHeight
   );
-  const screenFilter = emitScreenFilter(localKfs, coverScale);
 
   return (
     `  <clipitem id="clipitem-screen-${clipIndex}">\n` +

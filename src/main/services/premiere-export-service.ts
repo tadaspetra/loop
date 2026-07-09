@@ -6,6 +6,7 @@ import { atomicWriteFileSync, ensureDirectory, fs } from '../infra/file-system';
 import {
   normalizeAudioSource,
   normalizeCameraSyncOffsetMs,
+  normalizeScreenTransform,
   toProjectAbsolutePath,
   type AudioSource,
   type Keyframe
@@ -49,6 +50,9 @@ export interface PremiereExportOptions {
   pipSize: number;
   sourceWidth: number;
   sourceHeight: number;
+  // Free placement of the screen recording inside the 16:9 sequence; the
+  // legacy cover behavior applies when absent.
+  screenTransform?: unknown;
   cameraSyncOffsetMs: number;
   takes: PremiereExportTakeInput[];
   sections: PremiereExportSectionInput[];
@@ -506,7 +510,8 @@ export async function exportPremiereProject(
     takes: exportTakes,
     sections: sectionsForXml,
     keyframes: Array.isArray(opts.keyframes) ? opts.keyframes : [],
-    hasCamera
+    hasCamera,
+    screenTransform: normalizeScreenTransform(opts.screenTransform)
   });
 
   const xmlPath = path.join(outputFolder, `${opts.projectName || 'Loop Project'}.xml`);
