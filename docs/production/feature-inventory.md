@@ -81,8 +81,9 @@ Acceptance criteria:
 ### C1. On-demand Transcribe & Cut
 
 - Stopping a recording puts the take on the timeline immediately as one full-length section — no transcription and no network call in the stop flow.
-- The timeline toolbar's "Transcribe & Cut" button batch-transcribes the target take's mic audio (audio-only file, or audio extracted from the camera file via ffmpeg stream copy) with ElevenLabs Scribe in the main process, groups word timestamps into speech segments, and replaces the take's timeline sections with speech-cut sections.
+- The timeline toolbar's "Transcribe & Cut" button batch-transcribes the target take's mic audio (audio-only file, or audio extracted from the camera file via ffmpeg stream copy) with ElevenLabs Scribe in the main process, groups word timestamps into speech segments, removes repeated ("mistake") takes, and replaces the take's timeline sections with speech-cut sections.
 - The target take is the selected section's take, falling back to the most recent take still on the timeline.
+- Repeated-take removal is deterministic and text-based: words are grouped into fine-grained utterances (0.5s gap), an utterance whose normalized tokens substantially match the start of a following utterance (verbatim repeat or aborted prefix, within 8s, optionally across one short interjection) is dropped so the last take wins, and survivors re-merge at the normal 1.5s gap. Media files are never modified — removed takes simply fall outside the cut sections' source ranges.
 
 Acceptance criteria:
 
@@ -91,6 +92,7 @@ Acceptance criteria:
 - Transcribe & Cut applies as a single undo step; failure, timeout, no-speech, or a timeline edit made while transcription was in flight leaves the timeline unchanged and reports a visible status.
 - Word timestamps map into take time using the per-file recorder start offsets; non-speech annotations are stripped; system-audio "keep" regions captured during the same app session are respected.
 - Takes without mic audio report a visible message and trigger no network call.
+- Utterances with fewer than 3 meaningful tokens are never removed; when takes are removed the status line reports the count, and neighbors are never merged across a removed take so flub audio cannot survive inside a kept section.
 
 ### C3. Section computation
 

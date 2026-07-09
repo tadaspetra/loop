@@ -5,6 +5,10 @@ import {
   getTranscriptionTimeoutMs
 } from './features/transcript/batch-transcript';
 import {
+  cutRepeatedTakes,
+  MISTAKE_UTTERANCE_GAP_SEC
+} from './features/transcript/mistake-detection';
+import {
   roundMs,
   buildRemappedSectionsFromSegments,
   buildRecordingSectionsForTimeline,
@@ -5965,9 +5969,15 @@ async function transcribeAndCutTake() {
     ]);
     if (!matchesActiveProjectSession(projectSession) || !editorState) return;
 
-    const speechSegments = buildSegmentsFromWords(result?.words || [], {
-      offsetSec: source.offsetSec
+    // Group words at a fine gap first (retry pauses are usually shorter than
+    // the 1.5s segment threshold), drop flubbed takes that the speaker
+    // re-recorded, then re-merge survivors at the normal gap so silence-cut
+    // boundaries are unchanged wherever nothing was removed.
+    const utterances = buildSegmentsFromWords(result?.words || [], {
+      offsetSec: source.offsetSec,
+      maxGapSec: MISTAKE_UTTERANCE_GAP_SEC
     });
+    const { segments: speechSegments, removed: removedTakes } = cutRepeatedTakes(utterances);
     // Merge system-audio "keep" regions captured while this take recorded so
     // audible screen sound is never trimmed just because the mic was quiet.
     const activeSegments = [...speechSegments, ...(takeSystemAudioActivity.get(takeId) || [])];
@@ -6038,8 +6048,12 @@ async function transcribeAndCutTake() {
     // coordinates), matching what the recording flow stamps at append time.
     take.sections = takeLocalSections;
     scheduleProjectSave();
+    const removedNote =
+      removedTakes.length > 0
+        ? ` · removed ${removedTakes.length} repeated take${removedTakes.length !== 1 ? 's' : ''}`
+        : '';
     setTranscribeCutStatus(
-      `Cut into ${cutSections.length} section${cutSections.length !== 1 ? 's' : ''}`,
+      `Cut into ${cutSections.length} section${cutSections.length !== 1 ? 's' : ''}${removedNote}`,
       'success'
     );
   } catch (err) {
