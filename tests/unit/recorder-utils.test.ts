@@ -153,11 +153,14 @@ describe('recorder-utils', () => {
   });
 
   describe('microphone constraints', () => {
-    test('requests explicit quality constraints with ideal (not exact) sample rate and channels', () => {
+    test('requests mono capture with ideal (not exact) sample rate and channel count', () => {
+      // Mono matters: stereo capture from a mic on an audio interface puts
+      // the voice on one channel and silence on the other, which plays in one
+      // ear and sounds quiet everywhere downstream.
       expect(buildMicrophoneConstraints('mic-1')).toEqual({
         deviceId: { exact: 'mic-1' },
         sampleRate: { ideal: 48000 },
-        channelCount: { ideal: 2 },
+        channelCount: { ideal: 1 },
         echoCancellation: false,
         noiseSuppression: false,
         autoGainControl: false

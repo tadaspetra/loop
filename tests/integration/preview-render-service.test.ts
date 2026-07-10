@@ -82,6 +82,9 @@ describe('main/services/preview-render-service integration', () => {
           probeVideoFpsWithFfmpeg: async () => 30,
           now: () => 111,
           runFfmpeg: async ({ args = [] } = {}) => {
+            // Channel-balance probes (astats) run before the render; answer
+            // them as balanced so capturedArgs holds only the render call.
+            if (args.join(' ').includes('astats')) return { stderr: '' };
             // Simulate ffmpeg running successfully by creating the expected
             // output file at the path the filter graph names. The filter
             // graph's last -y argument is the output file.

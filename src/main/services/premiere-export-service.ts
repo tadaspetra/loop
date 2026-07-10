@@ -18,6 +18,7 @@ import {
   type VideoDimensions
 } from './fps-service';
 import { runFfmpeg, type FfmpegProgress } from './ffmpeg-runner';
+import { buildRebalancePanFilter, measureChannelBalance } from './audio-balance-service';
 import { buildPremiereXml, type PremiereSection, type PremiereTake } from './premiere-xml-service';
 
 export interface PremiereExportTakeInput {
@@ -77,6 +78,11 @@ interface TranscodeJob {
   // Whether to keep the source audio track when transcoding camera video.
   // True when the camera file owns the mic (audioSource === 'camera').
   includeCameraAudio?: boolean;
+  // Whether the output carries an audio stream worth probing for one-sided
+  // stereo (mic on one channel of a stereo interface capture).
+  probeAudioBalance?: boolean;
+  // Rebalance filter derived from the probe; null leaves the audio untouched.
+  audioFilter?: string | null;
 }
 
 type ResolvedPremiereExportTakeInput = Omit<
@@ -125,7 +131,8 @@ const SEQUENCE_CANVAS_H = 1080;
 function buildScreenTranscodeArgs(
   inputPath: string,
   outputPath: string,
-  targetFps: number
+  targetFps: number,
+  audioFilter: string | null = null
 ): string[] {
   const gop = String(Math.max(2, Math.round(targetFps * 2)));
   return [
@@ -162,6 +169,7 @@ function buildScreenTranscodeArgs(
     '48000',
     '-ac',
     '2',
+    ...(audioFilter ? ['-af', audioFilter] : []),
     '-movflags',
     '+faststart',
     '-y',
@@ -173,7 +181,8 @@ function buildCameraTranscodeArgs(
   inputPath: string,
   outputPath: string,
   includeAudio: boolean,
-  targetFps: number
+  targetFps: number,
+  audioFilter: string | null = null
 ): string[] {
   // Mirror horizontally + force CFR. Preserves native dimensions so the user
   // can expand / re-crop the full camera frame in Premiere.
@@ -192,6 +201,7 @@ function buildCameraTranscodeArgs(
     // Camera file owns the mic for this take; preserve it so Premiere can
     // import the PiP clip with its built-in audio track.
     args.push('-map', '0:a:0?', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2');
+    if (audioFilter) args.push('-af', audioFilter);
   } else {
     args.push('-an');
   }
@@ -215,7 +225,11 @@ function buildCameraTranscodeArgs(
   return args;
 }
 
-function buildAudioTranscodeArgs(inputPath: string, outputPath: string): string[] {
+function buildAudioTranscodeArgs(
+  inputPath: string,
+  outputPath: string,
+  audioFilter: string | null = null
+): string[] {
   // Audio-only takes are written as 48kHz stereo PCM wav so Premiere imports
   // them without needing to decode WebM/Opus on the editor's Import path.
   return [
@@ -235,6 +249,7 @@ function buildAudioTranscodeArgs(inputPath: string, outputPath: string): string[
     '48000',
     '-ac',
     '2',
+    ...(audioFilter ? ['-af', audioFilter] : []),
     '-y',
     outputPath
   ];
@@ -305,7 +320,10 @@ export async function exportPremiereProject(
       takeId,
       inputPath: take.screenPath,
       outputPath: path.join(mediaFolder, screenOutputName(takeId)),
-      sourceDurationSec: Number.isFinite(take.duration) ? take.duration : 0
+      sourceDurationSec: Number.isFinite(take.duration) ? take.duration : 0,
+      // The screen file carries audio only for legacy mic-on-screen takes or
+      // takes with captured system audio; silent screen files skip the probe.
+      probeAudioBalance: takeAudioSource === 'screen' || take.hasSystemAudio === true
     });
     if (needsCameraJob) {
       jobs.push({
@@ -314,7 +332,8 @@ export async function exportPremiereProject(
         inputPath: take.cameraPath as string,
         outputPath: path.join(mediaFolder, cameraOutputName(takeId)),
         sourceDurationSec: Number.isFinite(take.duration) ? take.duration : 0,
-        includeCameraAudio: cameraOwnsAudio
+        includeCameraAudio: cameraOwnsAudio,
+        probeAudioBalance: cameraOwnsAudio
       });
     }
     if (takeAudioSource === 'external' && take.audioPath && fs.existsSync(take.audioPath)) {
@@ -323,7 +342,8 @@ export async function exportPremiereProject(
         takeId,
         inputPath: take.audioPath,
         outputPath: path.join(mediaFolder, audioOutputName(takeId)),
-        sourceDurationSec: Number.isFinite(take.duration) ? take.duration : 0
+        sourceDurationSec: Number.isFinite(take.duration) ? take.duration : 0,
+        probeAudioBalance: true
       });
     }
   }
@@ -363,24 +383,51 @@ export async function exportPremiereProject(
     durationSec: jobs.reduce((total, j) => total + Math.max(0, j.sourceDurationSec), 0)
   });
 
+  // Detect one-sided stereo captures (mic on one channel of a stereo
+  // interface) so their transcode duplicates the active channel to both ears.
+  // Exported audio otherwise plays in one ear and sounds quiet in Premiere.
+  const rebalanceFilterByInput = new Map<string, string | null>();
+  for (const job of jobs) {
+    if (!job.probeAudioBalance) continue;
+    if (deps.signal?.aborted) throw new Error('Premiere export aborted');
+    if (!rebalanceFilterByInput.has(job.inputPath)) {
+      onProgress?.({
+        phase: 'starting',
+        percent: 0,
+        status: 'Analyzing audio channels...',
+        durationSec: 0
+      });
+      const balance = await measureChannelBalance({
+        ffmpegPath,
+        inputPath: job.inputPath,
+        runFfmpegProcess: runFfmpegProcess,
+        signal: deps.signal
+      });
+      rebalanceFilterByInput.set(job.inputPath, buildRebalancePanFilter(balance));
+    }
+    job.audioFilter = rebalanceFilterByInput.get(job.inputPath) ?? null;
+  }
+
   let completedJobs = 0;
   const totalJobs = jobs.length;
 
   for (const job of jobs) {
     if (deps.signal?.aborted) throw new Error('Premiere export aborted');
 
+    const audioFilter = job.audioFilter ?? null;
     let args: string[];
     if (job.kind === 'screen') {
-      args = buildScreenTranscodeArgs(job.inputPath, job.outputPath, targetFps);
+      args = buildScreenTranscodeArgs(job.inputPath, job.outputPath, targetFps, audioFilter);
     } else if (job.kind === 'camera') {
       args = buildCameraTranscodeArgs(
         job.inputPath,
         job.outputPath,
         job.includeCameraAudio === true,
-        targetFps
+        targetFps,
+        audioFilter
       );
     } else {
-      args = buildAudioTranscodeArgs(job.inputPath, job.outputPath);
+      args = buildAudioTranscodeArgs(job.inputPath, job.outputPath, audioFilter);
     }
 
     const jobDuration = Math.max(0.001, job.sourceDurationSec || 0);

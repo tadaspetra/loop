@@ -75,6 +75,9 @@ Acceptance criteria:
 - Record/stop toggles UI state, timer, selector locks, and output files.
 - Screen capture uses stable 30fps canvas path.
 - Output takes include media paths and duration.
+- The mic is requested as mono (`channelCount: { ideal: 1 }`): stereo capture
+  from a mic on an audio interface lands the voice on one channel and silence
+  on the other, which plays in one ear and sounds quiet downstream.
 
 ## C. Transcript And Trim
 
@@ -153,6 +156,11 @@ Acceptance criteria:
 
 - Playback crosses section boundaries without visible dead frames.
 - End-of-timeline pauses and resets controls safely.
+- One-sided stereo takes (pre-mono-capture recordings with the mic on one
+  channel) play centered: the decoded waveform buffer doubles as the
+  channel-balance analysis, the waveform draws from the active channel, and
+  the mic-owning media element is routed through a WebAudio splitter/merger
+  so both ears hear the active channel. Balanced takes never touch WebAudio.
 
 ### E3. Section editing
 
@@ -218,12 +226,42 @@ Acceptance criteria:
   - concatenates audio/video
   - applies fit/fill and camera PiP/fullscreen keyframe transitions
   - outputs CFR stream
+- Before building the filter graph, every audio-carrying input (mic-owning
+  screen/camera/external file plus system-audio screen files) is probed with
+  ffmpeg `astats` for per-channel RMS; one-sided stereo inputs get a `pan`
+  rebalance prepended to each audio chain reading that input so the mic plays
+  centered at recorded loudness instead of quiet in one ear.
 
 Acceptance criteria:
 
 - No-section render request fails fast with explicit error.
 - Takes referenced by sections must exist or render fails clearly.
 - FPS probing chooses stable target fps and enforces CFR output.
+- Each audio-carrying input file is channel-probed once per render regardless
+  of section count; balanced/mono inputs produce an unchanged filter graph.
+- The rebalance runs before the trim/adelay/apad timing chain, leaving
+  drift-clamping behavior byte-identical.
+- A failed channel probe never fails the render — the file simply renders
+  unrebalanced; probe aborts still cancel the render.
+
+### F2. Premiere export audio fidelity
+
+- Exported media must sound like the raw recordings: transcodes only convert
+  format (AAC/PCM, 48 kHz stereo) and never apply creative processing.
+- Before transcoding, every audio-carrying input (legacy mic-on-screen or
+  system-audio screen files, mic-owning camera files, dedicated mic files) is
+  probed with ffmpeg `astats` for per-channel RMS.
+- One-sided stereo inputs (one channel active, the other digitally silent or
+  ≥40 dB down) transcode with a `pan` filter that routes the active channel
+  to both output channels at full level, so the audio is centered and at the
+  recorded loudness in Premiere.
+
+Acceptance criteria:
+
+- Balanced stereo and mono inputs transcode without any pan filter.
+- A failed channel probe never fails the export — the file simply transcodes
+  unrebalanced; probe aborts still cancel the export.
+- Repeated sections over one take probe and transcode that take's files once.
 
 ## G. Cross-Cutting Behavior
 

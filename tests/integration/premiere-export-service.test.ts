@@ -25,6 +25,49 @@ function createRunFfmpegStub(
   };
 }
 
+function isChannelProbeCall(call: FfmpegCall): boolean {
+  return call.args.join(' ').includes('astats');
+}
+
+function astatsStderr(leftRmsDb: string, rightRmsDb: string): string {
+  return (
+    '[Parsed_astats_0 @ 0x1] Channel: 1\n' +
+    `[Parsed_astats_0 @ 0x1] RMS level dB: ${leftRmsDb}\n` +
+    '[Parsed_astats_0 @ 0x1] Channel: 2\n' +
+    `[Parsed_astats_0 @ 0x1] RMS level dB: ${rightRmsDb}\n`
+  );
+}
+
+/**
+ * Stub that answers channel probes with per-input astats output and materializes
+ * transcode outputs on disk like the plain stub does.
+ */
+function createProbeAwareRunFfmpegStub(
+  calls: FfmpegCall[],
+  probeStderrByInput: Record<string, string | Error>
+): NonNullable<PremiereExportDeps['runFfmpeg']> {
+  return async ({ args = [] } = {}) => {
+    const call = { args };
+    calls.push(call);
+    if (isChannelProbeCall(call)) {
+      const inputIndex = args.indexOf('-i');
+      const inputPath = inputIndex >= 0 ? args[inputIndex + 1] : '';
+      const entry = Object.entries(probeStderrByInput).find(([key]) =>
+        inputPath.includes(key)
+      );
+      const response = entry?.[1] ?? astatsStderr('-20.0', '-21.0');
+      if (response instanceof Error) throw response;
+      return { stderr: response };
+    }
+    const outPath = args[args.length - 1];
+    if (outPath && (outPath.endsWith('.mp4') || outPath.endsWith('.wav'))) {
+      fs.mkdirSync(path.dirname(outPath), { recursive: true });
+      fs.writeFileSync(outPath, 'media-data', 'utf8');
+    }
+    return { stderr: '' };
+  };
+}
+
 function baseKeyframe(overrides: Partial<Keyframe> = {}): Keyframe {
   return {
     time: 0,
@@ -115,14 +158,18 @@ describe('main/services/premiere-export-service', () => {
       })
     });
 
-    expect(calls).toHaveLength(2);
-    const allArgs = calls.map((c) => c.args.join(' '));
+    // Legacy takes default to mic-on-screen, so the screen input gets one
+    // channel-balance probe before the two transcodes.
+    const transcodeCalls = calls.filter((c) => !isChannelProbeCall(c));
+    expect(calls.filter(isChannelProbeCall)).toHaveLength(1);
+    expect(transcodeCalls).toHaveLength(2);
+    const allArgs = transcodeCalls.map((c) => c.args.join(' '));
     expect(allArgs.some((a) => a.includes('screen-take-1.mp4'))).toBe(true);
     expect(allArgs.some((a) => a.includes('camera-take-1.mp4'))).toBe(true);
 
     // Both transcodes must be H.264 MP4 (smaller than ProRes) and force CFR
     // so VFR WebM sources don't balloon the output duration / file size.
-    for (const call of calls) {
+    for (const call of transcodeCalls) {
       const joined = call.args.join(' ');
       expect(joined).toContain('-c:v libx264');
       expect(joined).toContain('-crf 18');
@@ -244,8 +291,9 @@ describe('main/services/premiere-export-service', () => {
       })
     });
 
-    expect(calls).toHaveLength(1);
-    expect(calls[0].args.join(' ')).toContain('screen-take-1.mp4');
+    const transcodeCalls = calls.filter((c) => !isChannelProbeCall(c));
+    expect(transcodeCalls).toHaveLength(1);
+    expect(transcodeCalls[0].args.join(' ')).toContain('screen-take-1.mp4');
   });
 
   test('exportPremiereProject resolves project-relative media paths from the project folder', async () => {
@@ -296,7 +344,9 @@ describe('main/services/premiere-export-service', () => {
     });
 
     const joinedCalls = calls.map((call) => call.args.join(' '));
-    expect(calls).toHaveLength(3);
+    // 3 transcodes plus channel probes for the audio-carrying inputs: take-a's
+    // camera (owns the mic) and take-b's screen (legacy mic-on-screen default).
+    expect(calls.filter((c) => !isChannelProbeCall(c))).toHaveLength(3);
     expect(joinedCalls).toEqual(
       expect.arrayContaining([
         expect.stringContaining(path.join(tmpDir, 'screen-a.webm')),
@@ -353,6 +403,155 @@ describe('main/services/premiere-export-service', () => {
     expect(updates.some((u) => u.phase === 'finalizing' && u.percent === 1)).toBe(true);
   });
 
+  test('exportPremiereProject rebalances a one-sided external mic during transcode', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'premiere-export-onesided-'));
+    const calls: FfmpegCall[] = [];
+    const audioPath = path.join(tmpDir, 'mic.webm');
+    fs.writeFileSync(audioPath, 'mic', 'utf8');
+    const opts = makeBaseOpts(tmpDir, {
+      takes: [
+        {
+          id: 'take-1',
+          screenPath: path.join(tmpDir, 'screen.webm'),
+          cameraPath: null,
+          audioPath,
+          audioSource: 'external',
+          duration: 10
+        }
+      ],
+      keyframes: [baseKeyframe({ pipVisible: false, cameraFullscreen: false })]
+    });
+
+    await exportPremiereProject(opts, {
+      ffmpegPath: '/usr/bin/ffmpeg',
+      probeVideoFpsWithFfmpeg: async () => 30,
+      probeVideoDimensionsWithFfmpeg: async () => ({ width: 1920, height: 1080 }),
+      // Mic landed on the RIGHT channel of the stereo capture.
+      runFfmpeg: createProbeAwareRunFfmpegStub(calls, {
+        'mic.webm': astatsStderr('-inf', '-16.3')
+      })
+    });
+
+    // Only the mic file carries audio for this take (screen has neither the
+    // mic nor system audio), so exactly one channel probe runs.
+    const probeCalls = calls.filter(isChannelProbeCall);
+    expect(probeCalls).toHaveLength(1);
+    expect(probeCalls[0].args.join(' ')).toContain(audioPath);
+
+    const wavCall = calls.find((c) => c.args.join(' ').includes('audio-take-1.wav'));
+    expect(wavCall).toBeDefined();
+    expect(wavCall!.args.join(' ')).toContain('-af pan=stereo|c0=c1|c1=c1');
+
+    const screenCall = calls.find((c) => c.args.join(' ').includes('screen-take-1.mp4'));
+    expect(screenCall!.args.join(' ')).not.toContain('pan=');
+  });
+
+  test('exportPremiereProject leaves balanced stereo audio untouched', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'premiere-export-balanced-'));
+    const calls: FfmpegCall[] = [];
+    const audioPath = path.join(tmpDir, 'mic.webm');
+    fs.writeFileSync(audioPath, 'mic', 'utf8');
+    const opts = makeBaseOpts(tmpDir, {
+      takes: [
+        {
+          id: 'take-1',
+          screenPath: path.join(tmpDir, 'screen.webm'),
+          cameraPath: null,
+          audioPath,
+          audioSource: 'external',
+          duration: 10
+        }
+      ],
+      keyframes: [baseKeyframe({ pipVisible: false, cameraFullscreen: false })]
+    });
+
+    await exportPremiereProject(opts, {
+      ffmpegPath: '/usr/bin/ffmpeg',
+      probeVideoFpsWithFfmpeg: async () => 30,
+      probeVideoDimensionsWithFfmpeg: async () => ({ width: 1920, height: 1080 }),
+      runFfmpeg: createProbeAwareRunFfmpegStub(calls, {
+        'mic.webm': astatsStderr('-19.2', '-20.8')
+      })
+    });
+
+    for (const call of calls) {
+      expect(call.args.join(' ')).not.toContain('pan=');
+    }
+  });
+
+  test('exportPremiereProject probes camera and system-audio inputs and rebalances per file', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'premiere-export-multi-'));
+    const calls: FfmpegCall[] = [];
+    const opts = makeBaseOpts(tmpDir, {
+      takes: [
+        {
+          id: 'take-1',
+          screenPath: path.join(tmpDir, 'screen.webm'),
+          cameraPath: path.join(tmpDir, 'camera.webm'),
+          audioSource: 'camera',
+          hasSystemAudio: true,
+          duration: 10
+        }
+      ]
+    });
+
+    await exportPremiereProject(opts, {
+      ffmpegPath: '/usr/bin/ffmpeg',
+      probeVideoFpsWithFfmpeg: async () => 30,
+      probeVideoDimensionsWithFfmpeg: async () => ({ width: 1920, height: 1080 }),
+      runFfmpeg: createProbeAwareRunFfmpegStub(calls, {
+        // Camera mic sits on the LEFT channel; system audio is proper stereo.
+        'camera.webm': astatsStderr('-15.1', '-inf'),
+        'screen.webm': astatsStderr('-22.4', '-23.0')
+      })
+    });
+
+    const probeCalls = calls.filter(isChannelProbeCall);
+    const probedInputs = probeCalls.map((c) => c.args[c.args.indexOf('-i') + 1]);
+    expect(probedInputs).toHaveLength(2);
+    expect(probedInputs.some((p) => p.includes('camera.webm'))).toBe(true);
+    expect(probedInputs.some((p) => p.includes('screen.webm'))).toBe(true);
+
+    const cameraCall = calls.find((c) => c.args.join(' ').includes('camera-take-1.mp4'));
+    expect(cameraCall!.args.join(' ')).toContain('-af pan=stereo|c0=c0|c1=c0');
+    const screenCall = calls.find((c) => c.args.join(' ').includes('screen-take-1.mp4'));
+    expect(screenCall!.args.join(' ')).not.toContain('pan=');
+  });
+
+  test('exportPremiereProject still succeeds when the channel probe fails', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'premiere-export-probefail-'));
+    const calls: FfmpegCall[] = [];
+    const audioPath = path.join(tmpDir, 'mic.webm');
+    fs.writeFileSync(audioPath, 'mic', 'utf8');
+    const opts = makeBaseOpts(tmpDir, {
+      takes: [
+        {
+          id: 'take-1',
+          screenPath: path.join(tmpDir, 'screen.webm'),
+          cameraPath: null,
+          audioPath,
+          audioSource: 'external',
+          duration: 10
+        }
+      ],
+      keyframes: [baseKeyframe({ pipVisible: false, cameraFullscreen: false })]
+    });
+
+    const result = await exportPremiereProject(opts, {
+      ffmpegPath: '/usr/bin/ffmpeg',
+      probeVideoFpsWithFfmpeg: async () => 30,
+      probeVideoDimensionsWithFfmpeg: async () => ({ width: 1920, height: 1080 }),
+      runFfmpeg: createProbeAwareRunFfmpegStub(calls, {
+        'mic.webm': new Error('could not decode audio')
+      })
+    });
+
+    expect(fs.existsSync(result.xmlPath)).toBe(true);
+    const wavCall = calls.find((c) => c.args.join(' ').includes('audio-take-1.wav'));
+    expect(wavCall).toBeDefined();
+    expect(wavCall!.args.join(' ')).not.toContain('pan=');
+  });
+
   test('exportPremiereProject dedupes ffmpeg jobs for repeated takes across sections', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'premiere-export-dedupe-'));
     const calls: FfmpegCall[] = [];
@@ -376,6 +575,9 @@ describe('main/services/premiere-export-service', () => {
       })
     });
 
-    expect(calls).toHaveLength(2);
+    // One screen probe + one screen transcode + one camera transcode: repeated
+    // sections over the same take must not re-probe or re-transcode.
+    expect(calls.filter(isChannelProbeCall)).toHaveLength(1);
+    expect(calls.filter((c) => !isChannelProbeCall(c))).toHaveLength(2);
   });
 });

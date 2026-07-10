@@ -39,6 +39,10 @@ import { resolvePlaybackAdvance } from './features/timeline/playback-advance';
 import { getTakePlaybackSources } from './features/timeline/take-playback-sources';
 import { getWaveformDecodeSources } from './features/timeline/waveform-sources';
 import {
+  analyzeBufferChannelBalance,
+  pickWaveformChannel
+} from './features/timeline/audio-balance';
+import {
   buildMicrophoneConstraints,
   classifyRecorderFailure,
   finalizeStreamedRecording,
@@ -578,6 +582,14 @@ let takeAudioBufferCache = new Map(); // takeId -> AudioBuffer (mic audio)
 // from the mic cache so the editor can draw both waveforms simultaneously.
 let takeSystemAudioBufferCache = new Map(); // takeId -> AudioBuffer
 let systemAudioWaveformPeaks = null;
+// Channel-balance analysis per decoded AudioBuffer. One-sided stereo takes
+// (mic on one channel of a stereo interface capture) need their waveform read
+// from the active channel and their playback routed to both ears. WeakMap so
+// analysis runs once per decode and drops with the buffer.
+const audioBufferBalanceCache = new WeakMap();
+// AudioContext used only to remap one-sided takes during playback; balanced
+// takes never touch WebAudio.
+let playbackRebalanceContext = null;
 let takeVideoPool = new Map(); // takeId -> { screen: HTMLVideoElement, camera: HTMLVideoElement|null }
 const proxyStatus = new Map(); // takeId -> { status: 'pending'|'done'|'error', percent: number }
 let activeTakeId = null;
@@ -632,6 +644,82 @@ function preloadSectionImages() {
   }
 }
 
+function getBufferChannelBalance(audioBuffer) {
+  if (!audioBuffer) return { kind: 'balanced' };
+  let balance = audioBufferBalanceCache.get(audioBuffer);
+  if (!balance) {
+    balance = analyzeBufferChannelBalance(audioBuffer);
+    audioBufferBalanceCache.set(audioBuffer, balance);
+  }
+  return balance;
+}
+
+function resumePlaybackRebalanceContext() {
+  const ctx = playbackRebalanceContext;
+  if (!ctx || ctx.state !== 'suspended') return;
+  ctx.resume().catch(() => {
+    // Retried on the next user gesture; playback clicks count as gestures.
+  });
+}
+
+// Route the active channel of a one-sided media element to both ears. Once an
+// element is attached to a MediaElementSource all its audio flows through the
+// graph, so this is only ever done for elements that would otherwise play in
+// one ear.
+function wireOneSidedPlayback(element, activeChannel) {
+  try {
+    if (!playbackRebalanceContext) playbackRebalanceContext = new AudioContext();
+    const ctx = playbackRebalanceContext;
+    const source = ctx.createMediaElementSource(element);
+    const splitter = ctx.createChannelSplitter(2);
+    const merger = ctx.createChannelMerger(2);
+    source.connect(splitter);
+    splitter.connect(merger, activeChannel, 0);
+    splitter.connect(merger, activeChannel, 1);
+    merger.connect(ctx.destination);
+    if (ctx.state === 'suspended') {
+      resumePlaybackRebalanceContext();
+      document.addEventListener('pointerdown', resumePlaybackRebalanceContext, { once: true });
+    }
+    return true;
+  } catch (error) {
+    // Leaving the element unwired keeps the original (one-eared) playback
+    // instead of risking silence through a broken graph.
+    console.warn('Failed to rebalance one-sided playback:', error);
+    return false;
+  }
+}
+
+function getMicOwningPlaybackElement(entry) {
+  if (!entry) return null;
+  if (entry.audioSource === 'screen') return entry.screen;
+  if (entry.audioSource === 'camera') return entry.camera;
+  if (entry.audioSource === 'external') return entry.audio;
+  return null;
+}
+
+// Apply channel rebalancing to a pooled take once its mic audio has been
+// decoded (the same decode that feeds the waveform). Safe to call repeatedly:
+// it settles once per pool entry, and retries later if the decode has not
+// landed yet.
+function applyPlaybackChannelRebalance(takeId) {
+  const entry = takeVideoPool.get(takeId);
+  if (!entry || entry.channelRebalanceSettled) return;
+  const audioBuffer = takeAudioBufferCache.get(takeId);
+  if (!audioBuffer) return;
+  const balance = getBufferChannelBalance(audioBuffer);
+  if (balance.kind !== 'one-sided') {
+    entry.channelRebalanceSettled = true;
+    return;
+  }
+  const element = getMicOwningPlaybackElement(entry);
+  if (!element) {
+    entry.channelRebalanceSettled = true;
+    return;
+  }
+  entry.channelRebalanceSettled = wireOneSidedPlayback(element, balance.activeChannel);
+}
+
 function getOrCreateTakeVideos(takeId) {
   if (takeVideoPool.has(takeId)) return takeVideoPool.get(takeId);
   const take = activeProject?.takes?.find((t) => t.id === takeId);
@@ -675,8 +763,12 @@ function getOrCreateTakeVideos(takeId) {
     audio.src = pathToFileUrl(audioResolution.path);
   }
 
-  const entry = { screen, camera, audio, audioSource };
+  const entry = { screen, camera, audio, audioSource, channelRebalanceSettled: false };
   takeVideoPool.set(takeId, entry);
+  // If the mic audio was already decoded for the waveform, fix one-sided
+  // playback immediately; otherwise extractWaveformPeaks applies it when the
+  // decode lands.
+  applyPlaybackChannelRebalance(takeId);
   return entry;
 }
 
@@ -1799,7 +1891,12 @@ function computePeaksFromBufferCache(cache, numBuckets) {
       const audioBuffer = cache.get(section.takeId);
       if (!audioBuffer) continue;
       anyData = true;
-      const channelData = audioBuffer.getChannelData(0);
+      // One-sided stereo captures carry their signal on one channel; reading
+      // the active channel keeps the waveform from drawing flat (or half-loud)
+      // when the mic landed on the other side.
+      const channelData = audioBuffer.getChannelData(
+        pickWaveformChannel(getBufferChannelBalance(audioBuffer))
+      );
       const sampleRate = audioBuffer.sampleRate;
       const startSample = Math.floor(sourceStart * sampleRate);
       const endSample = Math.min(Math.ceil(sourceEnd * sampleRate), channelData.length);
@@ -1867,6 +1964,9 @@ async function extractWaveformPeaks(numBuckets = 800) {
           }
         }
       }
+      // The decoded mic buffer doubles as the channel-balance analysis input;
+      // fix one-sided playback for any already-pooled elements of this take.
+      applyPlaybackChannelRebalance(section.takeId);
 
       if (systemPath && !takeSystemAudioBufferCache.has(section.takeId)) {
         try {

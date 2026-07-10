@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
 import {
   assertFilePath,
@@ -20,10 +20,38 @@ type RunFfmpegCall = {
   onProgress?: (progress: FfmpegProgress) => void;
 };
 
+function isChannelProbeCall(args: string[]): boolean {
+  return args.join(' ').includes('astats');
+}
+
+function astatsStderr(leftRmsDb: string, rightRmsDb: string): string {
+  return (
+    '[Parsed_astats_0 @ 0x1] Channel: 1\n' +
+    `[Parsed_astats_0 @ 0x1] RMS level dB: ${leftRmsDb}\n` +
+    '[Parsed_astats_0 @ 0x1] Channel: 2\n' +
+    `[Parsed_astats_0 @ 0x1] RMS level dB: ${rightRmsDb}\n`
+  );
+}
+
+/**
+ * Stub ffmpeg runner. Channel-balance probe calls (astats) are answered from
+ * `probeStderrByInput` (keyed by input-path substring; default is empty
+ * stderr, which classifies as balanced) and are NOT forwarded to `effect`,
+ * so existing tests keep asserting against the single render invocation.
+ */
 function createRunFfmpegStub(
-  effect: (call: RunFfmpegCall) => void | Promise<void> = async () => {}
+  effect: (call: RunFfmpegCall) => void | Promise<void> = async () => {},
+  probeStderrByInput: Record<string, string | Error> = {}
 ): NonNullable<RenderCompositeDeps['runFfmpeg']> {
   return async ({ ffmpegPath = '', args = [], onProgress } = {}) => {
+    if (isChannelProbeCall(args)) {
+      const inputIndex = args.indexOf('-i');
+      const inputPath = inputIndex >= 0 ? args[inputIndex + 1] : '';
+      const entry = Object.entries(probeStderrByInput).find(([key]) => inputPath.includes(key));
+      const response = entry?.[1] ?? '';
+      if (response instanceof Error) throw response;
+      return { stderr: response };
+    }
     await effect({ ffmpegPath, args, onProgress });
     return { stderr: '' };
   };
@@ -1237,6 +1265,309 @@ describe('main/services/render-service', () => {
     const argString = execCalls[0].args.join(' ');
     expect(argString).not.toContain('amix');
     expect(argString).toContain('[0:a]atrim=start=0.000:end=1.000');
+  });
+
+  test('renderComposite rebalances a one-sided stereo mic into both channels', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-one-sided-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+
+    const execCalls: { bin: string; args: string[] }[] = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        // Legacy take: mic muxed into the screen file, active on the right
+        // channel only (stereo interface capture).
+        takes: [{ id: 'take-1', screenPath, cameraPath: null }],
+        sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.0 }],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }
+        ] as Keyframe[],
+        pipSize: 300,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill'
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 800,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        runFfmpeg: createRunFfmpegStub(
+          ({ ffmpegPath, args }) => {
+            execCalls.push({ bin: ffmpegPath, args });
+          },
+          { 'screen.webm': astatsStderr('-inf', '-16.3') }
+        )
+      }
+    );
+
+    expect(execCalls).toHaveLength(1);
+    const argString = execCalls[0].args.join(' ');
+    // The pan rebalance is prepended to the audio chain BEFORE atrim so the
+    // sample-accurate trim window is untouched.
+    expect(argString).toContain(
+      '[0:a]pan=stereo|c0=c1|c1=c1,atrim=start=0.000:end=1.000,asetpts=PTS-STARTPTS[sa0]'
+    );
+    // Video chain must stay byte-identical — rebalance is audio-only.
+    expect(argString).toContain(
+      '[0:v]fps=30,trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,setsar=1[sv0]'
+    );
+  });
+
+  test('renderComposite leaves balanced stereo audio untouched', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-balanced-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+
+    const execCalls: { bin: string; args: string[] }[] = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        takes: [{ id: 'take-1', screenPath, cameraPath: null }],
+        sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.0 }],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }
+        ] as Keyframe[],
+        pipSize: 300,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill'
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 801,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        runFfmpeg: createRunFfmpegStub(
+          ({ ffmpegPath, args }) => {
+            execCalls.push({ bin: ffmpegPath, args });
+          },
+          { 'screen.webm': astatsStderr('-19.2', '-20.8') }
+        )
+      }
+    );
+
+    const argString = execCalls[0].args.join(' ');
+    expect(argString).not.toContain('pan=stereo');
+    expect(argString).toContain('[0:a]atrim=start=0.000:end=1.000,asetpts=PTS-STARTPTS[sa0]');
+  });
+
+  test('renderComposite rebalances each amix branch from its own input probe', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-amix-rebalance-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    const cameraPath = path.join(tmpDir, 'camera.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+    fs.writeFileSync(cameraPath, 'camera', 'utf8');
+
+    const execCalls: { bin: string; args: string[] }[] = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        // Mic lives on the camera file (one-sided left); the screen file
+        // carries balanced system audio. Only the mic branch may be panned.
+        takes: [
+          {
+            id: 'take-1',
+            screenPath,
+            cameraPath,
+            audioPath: null,
+            audioSource: 'camera',
+            hasSystemAudio: true
+          }
+        ],
+        sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.0 }],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: true, cameraFullscreen: false }
+        ] as Keyframe[],
+        pipSize: 300,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill'
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 802,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        runFfmpeg: createRunFfmpegStub(
+          ({ ffmpegPath, args }) => {
+            execCalls.push({ bin: ffmpegPath, args });
+          },
+          {
+            'camera.webm': astatsStderr('-15.1', '-inf'),
+            'screen.webm': astatsStderr('-22.4', '-23.0')
+          }
+        )
+      }
+    );
+
+    const argString = execCalls[0].args.join(' ');
+    expect(argString).toContain(
+      '[1:a]pan=stereo|c0=c0|c1=c0,atrim=start=0.000:end=1.000,asetpts=PTS-STARTPTS[sa0m]'
+    );
+    expect(argString).toContain('[0:a]atrim=start=0.000:end=1.000,asetpts=PTS-STARTPTS[sa0s]');
+    expect(argString).toContain('amix=inputs=2:duration=longest:dropout_transition=0[sa0]');
+  });
+
+  test('renderComposite keeps the rebalance ahead of the shifted external-mic timing chain', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-shifted-rebalance-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    const audioPath = path.join(tmpDir, 'audio.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+    fs.writeFileSync(audioPath, 'audio', 'utf8');
+
+    const execCalls: { bin: string; args: string[] }[] = [];
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        takes: [
+          {
+            id: 'take-1',
+            screenPath,
+            cameraPath: null,
+            audioPath,
+            audioSource: 'external',
+            screenStartOffsetMs: 0,
+            audioStartOffsetMs: 90
+          }
+        ],
+        sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.0 }],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }
+        ] as Keyframe[],
+        pipSize: 300,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill'
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 803,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        runFfmpeg: createRunFfmpegStub(
+          ({ ffmpegPath, args }) => {
+            execCalls.push({ bin: ffmpegPath, args });
+          },
+          { 'audio.webm': astatsStderr('-inf', '-14.7') }
+        )
+      }
+    );
+
+    const argString = execCalls[0].args.join(' ');
+    // Pan first, then the untouched drift-clamping chain (shifted atrim +
+    // adelay silence prefix + atrim=duration) exactly as without rebalance.
+    expect(argString).toContain(
+      '[1:a]pan=stereo|c0=c1|c1=c1,atrim=start=0.000:end=0.910,asetpts=PTS-STARTPTS,adelay=90|90,atrim=duration=1.000,asetpts=PTS-STARTPTS[sa0]'
+    );
+  });
+
+  test('renderComposite probes each audio input once and rebalances every section chain', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-probe-once-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+
+    const allCalls: string[][] = [];
+    const runFfmpeg: NonNullable<RenderCompositeDeps['runFfmpeg']> = async ({ args = [] } = {}) => {
+      allCalls.push(args);
+      if (isChannelProbeCall(args)) {
+        return { stderr: astatsStderr('-18.0', '-inf') };
+      }
+      return { stderr: '' };
+    };
+
+    await renderComposite(
+      {
+        outputFolder: outputDir,
+        takes: [{ id: 'take-1', screenPath, cameraPath: null }],
+        sections: [
+          { takeId: 'take-1', sourceStart: 0, sourceEnd: 1.0 },
+          { takeId: 'take-1', sourceStart: 1.0, sourceEnd: 2.0 }
+        ],
+        keyframes: [
+          { time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }
+        ] as Keyframe[],
+        pipSize: 300,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        screenFitMode: 'fill'
+      },
+      {
+        ffmpegPath: '/usr/bin/ffmpeg',
+        now: () => 804,
+        probeVideoFpsWithFfmpeg: async () => 30,
+        runFfmpeg
+      }
+    );
+
+    // One probe for the single audio-carrying file, then one render call —
+    // the probe runs before the render so its verdict shapes the filter graph.
+    const probeCalls = allCalls.filter((args) => isChannelProbeCall(args));
+    expect(probeCalls).toHaveLength(1);
+    expect(probeCalls[0]).toContain(screenPath);
+    expect(allCalls).toHaveLength(2);
+    expect(isChannelProbeCall(allCalls[0])).toBe(true);
+
+    const argString = allCalls[1].join(' ');
+    // Both section chains reading the one-sided file get the same rebalance.
+    expect(argString).toContain(
+      '[0:a]pan=stereo|c0=c0|c1=c0,atrim=start=0.000:end=1.000,asetpts=PTS-STARTPTS[sa0]'
+    );
+    expect(argString).toContain(
+      '[0:a]pan=stereo|c0=c0|c1=c0,atrim=start=1.000:end=2.000,asetpts=PTS-STARTPTS[sa1]'
+    );
+  });
+
+  test('renderComposite tolerates a failed channel probe and renders unrebalanced', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-render-probe-fail-'));
+    const outputDir = path.join(tmpDir, 'out');
+    const screenPath = path.join(tmpDir, 'screen.webm');
+    const audioPath = path.join(tmpDir, 'audio.webm');
+    fs.writeFileSync(screenPath, 'screen', 'utf8');
+    fs.writeFileSync(audioPath, 'audio', 'utf8');
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const execCalls: { bin: string; args: string[] }[] = [];
+      const output = await renderComposite(
+        {
+          outputFolder: outputDir,
+          takes: [
+            { id: 'take-1', screenPath, cameraPath: null, audioPath, audioSource: 'external' }
+          ],
+          sections: [{ takeId: 'take-1', sourceStart: 0, sourceEnd: 1.0 }],
+          keyframes: [
+            { time: 0, pipX: 10, pipY: 10, pipVisible: false, cameraFullscreen: false }
+          ] as Keyframe[],
+          pipSize: 300,
+          sourceWidth: 1920,
+          sourceHeight: 1080,
+          screenFitMode: 'fill'
+        },
+        {
+          ffmpegPath: '/usr/bin/ffmpeg',
+          now: () => 805,
+          probeVideoFpsWithFfmpeg: async () => 30,
+          runFfmpeg: createRunFfmpegStub(
+            ({ ffmpegPath, args }) => {
+              execCalls.push({ bin: ffmpegPath, args });
+            },
+            { 'audio.webm': new Error('Output file does not contain any stream') }
+          )
+        }
+      );
+
+      expect(output).toBe(path.join(outputDir, 'recording-805-edited.mp4'));
+      expect(execCalls).toHaveLength(1);
+      const argString = execCalls[0].args.join(' ');
+      expect(argString).not.toContain('pan=stereo');
+      expect(argString).toContain('[1:a]atrim=start=0.000:end=1.000,asetpts=PTS-STARTPTS[sa0]');
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test('computeShiftedTrimWindow preserves section duration via start/stop padding', () => {

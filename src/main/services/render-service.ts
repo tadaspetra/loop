@@ -20,6 +20,7 @@ import {
 import type { RenderProgressUpdate } from '../../shared/electron-api';
 import { chooseRenderFps, probeVideoFpsWithFfmpeg } from './fps-service';
 import { runFfmpeg, type FfmpegProgress } from './ffmpeg-runner';
+import { buildRebalancePanFilter, measureChannelBalance } from './audio-balance-service';
 import {
   buildFilterComplex,
   buildScreenFilter,
@@ -312,8 +313,13 @@ function buildShiftedAudioTrim(
   sectionStart: number,
   sectionEnd: number,
   shiftSec: number,
-  outputLabel: string
+  outputLabel: string,
+  rebalanceFilter: string | null = null
 ): string {
+  // A one-sided-stereo rebalance (pan) runs FIRST, before any timing filter:
+  // it only remixes channels, so the sample-accurate trim windows and the
+  // drift-clamping adelay/apad/atrim=duration chain below stay byte-identical.
+  const rebalancePrefix = rebalanceFilter ? `${rebalanceFilter},` : '';
   // Plain `atrim=X:Y,asetpts=PTS-STARTPTS` is sample-accurate and matches
   // the plain-trim video path exactly. Adding `apad + atrim=duration` here
   // (or introducing any other "safety" tail pad) only makes sense when
@@ -322,7 +328,7 @@ function buildShiftedAudioTrim(
   // must be kept in lockstep with the video-side padding or the export
   // drifts audio against video per section.
   if (!hasMeaningfulShift(shiftSec)) {
-    return `${inputLabel}atrim=start=${sectionStart.toFixed(3)}:end=${sectionEnd.toFixed(3)},asetpts=PTS-STARTPTS${outputLabel}`;
+    return `${inputLabel}${rebalancePrefix}atrim=start=${sectionStart.toFixed(3)}:end=${sectionEnd.toFixed(3)},asetpts=PTS-STARTPTS${outputLabel}`;
   }
   const { sampleStart, sampleEnd, startPad, stopPad, duration } = computeShiftedTrimWindow(
     sectionStart,
@@ -346,7 +352,22 @@ function buildShiftedAudioTrim(
   }
   filters.push(`atrim=duration=${duration.toFixed(3)}`);
   filters.push('asetpts=PTS-STARTPTS');
-  return `${inputLabel}${filters.join(',')}${outputLabel}`;
+  return `${inputLabel}${rebalancePrefix}${filters.join(',')}${outputLabel}`;
+}
+
+/**
+ * Resolve which ffmpeg input owns the mic for a take, with the same fallback
+ * behavior the audio chains have always had: legacy takes read the screen
+ * file, and a missing camera/external input degrades to the screen track.
+ */
+function resolveMicInput(plan: TakeInputPlan): { inputIdx: number; startOffsetMs: number } {
+  if (plan.audioSource === 'camera' && plan.cameraIdx >= 0) {
+    return { inputIdx: plan.cameraIdx, startOffsetMs: plan.cameraStartOffsetMs };
+  }
+  if (plan.audioSource === 'external' && plan.audioIdx >= 0) {
+    return { inputIdx: plan.audioIdx, startOffsetMs: plan.audioStartOffsetMs };
+  }
+  return { inputIdx: plan.screenIdx, startOffsetMs: plan.screenStartOffsetMs };
 }
 
 /**
@@ -410,6 +431,7 @@ function buildInputPlan(
   const sectionInputs: Array<TakeInputPlan & { imageIdx: number }> = [];
   const args = ['-progress', 'pipe:1', '-nostats'];
   const takeInputs = new Map<string, TakeInputPlan>();
+  const inputPathByIdx = new Map<number, string>();
   let inputIndex = 0;
 
   for (const section of sections) {
@@ -425,6 +447,7 @@ function buildInputPlan(
       fpsProbePaths.add(take.screenPath);
 
       const screenIdx = inputIndex;
+      inputPathByIdx.set(screenIdx, take.screenPath);
       inputIndex += 1;
 
       // Camera input is added whenever the camera file is referenced for
@@ -439,6 +462,7 @@ function buildInputPlan(
         args.push('-fflags', '+genpts', '-i', take.cameraPath as string);
         fpsProbePaths.add(take.cameraPath as string);
         cameraIdx = inputIndex;
+        inputPathByIdx.set(cameraIdx, take.cameraPath as string);
         inputIndex += 1;
       }
 
@@ -447,6 +471,7 @@ function buildInputPlan(
         assertFilePath(take.audioPath, 'Audio');
         args.push('-fflags', '+genpts', '-i', take.audioPath);
         audioIdx = inputIndex;
+        inputPathByIdx.set(audioIdx, take.audioPath);
         inputIndex += 1;
       }
 
@@ -478,7 +503,8 @@ function buildInputPlan(
   return {
     args,
     fpsProbePaths,
-    sectionInputs
+    sectionInputs,
+    inputPathByIdx
   };
 }
 
@@ -628,7 +654,11 @@ export async function renderComposite(
   }
 
   const hasCamera = keyframes.some((keyframe) => keyframe.pipVisible || keyframe.cameraFullscreen);
-  const { args, fpsProbePaths, sectionInputs } = buildInputPlan(sections, takeMap, hasCamera);
+  const { args, fpsProbePaths, sectionInputs, inputPathByIdx } = buildInputPlan(
+    sections,
+    takeMap,
+    hasCamera
+  );
   const totalDurationSec = getTotalDurationSec(sections);
 
   const fpsProbeResults = await Promise.all(
@@ -653,20 +683,37 @@ export async function renderComposite(
     targetFps
   );
 
+  // One-sided stereo mic captures (signal on one channel of a stereo
+  // interface recording) would render quiet and panned to one ear. Probe each
+  // audio-carrying input file once and prepend a pan rebalance to every audio
+  // chain that reads it; a failed probe simply leaves that file untouched.
+  const audioInputIdxs = new Set<number>();
+  for (const plan of sectionInputs) {
+    audioInputIdxs.add(resolveMicInput(plan).inputIdx);
+    if (plan.hasSystemAudio) audioInputIdxs.add(plan.screenIdx);
+  }
+  const panFilterByInputIdx = new Map<number, string | null>();
+  const panFilterByPath = new Map<string, string | null>();
+  for (const inputIdx of audioInputIdxs) {
+    const inputPath = inputPathByIdx.get(inputIdx);
+    if (!inputPath) continue;
+    if (!panFilterByPath.has(inputPath)) {
+      const balance = await measureChannelBalance({
+        ffmpegPath,
+        inputPath,
+        runFfmpegProcess,
+        signal: deps.signal
+      });
+      panFilterByPath.set(inputPath, buildRebalancePanFilter(balance));
+    }
+    panFilterByInputIdx.set(inputIdx, panFilterByPath.get(inputPath) ?? null);
+  }
+
   const hasImageSections = sections.some((s) => s.imagePath);
   const filterParts: string[] = [];
   for (let index = 0; index < sections.length; index += 1) {
     const section = sections[index];
-    const {
-      screenIdx,
-      cameraIdx,
-      audioIdx,
-      audioSource,
-      imageIdx,
-      screenStartOffsetMs,
-      cameraStartOffsetMs,
-      audioStartOffsetMs
-    } = sectionInputs[index];
+    const { screenIdx, imageIdx, screenStartOffsetMs } = sectionInputs[index];
     const sectionStart = Number(section.sourceStart);
     const sectionEnd = Number(section.sourceEnd);
 
@@ -732,17 +779,12 @@ export async function renderComposite(
     // Legacy takes report 'screen' and behave exactly like before; new takes
     // with a camera report 'camera'; screen-only takes with a mic report
     // 'external' and have a dedicated audio input.
-    let micInputIdx = screenIdx;
-    let micStartOffsetMs = screenStartOffsetMs;
-    if (audioSource === 'camera' && cameraIdx >= 0) {
-      micInputIdx = cameraIdx;
-      micStartOffsetMs = cameraStartOffsetMs;
-    } else if (audioSource === 'external' && audioIdx >= 0) {
-      micInputIdx = audioIdx;
-      micStartOffsetMs = audioStartOffsetMs;
-    }
+    const { inputIdx: micInputIdx, startOffsetMs: micStartOffsetMs } = resolveMicInput(
+      sectionInputs[index]
+    );
     const micShiftSec = -micStartOffsetMs / 1000;
     const systemAudioShiftSec = -screenStartOffsetMs / 1000;
+    const micRebalanceFilter = panFilterByInputIdx.get(micInputIdx) ?? null;
     const { hasSystemAudio } = sectionInputs[index];
     if (hasSystemAudio) {
       // Mix mic + system audio so viewers hear both the presenter and the
@@ -754,7 +796,8 @@ export async function renderComposite(
           sectionStart,
           sectionEnd,
           micShiftSec,
-          `[sa${index}m]`
+          `[sa${index}m]`,
+          micRebalanceFilter
         )
       );
       filterParts.push(
@@ -763,7 +806,8 @@ export async function renderComposite(
           sectionStart,
           sectionEnd,
           systemAudioShiftSec,
-          `[sa${index}s]`
+          `[sa${index}s]`,
+          panFilterByInputIdx.get(screenIdx) ?? null
         )
       );
       filterParts.push(
@@ -776,7 +820,8 @@ export async function renderComposite(
           sectionStart,
           sectionEnd,
           micShiftSec,
-          `[sa${index}]`
+          `[sa${index}]`,
+          micRebalanceFilter
         )
       );
     }

@@ -117,7 +117,11 @@ export function buildMicrophoneConstraints(
   return {
     deviceId: { exact: deviceId },
     sampleRate: { ideal: 48000 },
-    channelCount: { ideal: 2 },
+    // Mono, not stereo: a mic plugged into a stereo interface delivers signal
+    // on one channel and digital silence on the other, which then plays in
+    // one ear and sounds quiet in the editor and in exports. A mono capture
+    // downmixes at the source and plays centered everywhere.
+    channelCount: { ideal: 1 },
     echoCancellation: false,
     noiseSuppression: false,
     autoGainControl: false
