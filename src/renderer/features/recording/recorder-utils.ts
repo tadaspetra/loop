@@ -1,6 +1,11 @@
-// Ordered by preference: VP9 gives noticeably better quality-per-bit than
-// VP8 at the bitrates we record at, so try it first and step down.
+// Ordered by preference. H.264 comes first because Chromium encodes it with
+// the platform hardware encoder (VideoToolbox on macOS) where available;
+// realtime *software* VP9 cannot keep up with 4K30 camera capture and
+// silently drops frames (measured ~9fps delivered in 4K takes), which then
+// bakes duplicated frames into every export. VP9/VP8 remain as fallbacks for
+// runtimes without H.264 recording support.
 export const RECORDER_MIME_CANDIDATES = [
+  'video/webm; codecs=h264',
   'video/webm; codecs=vp9',
   'video/webm; codecs=vp8',
   'video/webm'
@@ -47,7 +52,7 @@ export function getSupportedRecorderMimeType(
   );
   if (!supported) {
     console.warn(
-      '[Recorder] No preferred WebM codec (vp9/vp8/webm) is supported — recording with the browser default codec.'
+      '[Recorder] No preferred WebM codec (h264/vp9/vp8/webm) is supported — recording with the browser default codec.'
     );
     return '';
   }
@@ -125,6 +130,31 @@ export function buildMicrophoneConstraints(
     echoCancellation: false,
     noiseSuppression: false,
     autoGainControl: false
+  };
+}
+
+/**
+ * Constraints for opening the camera. `frameRate: { exact: 30 }` is a hard
+ * constraint on purpose: sub-30fps capture bakes duplicated frames into
+ * every export, so a camera that offers 4K only below 30fps should
+ * negotiate down in resolution rather than in frame rate. It also caps at
+ * 30 because camera WebM is VFR and this app has a documented history of
+ * camera/audio sync drift at higher rates.
+ *
+ * The floor-less variant is the OverconstrainedError retry path: if a
+ * device cannot satisfy 30fps at all, opening the camera at a lower rate
+ * beats losing the camera (same "capture beats quality" policy as the mic).
+ */
+export function buildCameraVideoConstraints(
+  deviceId: string,
+  { includeFrameRateFloor = true }: { includeFrameRateFloor?: boolean } = {}
+): MediaTrackConstraints {
+  return {
+    deviceId: { exact: deviceId },
+    width: { ideal: 3840, max: 3840 },
+    height: { ideal: 2160, max: 2160 },
+    frameRate: includeFrameRateFloor ? { exact: 30 } : { ideal: 30, max: 30 },
+    aspectRatio: { ideal: 16 / 9 }
   };
 }
 

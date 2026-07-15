@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest';
 import { vi } from 'vitest';
 
 import {
+  buildCameraVideoConstraints,
   buildMicrophoneConstraints,
   classifyRecorderFailure,
   computeCameraVideoBitsPerSecond,
@@ -24,21 +25,30 @@ import {
 } from '../../src/renderer/features/recording/recorder-utils';
 
 describe('recorder-utils', () => {
-  test('prefers vp9 over vp8, with plain webm as the last candidate', () => {
+  test('prefers h264 (hardware-encoded) over vp9/vp8, with plain webm last', () => {
     expect(RECORDER_MIME_CANDIDATES).toEqual([
+      'video/webm; codecs=h264',
       'video/webm; codecs=vp9',
       'video/webm; codecs=vp8',
       'video/webm'
     ]);
 
-    const bothSupported = {
+    const allSupported = {
       isTypeSupported: (mimeType: string) =>
-        mimeType === 'video/webm; codecs=vp8' || mimeType === 'video/webm; codecs=vp9'
+        mimeType === 'video/webm; codecs=h264' ||
+        mimeType === 'video/webm; codecs=vp9' ||
+        mimeType === 'video/webm; codecs=vp8'
     };
-    expect(getSupportedRecorderMimeType(bothSupported)).toBe('video/webm; codecs=vp9');
+    expect(getSupportedRecorderMimeType(allSupported)).toBe('video/webm; codecs=h264');
   });
 
-  test('falls back to vp8 when vp9 is unsupported, then plain webm', () => {
+  test('falls back to vp9 when h264 is unsupported, then vp8, then plain webm', () => {
+    const vp9AndBelow = {
+      isTypeSupported: (mimeType: string) =>
+        mimeType === 'video/webm; codecs=vp9' || mimeType === 'video/webm; codecs=vp8'
+    };
+    expect(getSupportedRecorderMimeType(vp9AndBelow)).toBe('video/webm; codecs=vp9');
+
     const vp8Only = {
       isTypeSupported: (mimeType: string) => mimeType === 'video/webm; codecs=vp8'
     };
@@ -75,7 +85,7 @@ describe('recorder-utils', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
       const supported = { isTypeSupported: () => true };
-      expect(getSupportedRecorderMimeType(supported)).toBe('video/webm; codecs=vp9');
+      expect(getSupportedRecorderMimeType(supported)).toBe('video/webm; codecs=h264');
       expect(warnSpy).not.toHaveBeenCalled();
     } finally {
       warnSpy.mockRestore();
@@ -170,6 +180,31 @@ describe('recorder-utils', () => {
     test('falls back to device-id-only constraints so capture beats quality', () => {
       expect(buildMicrophoneConstraints('mic-1', { includeQualityConstraints: false })).toEqual({
         deviceId: { exact: 'mic-1' }
+      });
+    });
+
+    test('camera constraints demand exactly 30fps at up to 4K', () => {
+      // exact 30 is a hard constraint: a camera that offers 4K only below
+      // 30fps must negotiate down in resolution rather than in frame rate,
+      // because sub-30fps capture bakes duplicated frames into every export.
+      expect(buildCameraVideoConstraints('cam-1')).toEqual({
+        deviceId: { exact: 'cam-1' },
+        width: { ideal: 3840, max: 3840 },
+        height: { ideal: 2160, max: 2160 },
+        frameRate: { exact: 30 },
+        aspectRatio: { ideal: 16 / 9 }
+      });
+    });
+
+    test('camera constraints can drop the frame-rate floor so capture beats quality', () => {
+      // Retry path for devices that reject the hard 30fps floor outright:
+      // opening the camera at a lower rate beats losing the camera.
+      expect(buildCameraVideoConstraints('cam-1', { includeFrameRateFloor: false })).toEqual({
+        deviceId: { exact: 'cam-1' },
+        width: { ideal: 3840, max: 3840 },
+        height: { ideal: 2160, max: 2160 },
+        frameRate: { ideal: 30, max: 30 },
+        aspectRatio: { ideal: 16 / 9 }
       });
     });
 

@@ -43,6 +43,7 @@ import {
   pickWaveformChannel
 } from './features/timeline/audio-balance';
 import {
+  buildCameraVideoConstraints,
   buildMicrophoneConstraints,
   classifyRecorderFailure,
   finalizeStreamedRecording,
@@ -2530,9 +2531,16 @@ async function updateScreenStream() {
     // the Chromium loopback path; fall back to the device's own audio input
     // when the user enabled system audio on a capture device.
     const deviceId = sourceId.slice('device:'.length);
+    // frameRate stays `ideal` (not min) here: HDMI capture devices can be
+    // locked to 25/50fps modes and a hard min would fail to open them.
     screenStream = await navigator.mediaDevices.getUserMedia({
       audio: false,
-      video: { deviceId: { exact: deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+      video: {
+        deviceId: { exact: deviceId },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        frameRate: { ideal: 30 }
+      }
     });
   } else if (wantsSystemAudio) {
     // Electron's display-media handler resolves this call to a desktop source
@@ -2542,7 +2550,7 @@ async function updateScreenStream() {
     try {
       await window.electronAPI.prepareDisplayMedia({ sourceId });
       screenStream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
+        video: { frameRate: { ideal: 30, max: 30 } },
         audio: true
       });
       // Loopback worked this time: retire any stale "system audio
@@ -2566,6 +2574,7 @@ async function updateScreenStream() {
           mandatory: {
             chromeMediaSource: 'desktop',
             chromeMediaSourceId: sourceId,
+            minFrameRate: 30,
             maxFrameRate: 30
           }
         }
@@ -2578,6 +2587,7 @@ async function updateScreenStream() {
         mandatory: {
           chromeMediaSource: 'desktop',
           chromeMediaSourceId: sourceId,
+          minFrameRate: 30,
           maxFrameRate: 30
         }
       }
@@ -2597,19 +2607,26 @@ async function updateCameraStream() {
   const deviceId = cameraSelect.value;
   if (!deviceId) return;
 
-  // Allow up to 4K camera capture. Frame rate deliberately stays capped at
-  // 30fps: camera WebM is VFR and this app has a documented history of
-  // camera/audio sync drift, so higher frame rates risk regressing sync.
-  cameraStream = await navigator.mediaDevices.getUserMedia({
-    video: {
-      deviceId: { exact: deviceId },
-      width: { ideal: 3840, max: 3840 },
-      height: { ideal: 2160, max: 2160 },
-      frameRate: { ideal: 30, max: 30 },
-      aspectRatio: { ideal: 16 / 9 }
-    },
-    audio: false
-  });
+  // Up to 4K capture with a hard 30fps floor (see buildCameraVideoConstraints
+  // for the resolution-vs-frame-rate policy). If the device rejects the floor
+  // outright, retry without it: opening the camera below 30fps beats losing
+  // the camera entirely.
+  try {
+    cameraStream = await navigator.mediaDevices.getUserMedia({
+      video: buildCameraVideoConstraints(deviceId),
+      audio: false
+    });
+  } catch (error) {
+    if (!isOverconstrainedError(error)) throw error;
+    console.warn(
+      '[Recorder] Camera rejected the 30fps floor — retrying without it:',
+      error
+    );
+    cameraStream = await navigator.mediaDevices.getUserMedia({
+      video: buildCameraVideoConstraints(deviceId, { includeFrameRateFloor: false }),
+      audio: false
+    });
+  }
   const [cameraTrack] = cameraStream.getVideoTracks();
   if (cameraTrack && 'contentHint' in cameraTrack) {
     cameraTrack.contentHint = 'detail';

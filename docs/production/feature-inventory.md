@@ -74,6 +74,14 @@ Acceptance criteria:
 
 - Record/stop toggles UI state, timer, selector locks, and output files.
 - Screen capture uses stable 30fps canvas path.
+- Recorders prefer H.264 (`video/webm; codecs=h264`) so encoding stays
+  hardware-accelerated at 4K: realtime software VP9 silently dropped camera
+  output to ~9fps on 4K takes. VP9/VP8 remain as runtime fallbacks.
+- Screen capture requests a 30fps floor (`minFrameRate`) on desktop sources.
+- Camera capture demands a hard 30fps floor (`frameRate.min`) at up to 4K, so
+  a camera that offers 4K only below 30fps negotiates down in resolution, not
+  frame rate; if a device rejects the floor outright the camera reopens
+  without it (capture beats quality, same policy as the mic).
 - Output takes include media paths and duration.
 - The mic is requested as mono (`channelCount: { ideal: 1 }`): stereo capture
   from a mic on an audio interface lands the voice on one channel and silence
