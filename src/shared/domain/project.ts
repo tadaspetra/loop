@@ -74,6 +74,15 @@ export interface ProjectSettings {
 
 export type AudioSource = 'screen' | 'camera' | 'external';
 
+// One "keep" region of a take, in take-local seconds. Shares the speech
+// segment shape ({ start, end, text }) so system-audio activity ranges can be
+// merged directly with transcription segments by the section builder.
+export interface TakeSpeechSegment {
+  start: number;
+  end: number;
+  text: string;
+}
+
 export interface Take {
   id: string;
   createdAt: string;
@@ -102,6 +111,10 @@ export interface Take {
   screenStartOffsetMs: number;
   cameraStartOffsetMs: number;
   audioStartOffsetMs: number;
+  // System-audio "keep" regions detected while this take recorded. Persisted
+  // so Transcribe & Cut still protects audible screen sound (music, demos)
+  // after an app restart, when the in-session activity map is gone.
+  systemAudioSegments: TakeSpeechSegment[];
   sections: Section[];
 }
 
@@ -305,6 +318,25 @@ export function normalizeExportVideoPreset(value: unknown): ExportVideoPreset {
     : EXPORT_VIDEO_PRESET_QUALITY;
 }
 
+export function normalizeTakeSpeechSegments(rawSegments: unknown): TakeSpeechSegment[] {
+  if (!Array.isArray(rawSegments)) return [];
+  return rawSegments
+    .map((rawSegment) => {
+      if (!isRecord(rawSegment)) return null;
+      const start = Number(rawSegment.start);
+      const end = Number(rawSegment.end);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+
+      return {
+        start,
+        end,
+        text: typeof rawSegment.text === 'string' ? rawSegment.text.trim() : ''
+      };
+    })
+    .filter((segment): segment is TakeSpeechSegment => segment !== null)
+    .sort((left, right) => left.start - right.start);
+}
+
 export function normalizeAudioSource(value: unknown): AudioSource | null {
   if (value === 'screen' || value === 'camera' || value === 'external') return value;
   return null;
@@ -432,6 +464,7 @@ export function normalizeProjectData(rawProject: unknown, projectFolder?: string
         screenStartOffsetMs: normalizeRecorderStartOffsetMs(rawTakeRecord.screenStartOffsetMs),
         cameraStartOffsetMs: normalizeRecorderStartOffsetMs(rawTakeRecord.cameraStartOffsetMs),
         audioStartOffsetMs: normalizeRecorderStartOffsetMs(rawTakeRecord.audioStartOffsetMs),
+        systemAudioSegments: normalizeTakeSpeechSegments(rawTakeRecord.systemAudioSegments),
         sections: normalizeSections(take.sections)
       };
     }),

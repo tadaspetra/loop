@@ -201,8 +201,9 @@ let systemAudioActivitySegments = [];
 let systemAudioActivityOpen = null;
 let systemAudioLastActiveSec = 0;
 // System-audio "keep" regions captured per take during this app session,
-// consumed by the on-demand Transcribe & Cut action. Not persisted: after an
-// app restart a cut simply proceeds without them.
+// consumed by the on-demand Transcribe & Cut action. The same ranges are
+// persisted on the take as `systemAudioSegments`; this map is the fallback
+// for takes recorded before persistence existed (or before a project save).
 const takeSystemAudioActivity = new Map();
 const SYSTEM_AUDIO_RMS_ACTIVE_THRESHOLD = 0.01;
 const SYSTEM_AUDIO_RELEASE_MS = 400;
@@ -4152,6 +4153,7 @@ async function stopRecordingImpl() {
         screenStartOffsetMs: recorderStartOffsetsMs.screen,
         cameraStartOffsetMs: recorderStartOffsetsMs.camera,
         audioStartOffsetMs: recorderStartOffsetsMs.audio,
+        systemAudioSegments: [...systemAudioActivitySegments],
         sections: sectionsForTimeline
       });
     }
@@ -6097,7 +6099,17 @@ async function transcribeAndCutTake() {
     const { segments: speechSegments, removed: removedTakes } = cutRepeatedTakes(utterances);
     // Merge system-audio "keep" regions captured while this take recorded so
     // audible screen sound is never trimmed just because the mic was quiet.
-    const activeSegments = [...speechSegments, ...(takeSystemAudioActivity.get(takeId) || [])];
+    // Prefer the ranges persisted on the take (they survive app restarts);
+    // fall back to the in-session activity map for takes recorded before
+    // persistence existed.
+    const persistedSystemAudio = Array.isArray(take.systemAudioSegments)
+      ? take.systemAudioSegments
+      : [];
+    const systemAudioSegments =
+      persistedSystemAudio.length > 0
+        ? persistedSystemAudio
+        : takeSystemAudioActivity.get(takeId) || [];
+    const activeSegments = [...speechSegments, ...systemAudioSegments];
     if (activeSegments.length === 0) {
       setTranscribeCutStatus('No speech detected — nothing to cut', 'warning');
       return;
