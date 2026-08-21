@@ -2,6 +2,9 @@
   "name": "loop",
   "version": "1.0.0",
   "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=20.19 <26"
+  },
   "main": "dist/main.js",
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
