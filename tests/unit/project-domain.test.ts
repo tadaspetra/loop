@@ -392,6 +392,60 @@ describe('shared/domain/project', () => {
     expect(sections[2].transcript).toBe('third with dupe id');
   });
 
+  test('normalizeTakeSpeechSegments drops invalid entries, coerces text, and sorts by start', () => {
+    expect(normalizeTakeSpeechSegments(undefined)).toEqual([]);
+    expect(normalizeTakeSpeechSegments(null)).toEqual([]);
+    expect(normalizeTakeSpeechSegments('bad')).toEqual([]);
+
+    const segments = normalizeTakeSpeechSegments([
+      { start: 4, end: 6, text: '  music ' },
+      { start: 0, end: 1.5 },
+      { start: 2, end: 2, text: 'zero-length drops' },
+      { start: 3, end: 1, text: 'inverted drops' },
+      { start: 'bad', end: 9, text: 'non-numeric drops' },
+      { start: 7, end: Infinity, text: 'non-finite drops' },
+      'not-a-record',
+      { start: 8, end: 9, text: 42 }
+    ]);
+
+    expect(segments).toEqual([
+      { start: 0, end: 1.5, text: '' },
+      { start: 4, end: 6, text: 'music' },
+      { start: 8, end: 9, text: '' }
+    ]);
+  });
+
+  test('normalizeProjectData round-trips take systemAudioSegments and defaults legacy takes to empty', () => {
+    const project = normalizeProjectData(
+      {
+        takes: [
+          {
+            id: 'take-1',
+            screenPath: 'screen.webm',
+            cameraPath: null,
+            duration: 10,
+            hasSystemAudio: true,
+            sections: [],
+            systemAudioSegments: [
+              { start: 1.25, end: 3.5, text: '' },
+              { start: 5, end: 4, text: 'invalid drops' }
+            ]
+          },
+          { id: 'take-2', screenPath: 'screen2.webm', cameraPath: null, duration: 5, sections: [] }
+        ]
+      },
+      '/tmp/my-project'
+    );
+
+    expect(project.takes[0].systemAudioSegments).toEqual([{ start: 1.25, end: 3.5, text: '' }]);
+    // Legacy takes persisted before the field existed hydrate to an empty list.
+    expect(project.takes[1].systemAudioSegments).toEqual([]);
+
+    // Simulate save → load: re-normalizing the serialized project preserves the ranges.
+    const reloaded = normalizeProjectData(JSON.parse(JSON.stringify(project)), '/tmp/my-project');
+    expect(reloaded.takes[0].systemAudioSegments).toEqual([{ start: 1.25, end: 3.5, text: '' }]);
+  });
+
   test('normalizeProjectData converts section imagePath to absolute path', () => {
     const project = normalizeProjectData(
       {

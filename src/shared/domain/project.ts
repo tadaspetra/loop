@@ -75,7 +75,9 @@ export interface ProjectSettings {
 export type AudioSource = 'screen' | 'camera' | 'external';
 
 /**
- * A stored transcription utterance in take-local recording time.
+ * A stored speech-shaped segment in take-local recording time: either a
+ * transcription utterance or a system-audio "keep" region. Sharing the shape
+ * lets the section builder merge both kinds directly.
  */
 export interface TakeSpeechSegment {
   start: number;
@@ -111,6 +113,10 @@ export interface Take {
   screenStartOffsetMs: number;
   cameraStartOffsetMs: number;
   audioStartOffsetMs: number;
+  // System-audio "keep" regions detected while this take recorded. Persisted
+  // so Transcribe & Cut still protects audible screen sound (music, demos)
+  // after an app restart, when the in-session activity map is gone.
+  systemAudioSegments: TakeSpeechSegment[];
   sections: Section[];
   // Fine-grained speech utterances stored by Transcribe & Cut so bad-take
   // detection and restore can run later without re-transcribing. The removed
@@ -466,6 +472,7 @@ export function normalizeProjectData(rawProject: unknown, projectFolder?: string
         screenStartOffsetMs: normalizeRecorderStartOffsetMs(rawTakeRecord.screenStartOffsetMs),
         cameraStartOffsetMs: normalizeRecorderStartOffsetMs(rawTakeRecord.cameraStartOffsetMs),
         audioStartOffsetMs: normalizeRecorderStartOffsetMs(rawTakeRecord.audioStartOffsetMs),
+        systemAudioSegments: normalizeTakeSpeechSegments(rawTakeRecord.systemAudioSegments),
         sections: normalizeSections(take.sections),
         transcriptSegments: normalizeTakeSpeechSegments(rawTakeRecord.transcriptSegments)
       };

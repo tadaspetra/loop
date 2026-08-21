@@ -360,8 +360,9 @@ let systemAudioActivitySegments = [];
 let systemAudioActivityOpen = null;
 let systemAudioLastActiveSec = 0;
 // System-audio "keep" regions captured per take during this app session,
-// consumed by the on-demand Transcribe & Cut action. Not persisted: after an
-// app restart a cut simply proceeds without them.
+// consumed by the on-demand Transcribe & Cut action. The same ranges are
+// persisted on the take as `systemAudioSegments`; this map is the fallback
+// for takes recorded before persistence existed (or before a project save).
 const takeSystemAudioActivity = new Map();
 const SYSTEM_AUDIO_RMS_ACTIVE_THRESHOLD = 0.01;
 const SYSTEM_AUDIO_RELEASE_MS = 400;
@@ -4539,6 +4540,7 @@ async function stopRecordingImpl() {
         screenStartOffsetMs: recorderStartOffsetsMs.screen,
         cameraStartOffsetMs: recorderStartOffsetsMs.camera,
         audioStartOffsetMs: recorderStartOffsetsMs.audio,
+        systemAudioSegments: [...systemAudioActivitySegments],
         sections: sectionsForTimeline,
         transcriptSegments: []
       });
@@ -6625,7 +6627,17 @@ async function transcribeAndCutTake() {
     });
     // Merge system-audio "keep" regions captured while this take recorded so
     // audible screen sound is never trimmed just because the mic was quiet.
-    const activeSegments = [...speechSegments, ...(takeSystemAudioActivity.get(takeId) || [])];
+    // Prefer the ranges persisted on the take (they survive app restarts);
+    // fall back to the in-session activity map for takes recorded before
+    // persistence existed.
+    const persistedSystemAudio = Array.isArray(take.systemAudioSegments)
+      ? take.systemAudioSegments
+      : [];
+    const systemAudioSegments =
+      persistedSystemAudio.length > 0
+        ? persistedSystemAudio
+        : takeSystemAudioActivity.get(takeId) || [];
+    const activeSegments = [...speechSegments, ...systemAudioSegments];
     if (activeSegments.length === 0) {
       setTranscribeCutStatus('No speech detected — nothing to cut', 'warning');
       return;
@@ -6792,12 +6804,17 @@ async function removeBadTakesFromTimeline() {
     const takeSections = editorState.sections.filter((s) => s.takeId === takeId);
     // Words plus system-audio activity: cut edges snap to these so pieces
     // don't open with dead air, and pure inter-flub silence is dropped.
-    // System-audio activity comes from the in-session recording data when
-    // available, otherwise from the decoded system-audio waveform envelope
-    // (cached for display). Only when neither exists for a system-audio
-    // take do we keep plain padded bounds, so screen sound is never trimmed
-    // on word evidence alone.
-    let systemAudioKeeps = takeSystemAudioActivity.get(takeId) || [];
+    // System-audio activity comes from the ranges persisted on the take
+    // (they survive app restarts), then from the in-session recording data,
+    // otherwise from the decoded system-audio waveform envelope (cached for
+    // display). Only when none exist for a system-audio take do we keep
+    // plain padded bounds, so screen sound is never trimmed on word
+    // evidence alone.
+    const persistedKeeps = Array.isArray(take.systemAudioSegments)
+      ? take.systemAudioSegments
+      : [];
+    let systemAudioKeeps =
+      persistedKeeps.length > 0 ? persistedKeeps : takeSystemAudioActivity.get(takeId) || [];
     if (take.hasSystemAudio && systemAudioKeeps.length === 0) {
       const envelope = takeSystemAudioPeakEnvelopeCache.get(takeId);
       if (envelope?.peaks?.length && envelope.duration > 0) {
