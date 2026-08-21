@@ -134,6 +134,7 @@ If `pnpm run check` is too slow during iteration, run a narrower loop while deve
 
 ## Build And Runtime Notes
 
+- Use the Node version from `.nvmrc` (Node 22). Node >= 26 is unsupported: `@electron/packager`/`extract-zip` zip extraction stalls, breaking `pnpm run package:smoke` and the `electron` package's install script.
 - Start the app with `pnpm dev` or `pnpm start`, not raw `electron .`
   - this ensures renderer styles are rebuilt first
 - Tailwind output is generated into `src/renderer/styles/main.css`
