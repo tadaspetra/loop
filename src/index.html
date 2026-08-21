@@ -268,17 +268,62 @@
 
     <!-- Editor View -->
     <div id="editorView" class="hidden flex-1 flex gap-3 p-4 w-full min-h-0">
+      <!-- Collapsed-transcript reopen strip -->
+      <button
+        id="editorTranscriptShowBtn"
+        type="button"
+        title="Show transcript"
+        class="hidden shrink-0 w-6 rounded-lg border border-neutral-800 text-neutral-500 hover:text-neutral-300 hover:border-neutral-600 transition-colors text-xs"
+      >
+        »
+      </button>
+
       <!-- Transcript panel (left) -->
-      <div class="w-56 shrink-0 flex flex-col gap-2 min-h-0">
-        <span id="editorTime" class="text-sm text-neutral-500 font-mono tabular-nums px-1"
-          >00:00 / 00:00</span
-        >
+      <div id="editorTranscriptPanel" class="shrink-0 flex flex-col gap-2 min-h-0" style="width: 224px">
+        <div class="flex items-center justify-between gap-2 px-1">
+          <span id="editorTime" class="text-sm text-neutral-500 font-mono tabular-nums"
+            >00:00 / 00:00</span
+          >
+          <div class="flex items-center gap-1">
+            <button
+              id="editorRestoreAllBtn"
+              type="button"
+              title="Put every removed take back on the timeline"
+              class="hidden text-[11px] px-2 py-0.5 rounded-md border border-neutral-700 text-neutral-400 hover:text-neutral-200 hover:border-neutral-500 transition-colors"
+            >
+              Restore all
+            </button>
+            <button
+              id="editorHideRemovedBtn"
+              type="button"
+              title="Hide the removed-take entries in this list"
+              class="hidden text-[11px] px-2 py-0.5 rounded-md border border-neutral-700 text-neutral-400 hover:text-neutral-200 hover:border-neutral-500 transition-colors"
+            >
+              Hide cuts
+            </button>
+            <button
+              id="editorTranscriptHideBtn"
+              type="button"
+              title="Hide transcript"
+              class="text-[11px] px-1.5 py-0.5 rounded-md border border-neutral-800 text-neutral-500 hover:text-neutral-300 hover:border-neutral-600 transition-colors"
+            >
+              «
+            </button>
+          </div>
+        </div>
         <div id="editorSectionTranscriptList" class="flex-1 overflow-y-auto space-y-0.5 min-h-0">
           <div class="text-xs text-neutral-500 px-1">
             Section transcript will appear here after trimming.
           </div>
         </div>
       </div>
+
+      <!-- Transcript panel resize handle -->
+      <div
+        id="editorTranscriptResizer"
+        title="Drag to resize the transcript panel"
+        class="shrink-0 w-1 -mx-0.5 cursor-col-resize rounded bg-transparent hover:bg-neutral-700 transition-colors"
+      ></div>
 
       <!-- Video + timeline (right) -->
       <div class="flex-1 flex flex-col gap-3 min-w-0 min-h-0">
@@ -395,6 +440,20 @@
             </div>
           </div>
         </div>
+        <div class="min-h-4 text-[11px] text-center">
+          <span
+            id="editorWaveformStatus"
+            role="status"
+            aria-live="polite"
+            class="hidden text-neutral-500"
+          ></span>
+          <span
+            id="editorPlaybackStatus"
+            role="alert"
+            aria-live="assertive"
+            class="hidden text-red-400"
+          ></span>
+        </div>
 
         <!-- Playback controls -->
         <div class="flex flex-wrap items-center justify-center gap-2">
@@ -455,10 +514,17 @@
           <div class="w-px h-5 bg-neutral-800 mx-1"></div>
           <button
             id="transcribeCutBtn"
-            title="Transcribe the take, cut out silences, and remove repeated takes"
+            title="Transcribe the take and cut out silences"
             class="btn btn-primary px-3.5 py-1.5"
           >
             Transcribe &amp; Cut
+          </button>
+          <button
+            id="removeBadTakesBtn"
+            title="Remove repeated takes the speaker re-recorded (uses the transcript from Transcribe &amp; Cut)"
+            class="btn btn-secondary px-3.5 py-1.5"
+          >
+            Remove Bad Takes
           </button>
           <span id="transcribeCutStatus" class="hidden text-[11px] text-neutral-500"></span>
         </div>

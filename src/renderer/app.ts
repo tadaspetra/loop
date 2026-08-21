@@ -1,13 +1,26 @@
 // @ts-nocheck
-import { normalizeTranscriptText } from './features/transcript/transcript-utils';
+import {
+  extractSpokenWordTokens,
+  normalizeTranscriptText
+} from './features/transcript/transcript-utils';
 import {
   buildSegmentsFromWords,
   getTranscriptionTimeoutMs
 } from './features/transcript/batch-transcript';
+import { detectBadTakes, mergeBadTakeRanges } from './features/transcript/restart-detection';
 import {
-  cutRepeatedTakes,
-  MISTAKE_UTTERANCE_GAP_SEC
-} from './features/transcript/mistake-detection';
+  buildRetakeChunks,
+  isWordLevelTranscript,
+  mapLlmRemovalsToRanges
+} from './features/transcript/retake-chunks';
+import {
+  buildRestoredSectionBounds,
+  buildTranscriptViewEntries,
+  deriveRemovedTakeSegments,
+  dropSilentSliverSections,
+  remapTakeLocalPositions,
+  removeSourceRangesFromSections
+} from './features/transcript/removed-takes';
 import {
   roundMs,
   buildRemappedSectionsFromSegments,
@@ -37,7 +50,22 @@ import {
 } from './features/timeline/transcribe-cut';
 import { resolvePlaybackAdvance } from './features/timeline/playback-advance';
 import { getTakePlaybackSources } from './features/timeline/take-playback-sources';
-import { getWaveformDecodeSources } from './features/timeline/waveform-sources';
+import {
+  getWaveformDecodeSources,
+  resolveWaveformLoadStatus
+} from './features/timeline/waveform-sources';
+import {
+  buildPeakEnvelope,
+  composeTimelinePeaks,
+  deriveActiveRangesFromEnvelope,
+  resolveWaveformBucketCount
+} from './features/timeline/waveform-peaks';
+import {
+  resolveEditorDrawSchedule,
+  shouldRequestEditorDraw
+} from './features/timeline/editor-draw-scheduler';
+import { resolveScrubSeekAction } from './features/timeline/scrub-seek-policy';
+import { getWarmTakeIds } from './features/timeline/media-pool-policy';
 import {
   analyzeBufferChannelBalance,
   pickWaveformChannel
@@ -172,8 +200,139 @@ const editorSystemAudioTrack = document.getElementById('editorSystemAudioTrack')
 const editorSystemAudioCanvas = document.getElementById('editorSystemAudioCanvas');
 const systemAudioTrackLabel = document.getElementById('systemAudioTrackLabel');
 const editorSectionTranscriptList = document.getElementById('editorSectionTranscriptList');
+const editorRestoreAllBtn = document.getElementById('editorRestoreAllBtn');
+const editorHideRemovedBtn = document.getElementById('editorHideRemovedBtn');
+
+const TRANSCRIPT_HIDE_REMOVED_KEY = 'transcriptHideRemoved';
+// Whether the transcript list hides the removed-take entries. UI preference
+// only — Restore all and the underlying data are unaffected.
+let hideRemovedEntries = false;
+try {
+  hideRemovedEntries = localStorage.getItem(TRANSCRIPT_HIDE_REMOVED_KEY) === '1';
+} catch {
+  // UI preference only; fall back to showing removed entries.
+}
+
+function updateHideRemovedButton(hasRemoved) {
+  if (!editorHideRemovedBtn) return;
+  editorHideRemovedBtn.classList.toggle('hidden', !hasRemoved);
+  editorHideRemovedBtn.textContent = hideRemovedEntries ? 'Show cuts' : 'Hide cuts';
+  editorHideRemovedBtn.setAttribute('aria-pressed', hideRemovedEntries ? 'true' : 'false');
+  editorHideRemovedBtn.classList.toggle('bg-neutral-800', hideRemovedEntries);
+  editorHideRemovedBtn.classList.toggle('text-neutral-200', hideRemovedEntries);
+}
+
+if (editorHideRemovedBtn) {
+  editorHideRemovedBtn.addEventListener('click', () => {
+    hideRemovedEntries = !hideRemovedEntries;
+    try {
+      localStorage.setItem(TRANSCRIPT_HIDE_REMOVED_KEY, hideRemovedEntries ? '1' : '0');
+    } catch {
+      // UI preference only; losing it is harmless.
+    }
+    renderSectionTranscriptList();
+  });
+}
+
+// Keeps the transcript panel following the timeline: when the selection
+// changes, center the matching row. Tracked by id so unrelated re-renders
+// never fight the user's manual scrolling.
+let lastCenteredTranscriptSectionId = null;
+
+function centerTranscriptOnSelection() {
+  const selectedId = editorState?.selectedSectionId || null;
+  if (selectedId === lastCenteredTranscriptSectionId) return;
+  lastCenteredTranscriptSectionId = selectedId;
+  if (!selectedId || !editorSectionTranscriptList) return;
+  const row = editorSectionTranscriptList.querySelector(
+    `[data-section-id="${CSS.escape(selectedId)}"]`
+  );
+  row?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+
+// ===== Transcript panel width / visibility (renderer UI preference) =====
+
+const editorTranscriptPanel = document.getElementById('editorTranscriptPanel');
+const editorTranscriptResizer = document.getElementById('editorTranscriptResizer');
+const editorTranscriptHideBtn = document.getElementById('editorTranscriptHideBtn');
+const editorTranscriptShowBtn = document.getElementById('editorTranscriptShowBtn');
+
+const TRANSCRIPT_PANEL_DEFAULT_WIDTH = 224;
+const TRANSCRIPT_PANEL_MIN_WIDTH = 160;
+const TRANSCRIPT_PANEL_MAX_WIDTH = 480;
+const TRANSCRIPT_PANEL_WIDTH_KEY = 'transcriptPanelWidth';
+const TRANSCRIPT_PANEL_HIDDEN_KEY = 'transcriptPanelHidden';
+
+function clampTranscriptPanelWidth(width) {
+  const num = Number(width);
+  if (!Number.isFinite(num)) return TRANSCRIPT_PANEL_DEFAULT_WIDTH;
+  return Math.min(TRANSCRIPT_PANEL_MAX_WIDTH, Math.max(TRANSCRIPT_PANEL_MIN_WIDTH, Math.round(num)));
+}
+
+function setTranscriptPanelHidden(hidden) {
+  if (editorTranscriptPanel) editorTranscriptPanel.style.display = hidden ? 'none' : '';
+  if (editorTranscriptResizer) editorTranscriptResizer.style.display = hidden ? 'none' : '';
+  if (editorTranscriptShowBtn) editorTranscriptShowBtn.classList.toggle('hidden', !hidden);
+  try {
+    localStorage.setItem(TRANSCRIPT_PANEL_HIDDEN_KEY, hidden ? '1' : '0');
+  } catch {
+    // UI preference only; losing it is harmless.
+  }
+  // The timeline just changed pixel width; redraw the waveform at the new size.
+  if (editorState) refreshWaveform();
+}
+
+try {
+  const storedWidth = localStorage.getItem(TRANSCRIPT_PANEL_WIDTH_KEY);
+  if (storedWidth && editorTranscriptPanel) {
+    editorTranscriptPanel.style.width = `${clampTranscriptPanelWidth(storedWidth)}px`;
+  }
+  if (localStorage.getItem(TRANSCRIPT_PANEL_HIDDEN_KEY) === '1') {
+    setTranscriptPanelHidden(true);
+  }
+} catch {
+  // UI preference only; fall back to defaults.
+}
+
+if (editorTranscriptResizer && editorTranscriptPanel) {
+  editorTranscriptResizer.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = editorTranscriptPanel.getBoundingClientRect().width;
+    const onMove = (moveEvent) => {
+      const width = clampTranscriptPanelWidth(startWidth + (moveEvent.clientX - startX));
+      editorTranscriptPanel.style.width = `${width}px`;
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      try {
+        localStorage.setItem(
+          TRANSCRIPT_PANEL_WIDTH_KEY,
+          String(Math.round(editorTranscriptPanel.getBoundingClientRect().width))
+        );
+      } catch {
+        // UI preference only; losing it is harmless.
+      }
+      if (editorState) refreshWaveform();
+    };
+    document.body.style.cursor = 'col-resize';
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
+if (editorTranscriptHideBtn) {
+  editorTranscriptHideBtn.addEventListener('click', () => setTranscriptPanelHidden(true));
+}
+if (editorTranscriptShowBtn) {
+  editorTranscriptShowBtn.addEventListener('click', () => setTranscriptPanelHidden(false));
+}
 let editorRenderTimeout = null;
 const editorWaveformCanvas = document.getElementById('editorWaveformCanvas');
+const editorWaveformStatus = document.getElementById('editorWaveformStatus');
+const editorPlaybackStatus = document.getElementById('editorPlaybackStatus');
 
 let screenStream = null;
 let cameraStream = null;
@@ -385,9 +544,9 @@ if (typeof window.electronAPI.onProxyProgress === 'function') {
               cached.camera.currentTime = currentTime;
               if (wasPlaying) {
                 cached.camera.playbackRate = rate;
-                cached.camera.play().catch(() => {});
-                if (!hasPendingEditorDraw()) scheduleEditorDrawLoop();
+                playEditorMedia(cached.camera, 'Camera');
               }
+              requestEditorDraw();
             },
             { once: true }
           );
@@ -414,9 +573,9 @@ if (typeof window.electronAPI.onProxyProgress === 'function') {
             cached.screen.currentTime = currentTime;
             if (wasPlaying) {
               cached.screen.playbackRate = rate;
-              cached.screen.play().catch(() => {});
-              if (!hasPendingEditorDraw()) scheduleEditorDrawLoop();
+              playEditorMedia(cached.screen, 'Screen', true);
             }
+            requestEditorDraw();
           },
           { once: true }
         );
@@ -559,7 +718,6 @@ const redoStack = [];
 const MAX_UNDO = 50;
 let editorState = null;
 let editorDrawRAF = null;
-let editorPausedDrawTimer = null;
 let editorVideoFrameCallbackId = null;
 let editorVideoFrameHost = null;
 let editorVideoFrameSafetyTimer = null;
@@ -577,12 +735,16 @@ let backgroundDragState = null;
 // handles). `hover` drives the outline/handles overlay and cursor feedback.
 let screenTransformDrag = null;
 let screenTransformHover = false;
-let takeAudioBufferCache = new Map(); // takeId -> AudioBuffer (mic audio)
+// Keep only the small channel-balance result after decoding. Lazy pool entries
+// created later can still be wired correctly without retaining full PCM buffers.
+let takeAudioBalanceCache = new Map();
+let takeAudioPeakEnvelopeCache = new Map();
 // Separate cache for the system-audio track that lives on the screen webm
 // when a take was recorded with "Include system audio" enabled. Kept distinct
 // from the mic cache so the editor can draw both waveforms simultaneously.
-let takeSystemAudioBufferCache = new Map(); // takeId -> AudioBuffer
+let takeSystemAudioPeakEnvelopeCache = new Map();
 let systemAudioWaveformPeaks = null;
+let waveformLoadGeneration = 0;
 // Channel-balance analysis per decoded AudioBuffer. One-sided stereo takes
 // (mic on one channel of a stereo interface capture) need their waveform read
 // from the active channel and their playback routed to both ears. WeakMap so
@@ -628,6 +790,7 @@ function loadSectionImage(imagePath) {
     const img = new Image();
     img.onload = () => {
       sectionImageCache.set(imagePath, img);
+      requestEditorDraw();
       resolve(img);
     };
     img.onerror = () => {
@@ -706,9 +869,8 @@ function getMicOwningPlaybackElement(entry) {
 function applyPlaybackChannelRebalance(takeId) {
   const entry = takeVideoPool.get(takeId);
   if (!entry || entry.channelRebalanceSettled) return;
-  const audioBuffer = takeAudioBufferCache.get(takeId);
-  if (!audioBuffer) return;
-  const balance = getBufferChannelBalance(audioBuffer);
+  const balance = takeAudioBalanceCache.get(takeId);
+  if (!balance) return;
   if (balance.kind !== 'one-sided') {
     entry.channelRebalanceSettled = true;
     return;
@@ -721,8 +883,22 @@ function applyPlaybackChannelRebalance(takeId) {
   entry.channelRebalanceSettled = wireOneSidedPlayback(element, balance.activeChannel);
 }
 
-function getOrCreateTakeVideos(takeId) {
-  if (takeVideoPool.has(takeId)) return takeVideoPool.get(takeId);
+function attachEditorMediaInvalidation(element) {
+  for (const eventName of ['loadedmetadata', 'loadeddata', 'seeked']) {
+    element.addEventListener(eventName, requestEditorDraw);
+  }
+}
+
+function getOrCreateTakeVideos(takeId, preload = 'metadata') {
+  if (takeVideoPool.has(takeId)) {
+    const existing = takeVideoPool.get(takeId);
+    if (preload === 'auto') {
+      existing.screen.preload = 'auto';
+      if (existing.camera) existing.camera.preload = 'auto';
+      if (existing.audio) existing.audio.preload = 'auto';
+    }
+    return existing;
+  }
   const take = activeProject?.takes?.find((t) => t.id === takeId);
   if (!take) return null;
   const playbackSources = getTakePlaybackSources(take);
@@ -739,8 +915,9 @@ function getOrCreateTakeVideos(takeId) {
 
   const screen = document.createElement('video');
   screen.playsInline = true;
-  screen.preload = 'auto';
+  screen.preload = preload;
   screen.src = pathToFileUrl(playbackSources.screenPath);
+  attachEditorMediaInvalidation(screen);
   // Unmute the screen element when it owns the mic OR when it carries a
   // system audio track. Proxy playback has no audio track, so this is safe
   // even while the proxy hot-swap is active.
@@ -750,9 +927,10 @@ function getOrCreateTakeVideos(takeId) {
   if (playbackSources.cameraPath) {
     camera = document.createElement('video');
     camera.playsInline = true;
-    camera.preload = 'auto';
+    camera.preload = preload;
     camera.src = pathToFileUrl(playbackSources.cameraPath);
     camera.muted = audioSource !== 'camera';
+    attachEditorMediaInvalidation(camera);
   }
 
   // External audio-only takes need a dedicated HTMLAudioElement because
@@ -760,8 +938,9 @@ function getOrCreateTakeVideos(takeId) {
   let audio = null;
   if (audioSource === 'external' && audioResolution.path) {
     audio = document.createElement('audio');
-    audio.preload = 'auto';
+    audio.preload = preload;
     audio.src = pathToFileUrl(audioResolution.path);
+    attachEditorMediaInvalidation(audio);
   }
 
   const entry = { screen, camera, audio, audioSource, channelRebalanceSettled: false };
@@ -773,23 +952,43 @@ function getOrCreateTakeVideos(takeId) {
   return entry;
 }
 
-function cleanupVideoPool() {
-  for (const [, videos] of takeVideoPool) {
-    videos.screen.pause();
-    videos.screen.src = '';
-    if (videos.camera) {
-      videos.camera.pause();
-      videos.camera.src = '';
-    }
-    if (videos.audio) {
-      videos.audio.pause();
-      videos.audio.src = '';
-    }
+function releaseTakeVideos(takeId) {
+  const videos = takeVideoPool.get(takeId);
+  if (!videos) return;
+  videos.screen.pause();
+  videos.screen.removeAttribute('src');
+  videos.screen.load();
+  if (videos.camera) {
+    videos.camera.pause();
+    videos.camera.removeAttribute('src');
+    videos.camera.load();
   }
-  takeVideoPool.clear();
-  takeAudioBufferCache.clear();
-  takeSystemAudioBufferCache.clear();
+  if (videos.audio) {
+    videos.audio.pause();
+    videos.audio.removeAttribute('src');
+    videos.audio.load();
+  }
+  takeVideoPool.delete(takeId);
+}
+
+function warmMediaPoolForSection(section) {
+  if (!editorState || !section) return;
+  const warmTakeIds = getWarmTakeIds(editorState.sections, section.id);
+  for (const takeId of warmTakeIds) {
+    getOrCreateTakeVideos(takeId, takeId === section.takeId ? 'auto' : 'metadata');
+  }
+  for (const takeId of [...takeVideoPool.keys()]) {
+    if (!warmTakeIds.includes(takeId)) releaseTakeVideos(takeId);
+  }
+}
+
+function cleanupVideoPool() {
+  for (const takeId of [...takeVideoPool.keys()]) releaseTakeVideos(takeId);
+  takeAudioBalanceCache.clear();
+  takeAudioPeakEnvelopeCache.clear();
+  takeSystemAudioPeakEnvelopeCache.clear();
   systemAudioWaveformPeaks = null;
+  waveformLoadGeneration++;
   activeTakeId = null;
   activePlaybackSection = null;
 }
@@ -875,17 +1074,13 @@ function updateWorkspaceHeader() {
 }
 
 function hasPendingEditorDraw() {
-  return !!editorDrawRAF || !!editorPausedDrawTimer || editorVideoFrameCallbackId !== null;
+  return !!editorDrawRAF || editorVideoFrameCallbackId !== null;
 }
 
 function cancelEditorDrawLoop() {
   if (editorDrawRAF) {
     cancelAnimationFrame(editorDrawRAF);
     editorDrawRAF = null;
-  }
-  if (editorPausedDrawTimer) {
-    clearTimeout(editorPausedDrawTimer);
-    editorPausedDrawTimer = null;
   }
   if (
     editorVideoFrameHost &&
@@ -906,13 +1101,36 @@ function cancelEditorDrawLoop() {
   }
 }
 
+function requestEditorDraw() {
+  if (
+    !shouldRequestEditorDraw({
+      hasEditor: !!editorState,
+      timelineVisible: activeWorkspaceView === 'timeline',
+      drawPending: hasPendingEditorDraw()
+    })
+  ) {
+    return;
+  }
+  editorDrawRAF = requestAnimationFrame(() => {
+    editorDrawRAF = null;
+    editorDrawLoop();
+  });
+}
+
 function scheduleEditorDrawLoop() {
   if (!editorState || activeWorkspaceView !== 'timeline') return;
 
-  if (editorState.playing && activeTakeId) {
-    const videos = getOrCreateTakeVideos(activeTakeId);
-    const screen = videos?.screen;
-    if (screen && typeof screen.requestVideoFrameCallback === 'function') {
+  const videos = activeTakeId ? getOrCreateTakeVideos(activeTakeId, 'auto') : null;
+  const screen = videos?.screen;
+  const schedule = resolveEditorDrawSchedule({
+    playing: editorState.playing,
+    hasActiveVideo: !!screen,
+    supportsVideoFrameCallback:
+      !!screen && typeof screen.requestVideoFrameCallback === 'function'
+  });
+
+  switch (schedule) {
+    case 'video-frame':
       editorVideoFrameHost = screen;
       editorVideoFrameCallbackId = screen.requestVideoFrameCallback(() => {
         if (editorVideoFrameSafetyTimer) {
@@ -936,27 +1154,19 @@ function scheduleEditorDrawLoop() {
         }
       }, 200);
       return;
-    }
-  }
-
-  if (editorState.playing) {
-    editorDrawRAF = requestAnimationFrame(() => {
-      editorDrawRAF = null;
-      editorDrawLoop();
-    });
-    return;
-  }
-
-  editorPausedDrawTimer = setTimeout(
-    () => {
-      editorPausedDrawTimer = null;
+    case 'animation-frame':
       editorDrawRAF = requestAnimationFrame(() => {
         editorDrawRAF = null;
         editorDrawLoop();
       });
-    },
-    Math.round(1000 / 24)
-  );
+      return;
+    case 'idle':
+      return;
+    default: {
+      const exhaustiveSchedule = /** @type {never} */ (schedule);
+      throw new Error(`Unhandled editor draw schedule: ${exhaustiveSchedule}`);
+    }
+  }
 }
 
 function setWorkspaceView(nextView) {
@@ -989,8 +1199,8 @@ function setWorkspaceView(nextView) {
     }, MEDIA_IDLE_TIMEOUT_MS);
   }
 
-  if (showTimeline && editorState && !hasPendingEditorDraw()) {
-    editorDrawLoop();
+  if (showTimeline && editorState) {
+    requestEditorDraw();
   } else if (!showTimeline && hasPendingEditorDraw()) {
     cancelEditorDrawLoop();
     if (editorState?.playing) editorPause();
@@ -1129,6 +1339,7 @@ async function completeRecoveryTake(projectPath = activeProjectPath) {
 
 function scheduleProjectSave() {
   if (!activeProjectPath || !activeProject) return;
+  requestEditorDraw();
   if (saveDebounceTimer) clearTimeout(saveDebounceTimer);
   saveDebounceTimer = setTimeout(() => {
     persistProjectNow().catch((error) => {
@@ -1348,6 +1559,8 @@ function clearEditorState() {
   redoStack.length = 0;
   waveformPeaks = null;
   systemAudioWaveformPeaks = null;
+  setEditorWaveformStatus('');
+  setEditorPlaybackStatus('');
   renderWaveform();
   renderSectionMarkers();
   updateSectionZoomControls();
@@ -1834,15 +2047,84 @@ function _deleteNearestKeyframe() {
   scheduleProjectSave();
 }
 
+// Removed bad takes are derived on every render from the stored utterances
+// and the current sections, never persisted separately, so undo/redo keeps
+// the panel consistent for free.
+function collectRemovedTakesByTake() {
+  const removedByTake = new Map();
+  if (!editorState?.sections?.length || !activeProject?.takes?.length) return removedByTake;
+  for (const take of activeProject.takes) {
+    if (!take?.id || !Array.isArray(take.transcriptSegments) || take.transcriptSegments.length === 0) {
+      continue;
+    }
+    const takeSections = editorState.sections.filter((section) => section.takeId === take.id);
+    if (takeSections.length === 0) continue;
+    const removed = deriveRemovedTakeSegments({
+      sections: takeSections,
+      utterances: take.transcriptSegments
+    });
+    if (removed.length > 0) removedByTake.set(take.id, removed);
+  }
+  return removedByTake;
+}
+
+function buildRemovedTakeRow(takeId, removed) {
+  const row = document.createElement('div');
+  row.className =
+    'w-full text-left rounded-lg px-3 py-2 border border-dashed border-neutral-800 opacity-70';
+
+  const header = document.createElement('div');
+  header.className = 'flex items-center justify-between gap-2';
+  const meta = document.createElement('div');
+  meta.className = 'text-xs text-amber-600/80 font-mono tabular-nums';
+  meta.textContent = `Removed · ${Math.max(0, removed.end - removed.start).toFixed(1)}s`;
+  const restoreBtn = document.createElement('button');
+  restoreBtn.type = 'button';
+  restoreBtn.className =
+    'text-[11px] px-2 py-0.5 rounded-md border border-neutral-700 text-neutral-400 hover:text-neutral-200 hover:border-neutral-500 transition-colors';
+  restoreBtn.textContent = 'Restore';
+  restoreBtn.title = 'Put this removed take back on the timeline';
+  restoreBtn.addEventListener('click', () => {
+    restoreRemovedTakeSegment(takeId, removed);
+  });
+  header.appendChild(meta);
+  header.appendChild(restoreBtn);
+
+  const text = document.createElement('div');
+  text.className = 'mt-1 text-sm leading-snug text-neutral-600 line-through';
+  text.textContent = removed.text;
+
+  row.appendChild(header);
+  row.appendChild(text);
+  return row;
+}
+
 function renderSectionTranscriptList() {
   if (!editorState || !editorState.sections || editorState.sections.length === 0) {
+    if (editorRestoreAllBtn) editorRestoreAllBtn.classList.add('hidden');
+    if (editorHideRemovedBtn) editorHideRemovedBtn.classList.add('hidden');
     editorSectionTranscriptList.innerHTML =
       '<div class="text-xs text-neutral-500 px-1">No sections available.</div>';
     return;
   }
 
+  const removedByTake = collectRemovedTakesByTake();
+  if (editorRestoreAllBtn) {
+    editorRestoreAllBtn.classList.toggle('hidden', removedByTake.size === 0);
+  }
+  updateHideRemovedButton(removedByTake.size > 0);
+  const entries = buildTranscriptViewEntries({
+    sections: editorState.sections,
+    removedByTake: hideRemovedEntries ? new Map() : removedByTake
+  });
+
   editorSectionTranscriptList.innerHTML = '';
-  for (const section of editorState.sections) {
+  for (const entry of entries) {
+    if (entry.kind === 'removed') {
+      editorSectionTranscriptList.appendChild(buildRemovedTakeRow(entry.takeId, entry.removed));
+      continue;
+    }
+    const section = entry.section;
     const inSelection = editorState.selectedSectionIds?.has(section.id);
     const selected = inSelection || section.id === editorState.selectedSectionId;
     const transcript = normalizeTranscriptText(section.transcript);
@@ -1864,73 +2146,53 @@ function renderSectionTranscriptList() {
     row.appendChild(text);
     row.addEventListener('click', () => {
       selectEditorSection(section.id);
+      // Look the section up fresh: cut/remove/undo wholesale-replace the
+      // section objects, so the closure's copy may hold stale times.
+      const current = editorState?.sections?.find((s) => s.id === section.id);
+      if (current) editorSeek(current.start);
     });
 
     editorSectionTranscriptList.appendChild(row);
   }
+  centerTranscriptOnSelection();
 }
 
-function computePeaksFromBufferCache(cache, numBuckets) {
+function getWaveformBucketCount() {
+  return resolveWaveformBucketCount({
+    viewportWidth: editorTimelineWrapper.clientWidth,
+    zoom: timelineZoom
+  });
+}
+
+function computePeaksFromEnvelopeCache(cache, numBuckets) {
   if (!editorState || !editorState.sections || editorState.sections.length === 0) return null;
-  const totalDuration = editorState.duration;
-  if (totalDuration <= 0) return null;
-
-  const peaks = new Float32Array(numBuckets);
-  let anyData = false;
-  for (let bucket = 0; bucket < numBuckets; bucket++) {
-    const bucketStart = (bucket / numBuckets) * totalDuration;
-    const bucketEnd = ((bucket + 1) / numBuckets) * totalDuration;
-    let maxPeak = 0;
-
-    for (const section of editorState.sections) {
-      if (bucketEnd <= section.start || bucketStart >= section.end) continue;
-      const overlapStart = Math.max(bucketStart, section.start);
-      const overlapEnd = Math.min(bucketEnd, section.end);
-      const sourceStart = section.sourceStart + (overlapStart - section.start);
-      const sourceEnd = section.sourceStart + (overlapEnd - section.start);
-
-      const audioBuffer = cache.get(section.takeId);
-      if (!audioBuffer) continue;
-      anyData = true;
-      // One-sided stereo captures carry their signal on one channel; reading
-      // the active channel keeps the waveform from drawing flat (or half-loud)
-      // when the mic landed on the other side.
-      const channelData = audioBuffer.getChannelData(
-        pickWaveformChannel(getBufferChannelBalance(audioBuffer))
-      );
-      const sampleRate = audioBuffer.sampleRate;
-      const startSample = Math.floor(sourceStart * sampleRate);
-      const endSample = Math.min(Math.ceil(sourceEnd * sampleRate), channelData.length);
-
-      for (let j = startSample; j < endSample; j++) {
-        const abs = Math.abs(channelData[j]);
-        if (abs > maxPeak) maxPeak = abs;
-      }
-    }
-    peaks[bucket] = maxPeak;
-  }
-  return anyData ? peaks : null;
+  return composeTimelinePeaks({
+    sections: editorState.sections,
+    totalDuration: editorState.duration,
+    envelopes: cache,
+    bucketCount: numBuckets
+  }).peaks;
 }
 
-function computeWaveformPeaksFromCache(numBuckets = 800) {
-  return computePeaksFromBufferCache(takeAudioBufferCache, numBuckets);
+function computeWaveformPeaksFromCache(numBuckets = getWaveformBucketCount()) {
+  return computePeaksFromEnvelopeCache(takeAudioPeakEnvelopeCache, numBuckets);
 }
 
-function computeSystemAudioPeaksFromCache(numBuckets = 800) {
-  return computePeaksFromBufferCache(takeSystemAudioBufferCache, numBuckets);
+function computeSystemAudioPeaksFromCache(numBuckets = getWaveformBucketCount()) {
+  return computePeaksFromEnvelopeCache(takeSystemAudioPeakEnvelopeCache, numBuckets);
 }
 
 function refreshWaveform() {
   if (!editorState) return;
-  const bucketCount = Math.round(800 * timelineZoom);
+  const bucketCount = getWaveformBucketCount();
   waveformPeaks = computeWaveformPeaksFromCache(bucketCount);
   systemAudioWaveformPeaks = computeSystemAudioPeaksFromCache(bucketCount);
   renderWaveform();
 }
 
-async function rebuildWaveformFromMedia(numBuckets = Math.round(800 * timelineZoom)) {
-  const peaks = await extractWaveformPeaks(numBuckets);
-  if (!editorState) return;
+async function rebuildWaveformFromMedia() {
+  const peaks = await extractWaveformPeaks(getWaveformBucketCount());
+  if (!editorState || peaks === undefined) return;
   waveformPeaks = peaks;
   renderWaveform();
 }
@@ -1943,46 +2205,142 @@ async function decodeTakeAudioFile(filePath) {
   return offlineCtx.decodeAudioData(arrayBuffer);
 }
 
+async function decodeFirstWaveformCandidate(candidates, takeId, trackLabel) {
+  let failedCount = 0;
+  for (const filePath of candidates) {
+    try {
+      return {
+        audioBuffer: await decodeTakeAudioFile(filePath),
+        failedCount
+      };
+    } catch (error) {
+      failedCount++;
+      console.warn(
+        `Failed to decode ${trackLabel} waveform source for take ${takeId}; trying fallback:`,
+        error
+      );
+    }
+  }
+  return { audioBuffer: null, failedCount };
+}
+
+function cacheWaveformBuffer(takeId, audioBuffer, envelopeCache, balanceCache = null) {
+  const balance = getBufferChannelBalance(audioBuffer);
+  if (balanceCache) balanceCache.set(takeId, balance);
+  const channelData = audioBuffer.getChannelData(
+    pickWaveformChannel(balance)
+  );
+  envelopeCache.set(
+    takeId,
+    buildPeakEnvelope({
+      samples: channelData,
+      sampleRate: audioBuffer.sampleRate
+    })
+  );
+}
+
 async function extractWaveformPeaks(numBuckets = 800) {
   if (!editorState || !editorState.sections || editorState.sections.length === 0) return null;
 
+  const generation = ++waveformLoadGeneration;
   try {
-    // Decode and cache audio for each referenced take
-    for (const section of editorState.sections) {
-      if (!section.takeId) continue;
-      const take = activeProject?.takes?.find((t) => t.id === section.takeId);
+    const referencedTakeIds = [...new Set(editorState.sections.map((section) => section.takeId))];
+    const plans = [];
+    let candidateSourceCount = 0;
+    for (const takeId of referencedTakeIds) {
+      if (!takeId) continue;
+      const take = activeProject?.takes?.find((candidate) => candidate.id === takeId);
       if (!take) continue;
+      const sources = getWaveformDecodeSources(take);
+      candidateSourceCount += sources.micCandidates.length + sources.systemCandidates.length;
+      plans.push({ takeId, sources });
+    }
 
-      const { micPath, systemPath } = getWaveformDecodeSources(take);
+    setEditorWaveformStatus(
+      candidateSourceCount > 0 ? 'Loading audio waveform…' : 'No audio track on this timeline.',
+      'neutral'
+    );
 
-      if (!takeAudioBufferCache.has(section.takeId)) {
-        if (micPath) {
-          try {
-            const audioBuffer = await decodeTakeAudioFile(micPath);
-            takeAudioBufferCache.set(section.takeId, audioBuffer);
-          } catch (err) {
-            console.warn(`Failed to decode audio for take ${section.takeId}:`, err);
-          }
+    let decodedTrackCount = 0;
+    let failedTrackCount = 0;
+    for (const { takeId, sources } of plans) {
+      if (generation !== waveformLoadGeneration) return undefined;
+
+      if (takeAudioPeakEnvelopeCache.has(takeId)) {
+        decodedTrackCount++;
+      } else if (sources.micCandidates.length > 0) {
+        const decoded = await decodeFirstWaveformCandidate(
+          sources.micCandidates,
+          takeId,
+          'microphone'
+        );
+        if (generation !== waveformLoadGeneration) return undefined;
+        failedTrackCount += decoded.failedCount;
+        if (decoded.audioBuffer) {
+          cacheWaveformBuffer(
+            takeId,
+            decoded.audioBuffer,
+            takeAudioPeakEnvelopeCache,
+            takeAudioBalanceCache
+          );
+          decodedTrackCount++;
         }
       }
-      // The decoded mic buffer doubles as the channel-balance analysis input;
-      // fix one-sided playback for any already-pooled elements of this take.
-      applyPlaybackChannelRebalance(section.takeId);
+      applyPlaybackChannelRebalance(takeId);
 
-      if (systemPath && !takeSystemAudioBufferCache.has(section.takeId)) {
-        try {
-          const audioBuffer = await decodeTakeAudioFile(systemPath);
-          takeSystemAudioBufferCache.set(section.takeId, audioBuffer);
-        } catch (err) {
-          console.warn(`Failed to decode system audio for take ${section.takeId}:`, err);
+      if (takeSystemAudioPeakEnvelopeCache.has(takeId)) {
+        decodedTrackCount++;
+      } else if (sources.systemCandidates.length > 0) {
+        const decoded = await decodeFirstWaveformCandidate(
+          sources.systemCandidates,
+          takeId,
+          'system audio'
+        );
+        if (generation !== waveformLoadGeneration) return undefined;
+        failedTrackCount += decoded.failedCount;
+        if (decoded.audioBuffer) {
+          cacheWaveformBuffer(
+            takeId,
+            decoded.audioBuffer,
+            takeSystemAudioPeakEnvelopeCache
+          );
+          decodedTrackCount++;
         }
       }
     }
 
+    if (generation !== waveformLoadGeneration) return undefined;
+    const loadStatus = resolveWaveformLoadStatus({
+      loading: false,
+      candidateSourceCount,
+      decodedTrackCount,
+      failedTrackCount
+    });
+    if (loadStatus === 'ready' && failedTrackCount > 0) {
+      setEditorWaveformStatus(
+        'Some waveform sources were unavailable; playback and export audio are unchanged.',
+        'warning'
+      );
+    } else if (loadStatus === 'ready') {
+      setEditorWaveformStatus('');
+    } else if (loadStatus === 'no-audio') {
+      setEditorWaveformStatus('No audio track on this timeline.', 'neutral');
+    } else if (loadStatus === 'error') {
+      setEditorWaveformStatus(
+        'Waveform unavailable — this does not mean the take is silent.',
+        'error'
+      );
+    }
     systemAudioWaveformPeaks = computeSystemAudioPeaksFromCache(numBuckets);
     return computeWaveformPeaksFromCache(numBuckets);
   } catch (err) {
     console.warn('Failed to extract waveform:', err);
+    if (generation === waveformLoadGeneration) {
+      setEditorWaveformStatus(
+        'Waveform unavailable — this does not mean the take is silent.',
+        'error'
+      );
+    }
     return null;
   }
 }
@@ -2001,7 +2359,10 @@ function drawWaveformBars(wCtx, peaks, totalWidth, baseline, halfHeight, color) 
 function drawTrackWaveform(canvas, peaks, color) {
   if (!canvas) return;
   const rect = canvas.parentElement.getBoundingClientRect();
-  canvas.width = Math.round(rect.width * devicePixelRatio);
+  // The timeline can be 50x wider than the viewport. A matching 40k+ backing
+  // canvas wastes memory and may exceed Chromium's canvas limits; the cached
+  // waveform itself is capped at this same useful-detail ceiling.
+  canvas.width = Math.max(1, Math.min(4096, Math.round(rect.width * devicePixelRatio)));
   canvas.height = Math.round(rect.height * devicePixelRatio);
   const wCtx = canvas.getContext('2d');
   wCtx.clearRect(0, 0, canvas.width, canvas.height);
@@ -2230,6 +2591,23 @@ function startTrimDrag(e, sectionId, edge) {
   window.addEventListener('mouseup', onUp);
 }
 
+function patchSectionBandGeometry(container, section) {
+  const band = Array.from(container.querySelectorAll('[data-section-id]')).find(
+    (candidate) => candidate.dataset.sectionId === section.id
+  );
+  if (!band || !editorState?.duration) return;
+  band.style.left = `${(section.start / editorState.duration) * 100}%`;
+  band.style.width = `${Math.max(
+    0.35,
+    ((section.end - section.start) / editorState.duration) * 100
+  )}%`;
+}
+
+function patchTrimDragVisual(section) {
+  patchSectionBandGeometry(editorSectionMarkers, section);
+  if (editorCameraMarkers) patchSectionBandGeometry(editorCameraMarkers, section);
+}
+
 function updateTrimDrag(e) {
   if (!trimDragState || !editorState) return;
   const section = editorState.sections.find((s) => s.id === trimDragState.sectionId);
@@ -2264,7 +2642,8 @@ function updateTrimDrag(e) {
     section.duration = roundMs(newDuration);
   }
 
-  renderSectionMarkers();
+  patchTrimDragVisual(section);
+  requestEditorDraw();
 }
 
 function finishTrimDrag() {
@@ -2277,13 +2656,20 @@ function finishTrimDrag() {
     trimDragState = null;
     return;
   }
+  const completedDrag = trimDragState;
   const sourceStartChanged =
-    Math.abs(section.sourceStart - trimDragState.originalSourceStart) > 0.01;
-  const sourceEndChanged = Math.abs(section.sourceEnd - trimDragState.originalSourceEnd) > 0.01;
+    Math.abs(section.sourceStart - completedDrag.originalSourceStart) > 0.01;
+  const sourceEndChanged = Math.abs(section.sourceEnd - completedDrag.originalSourceEnd) > 0.01;
   trimDragState = null;
   if (!sourceStartChanged && !sourceEndChanged) {
+    section.sourceStart = completedDrag.originalSourceStart;
+    section.sourceEnd = completedDrag.originalSourceEnd;
+    section.start = completedDrag.originalStart;
+    section.end = completedDrag.originalEnd;
+    section.duration = roundMs(section.sourceEnd - section.sourceStart);
     undoStack.pop();
     updateUndoRedoButtons();
+    renderSectionMarkers();
     return;
   }
   // Now reflow the full timeline
@@ -3541,7 +3927,8 @@ async function recoverOrphansForProject(projectPath) {
               hasSystemAudio: false,
               proxyPath: null,
               cameraProxyPath: null,
-              sections
+              sections,
+              transcriptSegments: []
             });
           }
 
@@ -4152,7 +4539,8 @@ async function stopRecordingImpl() {
         screenStartOffsetMs: recorderStartOffsetsMs.screen,
         cameraStartOffsetMs: recorderStartOffsetsMs.camera,
         audioStartOffsetMs: recorderStartOffsetsMs.audio,
-        sections: sectionsForTimeline
+        sections: sectionsForTimeline,
+        transcriptSegments: []
       });
     }
 
@@ -4275,6 +4663,8 @@ function enterEditor(rawSections, opts = {}) {
 
   // Clean up previous video pool
   cleanupVideoPool();
+  setEditorPlaybackStatus('');
+  setEditorWaveformStatus('');
 
   const defaultPipX = CANVAS_W - PIP_SIZE - PIP_MARGIN;
   const defaultPipY = CANVAS_H - PIP_SIZE - PIP_MARGIN;
@@ -4336,18 +4726,16 @@ function enterEditor(rawSections, opts = {}) {
   screenFitSelect.value = editorState.screenFitMode === 'fit' ? 'fit' : 'fill';
   updateSectionZoomControls();
 
-  // Pre-create video elements for all referenced takes
   const referencedTakeIds = new Set(sections.map((s) => s.takeId).filter(Boolean));
-  for (const takeId of referencedTakeIds) {
-    getOrCreateTakeVideos(takeId);
-  }
 
-  // Set up initial active take from first section
+  // Decode only the active take eagerly; keep at most the immediate next take
+  // metadata-warm so entering a long timeline does not create one decoder per take.
   if (sections.length > 0) {
     const firstSection = sections[0];
     activeTakeId = firstSection.takeId;
     activePlaybackSection = firstSection;
-    const videos = getOrCreateTakeVideos(firstSection.takeId);
+    warmMediaPoolForSection(firstSection);
+    const videos = getOrCreateTakeVideos(firstSection.takeId, 'auto');
     if (videos) {
       videos.screen.currentTime = firstSection.sourceStart;
       if (videos.camera) {
@@ -4377,7 +4765,7 @@ function enterEditor(rawSections, opts = {}) {
         renderSectionMarkers();
         updateEditorTimeDisplay();
         scheduleProjectSave();
-        rebuildWaveformFromMedia().catch((err) => console.warn('Failed to rebuild waveform:', err));
+        requestEditorDraw();
       };
 
       if (firstTake?.proxyPath && firstTake?.screenPath) {
@@ -4408,6 +4796,7 @@ function enterEditor(rawSections, opts = {}) {
   preloadSectionImages();
   const initialView = opts.initialView === 'recording' ? 'recording' : 'timeline';
   setWorkspaceView(initialView);
+  rebuildWaveformFromMedia().catch((err) => console.warn('Failed to rebuild waveform:', err));
 }
 
 function _exitEditor() {
@@ -4534,11 +4923,43 @@ function updateEditorTimeDisplay() {
   editorTimeEl.textContent = `${formatTime(editorState.currentTime)} / ${formatTime(editorState.duration)}${speedText}${sectionText}`;
 }
 
+function setEditorWaveformStatus(text, tone = 'neutral') {
+  if (!editorWaveformStatus) return;
+  const hasText = hasStatusText(text);
+  editorWaveformStatus.className = `${hasText ? '' : 'hidden '} ${statusToneTextClass(tone)}`.trim();
+  editorWaveformStatus.textContent = hasText ? text : '';
+}
+
+function setEditorPlaybackStatus(text, tone = 'error') {
+  if (!editorPlaybackStatus) return;
+  const hasText = hasStatusText(text);
+  editorPlaybackStatus.className = `${hasText ? '' : 'hidden '} ${statusToneTextClass(tone)}`.trim();
+  editorPlaybackStatus.textContent = hasText ? text : '';
+}
+
+function playEditorMedia(element, label, required = false) {
+  if (!element || !element.paused) return;
+  const handleFailure = (error) => {
+    console.warn(`[Editor] ${label} playback failed:`, error);
+    setEditorPlaybackStatus(
+      `${label} playback could not start. Try pausing and playing again.`,
+      'error'
+    );
+    if (required && editorState?.playing) editorPause();
+  };
+  try {
+    const playResult = element.play();
+    if (playResult && typeof playResult.catch === 'function') playResult.catch(handleFailure);
+  } catch (error) {
+    handleFailure(error);
+  }
+}
+
 function switchPlaybackSection(nextSection, opts = {}) {
   if (!editorState || !nextSection) return false;
   const previousTakeId = activeTakeId;
   const sameTake = previousTakeId === nextSection.takeId;
-  const nextVideos = getOrCreateTakeVideos(nextSection.takeId);
+  const nextVideos = getOrCreateTakeVideos(nextSection.takeId, 'auto');
   if (!nextVideos) return false;
 
   const targetSourceTime = Number.isFinite(Number(opts.sourceTime))
@@ -4551,7 +4972,7 @@ function switchPlaybackSection(nextSection, opts = {}) {
   );
 
   if (!sameTake && previousTakeId) {
-    const previousVideos = getOrCreateTakeVideos(previousTakeId);
+    const previousVideos = takeVideoPool.get(previousTakeId);
     if (previousVideos) {
       previousVideos.screen.pause();
       if (previousVideos.camera) {
@@ -4590,6 +5011,7 @@ function switchPlaybackSection(nextSection, opts = {}) {
 
   activeTakeId = nextSection.takeId;
   activePlaybackSection = nextSection;
+  warmMediaPoolForSection(nextSection);
 
   if (opts.logSwitch) {
     console.debug('[Editor] Section switch', {
@@ -4604,7 +5026,7 @@ function switchPlaybackSection(nextSection, opts = {}) {
   if (opts.resumePlayback) {
     const speed = editorState.playbackSpeed || 1;
     nextVideos.screen.playbackRate = speed;
-    if (nextVideos.screen.paused) nextVideos.screen.play().catch(() => {});
+    playEditorMedia(nextVideos.screen, 'Screen', true);
     // Play the camera element when it provides the PiP video OR when it
     // owns this take's audio (so playback stays audible even if no keyframe
     // makes the camera visible).
@@ -4612,11 +5034,11 @@ function switchPlaybackSection(nextSection, opts = {}) {
       nextVideos.camera && (editorState.hasCamera || nextVideos.audioSource === 'camera');
     if (shouldPlayCamera && nextVideos.camera.paused) {
       nextVideos.camera.playbackRate = speed;
-      nextVideos.camera.play().catch(() => {});
+      playEditorMedia(nextVideos.camera, 'Camera');
     }
     if (nextVideos.audio && nextVideos.audio.paused) {
       nextVideos.audio.playbackRate = speed;
-      nextVideos.audio.play().catch(() => {});
+      playEditorMedia(nextVideos.audio, 'Microphone');
     }
   }
 
@@ -4690,31 +5112,38 @@ function syncCameraPlayback(videos) {
 
 function editorPlay() {
   if (!editorState || editorState.rendering) return;
+  setEditorPlaybackStatus('');
+  if (!activeTakeId) {
+    setEditorPlaybackStatus('No playable take at the current timeline position.', 'error');
+    return;
+  }
+  const videos = getOrCreateTakeVideos(activeTakeId, 'auto');
+  if (!videos) {
+    setEditorPlaybackStatus('The media for this take is unavailable.', 'error');
+    return;
+  }
   editorState.playing = true;
   const speed = editorState.playbackSpeed || 1;
-  if (activeTakeId) {
-    const videos = getOrCreateTakeVideos(activeTakeId);
-    if (videos) {
-      videos.screen.playbackRate = speed;
-      videos.screen.play().catch(() => {});
-      const shouldPlayCamera =
-        videos.camera && (editorState.hasCamera || videos.audioSource === 'camera');
-      if (shouldPlayCamera) {
-        videos.camera.playbackRate = speed;
-        videos.camera.play().catch(() => {});
-      }
-      if (videos.audio) {
-        videos.audio.playbackRate = speed;
-        videos.audio.play().catch(() => {});
-      }
-    }
+  videos.screen.playbackRate = speed;
+  playEditorMedia(videos.screen, 'Screen', true);
+  const shouldPlayCamera =
+    videos.camera && (editorState.hasCamera || videos.audioSource === 'camera');
+  if (shouldPlayCamera) {
+    videos.camera.playbackRate = speed;
+    playEditorMedia(videos.camera, 'Camera');
+  }
+  if (videos.audio) {
+    videos.audio.playbackRate = speed;
+    playEditorMedia(videos.audio, 'Microphone');
   }
   editorPlayBtn.textContent = 'Pause';
+  requestEditorDraw();
 }
 
 function editorPause() {
   if (!editorState) return;
   editorState.playing = false;
+  cancelEditorDrawLoop();
   for (const [, videos] of takeVideoPool) {
     videos.screen.pause();
     videos.screen.playbackRate = 1;
@@ -4728,6 +5157,7 @@ function editorPause() {
     }
   }
   editorPlayBtn.textContent = 'Play';
+  requestEditorDraw();
 }
 
 function editorTogglePlay() {
@@ -4756,22 +5186,25 @@ function cyclePlaybackSpeed() {
   updateEditorTimeDisplay();
 }
 
-function editorSeek(time) {
+function editorSeek(time, opts = {}) {
   if (!editorState) return;
   time = Math.max(0, Math.min(time, editorState.duration));
   editorState.currentTime = time;
 
-  const resolved = resolveTimeToSource(time);
-  if (resolved) {
-    switchPlaybackSection(resolved.section, {
-      sourceTime: resolved.sourceTime,
-      resumePlayback: editorState.playing,
-      reason: 'seek',
-      fromSectionId: activePlaybackSection?.id
-    });
+  if (opts.commitMediaSeek !== false) {
+    const resolved = resolveTimeToSource(time);
+    if (resolved) {
+      switchPlaybackSection(resolved.section, {
+        sourceTime: resolved.sourceTime,
+        resumePlayback: editorState.playing,
+        reason: 'seek',
+        fromSectionId: activePlaybackSection?.id
+      });
+    }
   }
   updateEditorTimeDisplay();
   updateScrubberPosition();
+  requestEditorDraw();
 }
 
 function updateScrubberPosition() {
@@ -4936,7 +5369,7 @@ function editorDrawLoop() {
 
   drawScreenTransformOverlay(state, workspace);
 
-  scheduleEditorDrawLoop();
+  if (editorState.playing) scheduleEditorDrawLoop();
 }
 
 // ===== Keyframe management =====
@@ -5203,6 +5636,7 @@ editorCanvas.addEventListener('mousedown', (e) => {
       // Materialize the transform right away so the draw path switches to
       // placement mode for live feedback (it matches the current look).
       editorState.screenTransform = startTransform;
+      requestEditorDraw();
       e.preventDefault();
       return;
     }
@@ -5273,6 +5707,7 @@ window.addEventListener('mousemove', (e) => {
         drag.moved = true;
       }
     }
+    requestEditorDraw();
     return;
   }
 
@@ -5286,6 +5721,7 @@ window.addEventListener('mousemove', (e) => {
     backgroundDragMoved =
       setSectionBackgroundPan(backgroundDragState.sectionId, nextPanX, nextPanY) ||
       backgroundDragMoved;
+    requestEditorDraw();
     return;
   }
 
@@ -5301,6 +5737,7 @@ window.addEventListener('mousemove', (e) => {
     if (anchor) {
       anchor.pipX = snapped.x;
       anchor.pipY = snapped.y;
+      requestEditorDraw();
     }
   }
 });
@@ -5318,6 +5755,7 @@ window.addEventListener('mouseup', () => {
       undoStack.pop();
       updateUndoRedoButtons();
     }
+    requestEditorDraw();
   }
 
   const wasDraggingBackground = draggingBackground;
@@ -5331,6 +5769,7 @@ window.addEventListener('mouseup', () => {
       updateUndoRedoButtons();
     }
     backgroundDragMoved = false;
+    requestEditorDraw();
   }
 
   const wasDragging = draggingPip;
@@ -5343,6 +5782,7 @@ window.addEventListener('mouseup', () => {
       updateUndoRedoButtons();
     }
     pipDragMoved = false;
+    requestEditorDraw();
   }
 });
 
@@ -5354,8 +5794,10 @@ editorCanvas.addEventListener('mousemove', (e) => {
     editorCanvas.style.cursor = '';
     return;
   }
+  const wasHovering = screenTransformHover;
   if (screenTransformDrag) {
     screenTransformHover = true;
+    if (!wasHovering) requestEditorDraw();
     return;
   }
   if (draggingPip || draggingBackground) return;
@@ -5375,23 +5817,28 @@ editorCanvas.addEventListener('mousemove', (e) => {
   ) {
     screenTransformHover = false;
     editorCanvas.style.cursor = 'grab';
+    if (wasHovering) requestEditorDraw();
     return;
   }
 
   if (!screenTransformInteractionAllowed(state)) {
     screenTransformHover = false;
     editorCanvas.style.cursor = '';
+    if (wasHovering) requestEditorDraw();
     return;
   }
 
   const hit = hitTestScreenPlacement(x, y, getCurrentScreenPlacement());
   screenTransformHover = !!hit;
   editorCanvas.style.cursor = cursorForScreenHit(hit);
+  if (screenTransformHover !== wasHovering) requestEditorDraw();
 });
 
 editorCanvas.addEventListener('mouseleave', () => {
+  const wasHovering = screenTransformHover;
   screenTransformHover = false;
   editorCanvas.style.cursor = '';
+  if (wasHovering) requestEditorDraw();
 });
 
 // Double-click the screen layer to reset it back to the plain Fill/Fit mode.
@@ -5475,20 +5922,58 @@ editorTimeline.addEventListener('mousedown', (e) => {
   }
 
   // Background click: seek
-  seekFromTimeline(e);
-  const onMove = (e2) => seekFromTimeline(e2);
-  const onUp = () => {
+  beginTimelineScrub(e);
+});
+
+const SCRUB_MEDIA_SEEK_INTERVAL_MS = 50;
+let timelineScrubState = null;
+
+function getTimelineTimeFromPointer(e) {
+  const rect = editorTimeline.getBoundingClientRect();
+  const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  return pct * editorState.duration;
+}
+
+function seekFromTimeline(e) {
+  editorSeek(getTimelineTimeFromPointer(e));
+}
+
+function updateTimelineScrub(e, final) {
+  if (!timelineScrubState || !editorState) return;
+  const nowMs = performance.now();
+  const action = resolveScrubSeekAction({
+    nowMs,
+    lastMediaSeekAtMs: timelineScrubState.lastMediaSeekAtMs,
+    intervalMs: SCRUB_MEDIA_SEEK_INTERVAL_MS,
+    final
+  });
+  timelineScrubState.lastMediaSeekAtMs = action.nextLastMediaSeekAtMs;
+  editorSeek(getTimelineTimeFromPointer(e), {
+    commitMediaSeek: action.commitMediaSeek
+  });
+}
+
+function beginTimelineScrub(e) {
+  if (!editorState || e.button !== 0) return;
+  const resumePlayback = editorState.playing;
+  if (resumePlayback) editorPause();
+  timelineScrubState = {
+    lastMediaSeekAtMs: null,
+    resumePlayback
+  };
+  updateTimelineScrub(e, true);
+
+  const onMove = (moveEvent) => updateTimelineScrub(moveEvent, false);
+  const onUp = (upEvent) => {
+    updateTimelineScrub(upEvent, true);
+    const shouldResume = timelineScrubState?.resumePlayback === true;
+    timelineScrubState = null;
     window.removeEventListener('mousemove', onMove);
     window.removeEventListener('mouseup', onUp);
+    if (shouldResume) editorPlay();
   };
   window.addEventListener('mousemove', onMove);
   window.addEventListener('mouseup', onUp);
-});
-
-function seekFromTimeline(e) {
-  const rect = editorTimeline.getBoundingClientRect();
-  const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-  editorSeek(pct * editorState.duration);
 }
 
 // Playhead ruler above the tracks: dedicated drag-to-scrub surface that cannot
@@ -5498,14 +5983,7 @@ if (editorPlayheadRuler) {
     if (!editorState || editorState.rendering) return;
     e.preventDefault();
     e.stopPropagation();
-    seekFromTimeline(e);
-    const onMove = (e2) => seekFromTimeline(e2);
-    const onUp = () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    beginTimelineScrub(e);
   });
 }
 
@@ -5635,8 +6113,9 @@ function applyTimelineZoom(newZoom, pivotClientX) {
   timelineZoom = newZoom;
   editorTimeline.style.minWidth = newZoom * 100 + '%';
 
-  // Recompute waveform with more detail
-  const zoomedBuckets = Math.round(800 * newZoom);
+  // Recompose from cached per-take envelopes. Detail follows visible pixels
+  // but stays hard-capped, so 50x zoom cannot trigger a 40k-bucket raw scan.
+  const zoomedBuckets = getWaveformBucketCount();
   waveformPeaks = computeWaveformPeaksFromCache(zoomedBuckets);
   systemAudioWaveformPeaks = computeSystemAudioPeaksFromCache(zoomedBuckets);
   renderWaveform();
@@ -5763,7 +6242,8 @@ new ResizeObserver(() => {
   // Invalidate the cached width so the next scrollTimelineToPlayhead picks
   // up the new layout, then re-render the waveform.
   cachedTimelineWrapperWidth = 0;
-  renderWaveform();
+  refreshWaveform();
+  requestEditorDraw();
 }).observe(editorTimelineWrapper);
 
 editorTimelineWrapper.addEventListener(
@@ -5794,7 +6274,10 @@ editorBgZoomInput.addEventListener('input', () => {
   const changed = setSelectedSectionBackgroundZoom(editorBgZoomInput.value, {
     pushHistory: !sectionZoomDragActive
   });
-  if (changed) sectionZoomDragActive = true;
+  if (changed) {
+    sectionZoomDragActive = true;
+    requestEditorDraw();
+  }
 });
 editorBgZoomInput.addEventListener('change', commitSectionZoomChange);
 editorBgZoomInput.addEventListener('pointerup', commitSectionZoomChange);
@@ -6018,9 +6501,10 @@ editorExportPremiereBtn.addEventListener('click', async () => {
   await exportPremiere();
 });
 
-// ===== Transcribe & Cut =====
+// ===== Transcribe & Cut / Remove Bad Takes =====
 
 const transcribeCutBtn = document.getElementById('transcribeCutBtn');
+const removeBadTakesBtn = document.getElementById('removeBadTakesBtn');
 const transcribeCutStatusEl = document.getElementById('transcribeCutStatus');
 let transcribeCutInFlight = false;
 
@@ -6032,27 +6516,56 @@ function setTranscribeCutStatus(text, tone = 'neutral') {
   transcribeCutStatusEl.textContent = hasText ? text : '';
 }
 
-/**
- * On-demand transcription and silence cutting for a take already on the
- * timeline. The take's media files are never touched: on success its timeline
- * sections are replaced with speech-cut ones (a single undo step), and any
- * failure, timeout, or mid-flight timeline edit leaves the timeline exactly
- * as it was.
- */
-async function transcribeAndCutTake() {
-  if (!editorState || editorState.rendering || transcribeCutInFlight) return;
-  const projectSession = getActiveProjectSession();
-
+function resolveTranscribeCutTarget() {
   const takeId = resolveTargetTakeId({
     sections: editorState.sections,
     selectedSectionId: editorState.selectedSectionId,
     takes: activeProject?.takes || []
   });
-  const take = takeId ? activeProject?.takes?.find((t) => t.id === takeId) : null;
+  return takeId ? activeProject?.takes?.find((t) => t.id === takeId) || null : null;
+}
+
+function setTranscribeCutButtonsDisabled(disabled) {
+  if (transcribeCutBtn) transcribeCutBtn.disabled = disabled;
+  if (removeBadTakesBtn) removeBadTakesBtn.disabled = disabled;
+}
+
+// Shared refresh after any wholesale section change (cut, bad-take removal,
+// restore): reindex, remap timeline positions, redraw, and re-establish the
+// playback tracker against the new section list.
+function refreshTimelineAfterSectionsChange(selectedSectionId) {
+  reindexSections(editorState.sections);
+  if (selectedSectionId) {
+    editorState.selectedSectionId = selectedSectionId;
+    editorState.selectedSectionIds = new Set([selectedSectionId]);
+  }
+  recalculateTimelinePositions();
+  syncSectionAnchorKeyframes();
+  renderSectionMarkers();
+  updateSectionZoomControls();
+  refreshWaveform();
+  activePlaybackSection = null;
+  editorSeek(Math.min(editorState.currentTime, editorState.duration));
+}
+
+/**
+ * On-demand transcription and silence cutting for a take already on the
+ * timeline. The take's media files are never touched: on success its timeline
+ * sections are replaced with speech-cut ones (a single undo step), and any
+ * failure, timeout, or mid-flight timeline edit leaves the timeline exactly
+ * as it was. Repeated-take ("bad take") removal is a separate action; the
+ * fine-grained utterances are stored on the take for it.
+ */
+async function transcribeAndCutTake() {
+  if (!editorState || editorState.rendering || transcribeCutInFlight) return;
+  const projectSession = getActiveProjectSession();
+
+  const take = resolveTranscribeCutTarget();
   if (!take) {
     setTranscribeCutStatus('No take on the timeline to transcribe', 'warning');
     return;
   }
+  const takeId = take.id;
   const source = resolveTranscriptionSource(take);
   if (!source) {
     setTranscribeCutStatus('This take has no microphone audio to transcribe', 'warning');
@@ -6068,7 +6581,7 @@ async function transcribeAndCutTake() {
     .join('|');
 
   transcribeCutInFlight = true;
-  transcribeCutBtn.disabled = true;
+  setTranscribeCutButtonsDisabled(true);
   const originalLabel = transcribeCutBtn.textContent;
   transcribeCutBtn.textContent = 'Transcribing…';
   setTranscribeCutStatus('', 'neutral');
@@ -6086,15 +6599,30 @@ async function transcribeAndCutTake() {
     ]);
     if (!matchesActiveProjectSession(projectSession) || !editorState) return;
 
-    // Group words at a fine gap first (retry pauses are usually shorter than
-    // the 1.5s segment threshold), drop flubbed takes that the speaker
-    // re-recorded, then re-merge survivors at the normal gap so silence-cut
-    // boundaries are unchanged wherever nothing was removed.
-    const utterances = buildSegmentsFromWords(result?.words || [], {
-      offsetSec: source.offsetSec,
-      maxGapSec: MISTAKE_UTTERANCE_GAP_SEC
+    // Store word-level spoken tokens on the take (recording-time coords):
+    // Remove Bad Takes and Restore run from these later without
+    // re-transcribing, and word granularity lets restart detection split
+    // inside an utterance at the exact word boundary.
+    const spokenWords = extractSpokenWordTokens(result?.words || [])
+      .filter((word) => Number.isFinite(word.start) && Number.isFinite(word.end))
+      .map((word) => ({
+        start: word.start + source.offsetSec,
+        end: word.end + source.offsetSec,
+        text: normalizeTranscriptText(word.text)
+      }))
+      .filter((word) => word.text);
+    take.transcriptSegments = spokenWords;
+    if (spokenWords.length === 0) {
+      scheduleProjectSave();
+      setTranscribeCutStatus('No speech detected — nothing to cut', 'warning');
+      return;
+    }
+
+    // Group words into speech segments at the normal silence gap for the
+    // silence cut. No bad-take detection here — that is a separate button.
+    const speechSegments = buildSegmentsFromWords(result?.words || [], {
+      offsetSec: source.offsetSec
     });
-    const { segments: speechSegments, removed: removedTakes } = cutRepeatedTakes(utterances);
     // Merge system-audio "keep" regions captured while this take recorded so
     // audible screen sound is never trimmed just because the mic was quiet.
     const activeSegments = [...speechSegments, ...(takeSystemAudioActivity.get(takeId) || [])];
@@ -6147,30 +6675,13 @@ async function transcribeAndCutTake() {
 
     pushUndo();
     editorState.sections = sections;
-    reindexSections(editorState.sections);
-    editorState.selectedSectionId = cutSections[0].id;
-    editorState.selectedSectionIds = new Set([cutSections[0].id]);
-    recalculateTimelinePositions();
-    syncSectionAnchorKeyframes();
-    renderSectionMarkers();
-    updateSectionZoomControls();
-    refreshWaveform();
-    // Drop the playback tracker before re-seeking: every section object it
-    // could point at was just replaced, and the seek below re-establishes it
-    // against the new list.
-    activePlaybackSection = null;
-    editorSeek(Math.min(editorState.currentTime, editorState.duration));
-
     // Keep the persisted take snapshot in sync with the cut (take-local
     // coordinates), matching what the recording flow stamps at append time.
     take.sections = takeLocalSections;
+    refreshTimelineAfterSectionsChange(cutSections[0].id);
     scheduleProjectSave();
-    const removedNote =
-      removedTakes.length > 0
-        ? ` · removed ${removedTakes.length} repeated take${removedTakes.length !== 1 ? 's' : ''}`
-        : '';
     setTranscribeCutStatus(
-      `Cut into ${cutSections.length} section${cutSections.length !== 1 ? 's' : ''}${removedNote}`,
+      `Cut into ${cutSections.length} section${cutSections.length !== 1 ? 's' : ''}`,
       'success'
     );
   } catch (err) {
@@ -6179,9 +6690,309 @@ async function transcribeAndCutTake() {
     setTranscribeCutStatus(`Transcription failed: ${reason}`, 'error');
   } finally {
     transcribeCutInFlight = false;
-    transcribeCutBtn.disabled = false;
+    setTranscribeCutButtonsDisabled(false);
     transcribeCutBtn.textContent = originalLabel;
   }
+}
+
+/**
+ * Removes bad takes from a take already on the timeline, using the word
+ * transcript stored by Transcribe & Cut. Detection is the union of the local
+ * deterministic detectors and, when an OpenAI key is configured, an LLM pass
+ * that judges "essentially the same content re-recorded later" — reworded
+ * retries included. The LLM only picks among sentence chunks we hand it;
+ * time ranges always come from our own word boundaries. Kept sections are
+ * only trimmed or split around the flubbed ranges, so silence cuts and
+ * manual edits survive. One undo step; removed takes stay visible in the
+ * transcript panel, each with a Restore button.
+ */
+async function removeBadTakesFromTimeline() {
+  if (!editorState || editorState.rendering || transcribeCutInFlight) return;
+  const projectSession = getActiveProjectSession();
+
+  const take = resolveTranscribeCutTarget();
+  if (!take) {
+    setTranscribeCutStatus('No take on the timeline', 'warning');
+    return;
+  }
+  const takeId = take.id;
+  const transcriptSegments = Array.isArray(take.transcriptSegments)
+    ? take.transcriptSegments
+    : [];
+  if (transcriptSegments.length === 0) {
+    setTranscribeCutStatus('Run Transcribe & Cut first — bad-take detection needs the transcript', 'warning');
+    return;
+  }
+
+  // Snapshot which sections belong to the take right now, so timeline edits
+  // made while the LLM call is in flight abort the removal instead of being
+  // clobbered by it.
+  const sectionIdsAtStart = editorState.sections
+    .filter((s) => s.takeId === takeId)
+    .map((s) => s.id)
+    .join('|');
+
+  transcribeCutInFlight = true;
+  setTranscribeCutButtonsDisabled(true);
+  const originalLabel = removeBadTakesBtn.textContent;
+  removeBadTakesBtn.textContent = 'Detecting…';
+  setTranscribeCutStatus('', 'neutral');
+  try {
+    const deterministic = detectBadTakes(transcriptSegments);
+
+    let llmRanges = [];
+    let detectionNote = '';
+    const chunks = buildRetakeChunks(transcriptSegments);
+    if (!isWordLevelTranscript(transcriptSegments)) {
+      // Coarse legacy transcripts cannot split a chunk that mixes a flub
+      // with its good retry — an LLM flag would remove both. Skip the LLM
+      // pass rather than risk cutting good content.
+      detectionNote =
+        ' (transcript is from an older version — run Transcribe & Cut again for smarter detection)';
+    } else if (chunks.length >= 2) {
+      try {
+        const response = await window.electronAPI.detectRetakesLlm({
+          chunks: chunks.map(({ index, text, gapAfterSec }) => ({ index, text, gapAfterSec }))
+        });
+        if (!matchesActiveProjectSession(projectSession) || !editorState) return;
+        if (response?.status === 'ok') {
+          console.log(
+            `LLM retake detection (${response.model}): flagged ${response.removedIndices.length} of ${chunks.length} chunks`,
+            response.removedIndices
+          );
+          llmRanges = mapLlmRemovalsToRanges({
+            chunks,
+            removedIndices: response.removedIndices
+          });
+        } else {
+          detectionNote = ' (set OPENAI_API_KEY in .env for smarter detection)';
+        }
+      } catch (err) {
+        console.warn('LLM retake detection failed; using exact matching only:', err);
+        if (!matchesActiveProjectSession(projectSession) || !editorState) return;
+        detectionNote = ' (smart detection failed — used exact matching)';
+      }
+    }
+
+    const sectionIdsNow = editorState.sections
+      .filter((s) => s.takeId === takeId)
+      .map((s) => s.id)
+      .join('|');
+    if (sectionIdsNow !== sectionIdsAtStart) {
+      setTranscribeCutStatus('Timeline changed while detecting — nothing removed', 'warning');
+      return;
+    }
+
+    const removed = mergeBadTakeRanges([...deterministic, ...llmRanges]);
+    if (removed.length === 0) {
+      setTranscribeCutStatus(`No bad takes detected${detectionNote}`, 'success');
+      return;
+    }
+
+    const takeSections = editorState.sections.filter((s) => s.takeId === takeId);
+    // Words plus system-audio activity: cut edges snap to these so pieces
+    // don't open with dead air, and pure inter-flub silence is dropped.
+    // System-audio activity comes from the in-session recording data when
+    // available, otherwise from the decoded system-audio waveform envelope
+    // (cached for display). Only when neither exists for a system-audio
+    // take do we keep plain padded bounds, so screen sound is never trimmed
+    // on word evidence alone.
+    let systemAudioKeeps = takeSystemAudioActivity.get(takeId) || [];
+    if (take.hasSystemAudio && systemAudioKeeps.length === 0) {
+      const envelope = takeSystemAudioPeakEnvelopeCache.get(takeId);
+      if (envelope?.peaks?.length && envelope.duration > 0) {
+        systemAudioKeeps = deriveActiveRangesFromEnvelope({
+          peaks: envelope.peaks,
+          duration: envelope.duration,
+          offsetSec: Math.max(0, Number(take.screenStartOffsetMs) || 0) / 1000
+        });
+      }
+    }
+    const protectionComplete =
+      !take.hasSystemAudio || systemAudioKeeps.length > 0;
+    const result = removeSourceRangesFromSections({
+      sections: takeSections,
+      ranges: removed,
+      utterances: transcriptSegments,
+      protectedRanges: [...transcriptSegments, ...systemAudioKeeps],
+      snapToProtected: protectionComplete,
+      makeId: generateSectionId
+    });
+    // With a complete protection set, also sweep short sections that
+    // contain no speech and no system audio — silent slivers earlier
+    // removals left behind. Long silent sections stay (deliberate pauses).
+    let finalSections = result.sections;
+    let droppedSlivers = 0;
+    if (protectionComplete) {
+      const sweep = dropSilentSliverSections({
+        sections: finalSections,
+        protectedRanges: [...transcriptSegments, ...systemAudioKeeps]
+      });
+      finalSections = sweep.sections;
+      droppedSlivers = sweep.droppedCount;
+    }
+
+    if (!result.changed && droppedSlivers === 0) {
+      setTranscribeCutStatus(`Bad takes are already removed${detectionNote}`, 'success');
+      return;
+    }
+    if (finalSections.length === 0) {
+      setTranscribeCutStatus('Removing these takes would empty the timeline — nothing removed', 'warning');
+      return;
+    }
+
+    const { sections, replacedCount } = replaceTakeSections(
+      editorState.sections,
+      takeId,
+      finalSections
+    );
+    if (replacedCount === 0) {
+      setTranscribeCutStatus('Take is no longer on the timeline — nothing removed', 'warning');
+      return;
+    }
+
+    pushUndo();
+    editorState.sections = sections;
+    take.sections = remapTakeLocalPositions(finalSections.map((s) => ({ ...s })));
+    refreshTimelineAfterSectionsChange(finalSections[0].id);
+    scheduleProjectSave();
+    const sliverNote =
+      droppedSlivers > 0
+        ? ` · dropped ${droppedSlivers} silent sliver${droppedSlivers !== 1 ? 's' : ''}`
+        : '';
+    setTranscribeCutStatus(
+      `Removed ${removed.length} bad take${removed.length !== 1 ? 's' : ''}${sliverNote} — restore from the transcript panel${detectionNote}`,
+      'success'
+    );
+  } catch (err) {
+    console.error('Remove Bad Takes failed:', err);
+    const reason = err instanceof Error ? err.message : String(err);
+    setTranscribeCutStatus(`Bad-take detection failed: ${reason}`, 'error');
+  } finally {
+    transcribeCutInFlight = false;
+    setTranscribeCutButtonsDisabled(false);
+    removeBadTakesBtn.textContent = originalLabel;
+  }
+}
+
+/**
+ * Bounds for restoring `removed` into its take, computed against the take's
+ * current timeline sections. Null when the range is already covered.
+ */
+function resolveRestoreBounds(take, removed) {
+  return buildRestoredSectionBounds({
+    range: removed,
+    sections: editorState.sections.filter((s) => s.takeId === take.id),
+    takeDuration: Math.max(0, Number(take.duration) || 0)
+  });
+}
+
+/**
+ * Splices a restored-section object into the timeline in source order:
+ * before the first section of the take that comes after the restored range,
+ * otherwise right after the take's last section. Mutates editorState.
+ */
+function insertRestoredSection(takeId, bounds, transcript) {
+  const section = {
+    id: generateSectionId(),
+    index: 0,
+    label: 'Section',
+    start: 0,
+    end: 0,
+    duration: roundMs(bounds.sourceEnd - bounds.sourceStart),
+    sourceStart: bounds.sourceStart,
+    sourceEnd: bounds.sourceEnd,
+    takeId,
+    transcript,
+    imagePath: null
+  };
+
+  let insertAt = -1;
+  let lastTakeIndex = -1;
+  for (let i = 0; i < editorState.sections.length; i += 1) {
+    const existing = editorState.sections[i];
+    if (existing.takeId !== takeId) continue;
+    lastTakeIndex = i;
+    if (insertAt < 0 && existing.sourceStart >= bounds.sourceEnd - 0.05) insertAt = i;
+  }
+  if (insertAt < 0) insertAt = lastTakeIndex >= 0 ? lastTakeIndex + 1 : editorState.sections.length;
+
+  editorState.sections.splice(insertAt, 0, section);
+  return section;
+}
+
+function syncTakeSectionsSnapshot(take) {
+  take.sections = remapTakeLocalPositions(
+    editorState.sections.filter((s) => s.takeId === take.id).map((s) => ({ ...s }))
+  );
+}
+
+/**
+ * Puts a removed bad take back on the timeline as its own section, inserted
+ * in source order between the kept sections. One undo step.
+ */
+function restoreRemovedTakeSegment(takeId, removed) {
+  if (!editorState || editorState.rendering || transcribeCutInFlight) return;
+  const take = activeProject?.takes?.find((t) => t.id === takeId);
+  if (!take) return;
+
+  const bounds = resolveRestoreBounds(take, removed);
+  if (!bounds) {
+    setTranscribeCutStatus('This take is already back on the timeline', 'warning');
+    renderSectionMarkers();
+    return;
+  }
+
+  pushUndo();
+  const section = insertRestoredSection(takeId, bounds, removed.text);
+  syncTakeSectionsSnapshot(take);
+  refreshTimelineAfterSectionsChange(section.id);
+  scheduleProjectSave();
+  setTranscribeCutStatus('Restored the removed take', 'success');
+}
+
+/**
+ * Puts every removed bad take (across all takes on the timeline) back, as
+ * one undo step — the quick way to reset after an over-eager detection.
+ */
+function restoreAllRemovedTakes() {
+  if (!editorState || editorState.rendering || transcribeCutInFlight) return;
+
+  const removedByTake = collectRemovedTakesByTake();
+  let restoredCount = 0;
+  let lastSectionId = null;
+  let pushed = false;
+
+  for (const [takeId, removedList] of removedByTake) {
+    const take = activeProject?.takes?.find((t) => t.id === takeId);
+    if (!take) continue;
+    let restoredForTake = 0;
+    for (const removed of removedList) {
+      // Recompute per range: each insertion changes the take's coverage.
+      const bounds = resolveRestoreBounds(take, removed);
+      if (!bounds) continue;
+      if (!pushed) {
+        pushUndo();
+        pushed = true;
+      }
+      lastSectionId = insertRestoredSection(takeId, bounds, removed.text).id;
+      restoredCount += 1;
+      restoredForTake += 1;
+    }
+    if (restoredForTake > 0) syncTakeSectionsSnapshot(take);
+  }
+
+  if (restoredCount === 0) {
+    setTranscribeCutStatus('Nothing to restore', 'warning');
+    return;
+  }
+
+  refreshTimelineAfterSectionsChange(lastSectionId);
+  scheduleProjectSave();
+  setTranscribeCutStatus(
+    `Restored ${restoredCount} removed take${restoredCount !== 1 ? 's' : ''}`,
+    'success'
+  );
 }
 
 if (transcribeCutBtn) {
@@ -6189,6 +7000,20 @@ if (transcribeCutBtn) {
     transcribeAndCutTake().catch((err) => {
       console.error('Transcribe & Cut crashed:', err);
     });
+  });
+}
+
+if (removeBadTakesBtn) {
+  removeBadTakesBtn.addEventListener('click', () => {
+    removeBadTakesFromTimeline().catch((err) => {
+      console.error('Remove Bad Takes crashed:', err);
+    });
+  });
+}
+
+if (editorRestoreAllBtn) {
+  editorRestoreAllBtn.addEventListener('click', () => {
+    restoreAllRemovedTakes();
   });
 }
 

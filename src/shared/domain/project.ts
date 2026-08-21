@@ -74,6 +74,15 @@ export interface ProjectSettings {
 
 export type AudioSource = 'screen' | 'camera' | 'external';
 
+/**
+ * A stored transcription utterance in take-local recording time.
+ */
+export interface TakeSpeechSegment {
+  start: number;
+  end: number;
+  text: string;
+}
+
 export interface Take {
   id: string;
   createdAt: string;
@@ -103,6 +112,11 @@ export interface Take {
   cameraStartOffsetMs: number;
   audioStartOffsetMs: number;
   sections: Section[];
+  // Fine-grained speech utterances stored by Transcribe & Cut so bad-take
+  // detection and restore can run later without re-transcribing. The removed
+  // bad takes themselves are never persisted — they are derived from these
+  // utterances and the current timeline sections.
+  transcriptSegments: TakeSpeechSegment[];
 }
 
 export interface Timeline {
@@ -255,6 +269,26 @@ export function normalizeSections(rawSections: unknown = []): Section[] {
   }
 
   return sorted;
+}
+
+export function normalizeTakeSpeechSegments(rawSegments: unknown): TakeSpeechSegment[] {
+  if (!Array.isArray(rawSegments)) return [];
+  return rawSegments
+    .map((rawSegment) => {
+      if (!isRecord(rawSegment)) return null;
+      const rawStart = Number(rawSegment.start);
+      const rawEnd = Number(rawSegment.end);
+      if (!Number.isFinite(rawStart) || !Number.isFinite(rawEnd)) return null;
+      const start = Math.max(0, rawStart);
+      const end = Math.max(0, rawEnd);
+      if (end - start <= 0.0001) return null;
+      const text = String(typeof rawSegment.text === 'string' ? rawSegment.text : '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      return { start, end, text };
+    })
+    .filter((segment): segment is TakeSpeechSegment => segment !== null)
+    .sort((left, right) => left.start - right.start);
 }
 
 export function normalizeBackgroundZoom(value: unknown): number {
@@ -432,7 +466,8 @@ export function normalizeProjectData(rawProject: unknown, projectFolder?: string
         screenStartOffsetMs: normalizeRecorderStartOffsetMs(rawTakeRecord.screenStartOffsetMs),
         cameraStartOffsetMs: normalizeRecorderStartOffsetMs(rawTakeRecord.cameraStartOffsetMs),
         audioStartOffsetMs: normalizeRecorderStartOffsetMs(rawTakeRecord.audioStartOffsetMs),
-        sections: normalizeSections(take.sections)
+        sections: normalizeSections(take.sections),
+        transcriptSegments: normalizeTakeSpeechSegments(rawTakeRecord.transcriptSegments)
       };
     }),
     timeline: {

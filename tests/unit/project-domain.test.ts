@@ -14,6 +14,7 @@ import {
   normalizeRecorderStartOffsetMs,
   normalizeExportVideoPreset,
   normalizeSections,
+  normalizeTakeSpeechSegments,
   sanitizeProjectName,
   toProjectAbsolutePath,
   toProjectRelativePath
@@ -323,6 +324,53 @@ describe('shared/domain/project', () => {
 
     expect(project.takes[0].proxyPath).toBe('/tmp/my-project/screen-proxy.mp4');
     expect(project.takes[1].proxyPath).toBeNull();
+  });
+
+  test('normalizeTakeSpeechSegments drops invalid entries, sorts, and normalizes text', () => {
+    const segments = normalizeTakeSpeechSegments([
+      { start: 5, end: 6, text: '  later   words ' },
+      { start: 1, end: 2, text: 'first' },
+      { start: 3, end: 3, text: 'zero length dropped' },
+      { start: Number.NaN, end: 4, text: 'invalid dropped' },
+      { start: -1, end: 0.5, text: 'clamped' },
+      'not-an-object'
+    ]);
+
+    expect(segments).toEqual([
+      { start: 0, end: 0.5, text: 'clamped' },
+      { start: 1, end: 2, text: 'first' },
+      { start: 5, end: 6, text: 'later words' }
+    ]);
+    expect(normalizeTakeSpeechSegments(undefined)).toEqual([]);
+    expect(normalizeTakeSpeechSegments('garbage')).toEqual([]);
+  });
+
+  test('normalizeProjectData round-trips take transcriptSegments', () => {
+    const project = normalizeProjectData(
+      {
+        takes: [
+          {
+            id: 'take-1',
+            screenPath: 'screen.webm',
+            cameraPath: null,
+            duration: 10,
+            sections: [],
+            transcriptSegments: [
+              { start: 0.5, end: 2, text: 'hello there' },
+              { start: 9, end: 'bad', text: 'dropped' }
+            ]
+          },
+          { id: 'take-2', screenPath: 'screen2.webm', cameraPath: null, duration: 5, sections: [] }
+        ]
+      },
+      '/tmp/my-project'
+    );
+
+    expect(project.takes[0].transcriptSegments).toEqual([
+      { start: 0.5, end: 2, text: 'hello there' }
+    ]);
+    // Legacy takes without the field normalize to an empty array.
+    expect(project.takes[1].transcriptSegments).toEqual([]);
   });
 
   test('normalizeSections deduplicates section IDs', () => {

@@ -89,21 +89,44 @@ Acceptance criteria:
 
 ## C. Transcript And Trim
 
-### C1. On-demand Transcribe & Cut
+### C1. On-demand Transcribe & Cut and Remove Bad Takes
 
 - Stopping a recording puts the take on the timeline immediately as one full-length section — no transcription and no network call in the stop flow.
-- The timeline toolbar's "Transcribe & Cut" button batch-transcribes the target take's mic audio (audio-only file, or audio extracted from the camera file via ffmpeg stream copy) with ElevenLabs Scribe in the main process, groups word timestamps into speech segments, removes repeated ("mistake") takes, and replaces the take's timeline sections with speech-cut sections.
-- The target take is the selected section's take, falling back to the most recent take still on the timeline.
-- Repeated-take removal is deterministic and text-based: words are grouped into fine-grained utterances (0.5s gap), an utterance whose normalized tokens substantially match the start of a following utterance (verbatim repeat or aborted prefix, within 8s, optionally across one short interjection) is dropped so the last take wins, and survivors re-merge at the normal 1.5s gap. Media files are never modified — removed takes simply fall outside the cut sections' source ranges.
+- The timeline toolbar's "Transcribe & Cut" button batch-transcribes the target take's mic audio (audio-only file, or audio extracted from the camera file via ffmpeg stream copy) with ElevenLabs Scribe in the main process, groups word timestamps into speech segments, and replaces the take's timeline sections with speech-cut (silence-removed) sections. It also stores the spoken word tokens on the take (`transcriptSegments`, persisted in `project.json`, recording-time coords) so bad-take detection and restore can run later without re-transcribing. It does not remove repeated takes.
+- The separate "Remove Bad Takes" button detects bad takes in the stored transcript and removes their ranges from the take's current sections surgically — kept sections are only trimmed or split, so silence cuts and manual edits survive. Cut-created piece edges snap inward to the nearest protected content (words, in-session system-audio activity, or — for takes recorded in an earlier app session — audible ranges derived from the decoded system-audio waveform envelope) plus padding, so a kept piece never opens with the dead air that sat between a flub and its retry, and pieces that are pure inter-flub silence are dropped. With that complete protection set it also sweeps pre-existing silent slivers (word-less, sound-less sections ≤ 1.5s) left by earlier removals; longer silent sections stay, since a long pause may be deliberate. Only when a system-audio take has neither activity ranges nor a decoded envelope does the cleanup fall back to plain padded bounds, so screen sound is never trimmed on word evidence alone. It requires a prior Transcribe & Cut. Detection is the union of two deterministic local detectors plus an optional LLM pass:
+  - the conservative exact-prefix repeated-take detector (unchanged, `mistake-detection.ts`);
+  - a restart-cluster detector (`restart-detection.ts`) keyed on Scribe's cutoff markers (`--`, `...`): speech ending cut off contains a bad take when a nearby retry (silence hops up to 4s, other aborted attempts may sit between, and the retry may itself end cut off in a chained flub) restarts the same thought — at least 4 shared opening tokens (stutter repeats collapsed, fillers dropped) and at least 60% of the flubbed words reappearing in the retry, which must materially continue. The retry's opening is matched at every word position inside the cut-off unit and the rightmost match wins, so when a good final take of one section flows without a pause into a flubbed start of the next section, only the flubbed tail is removed (word-precise with word-level stored tokens; coarse legacy transcripts fall back to whole-unit removal). This catches rephrased retries, stutter restarts, and slower re-records that exact-prefix matching misses; because removal is an explicit, restorable action, it is deliberately more assertive than the conservative detector.
+  - an LLM pass (`retake-llm-service.ts`, main process only, enabled by the optional `OPENAI_API_KEY` env var; model defaults to `gpt-5.6-sol`, override via `OPENAI_RETAKE_MODEL`): the stored words are grouped into sentence chunks (`retake-chunks.ts`, split at sentence punctuation, cutoff markers, and pauses) and only chunk index + text + pause length are sent — never media, file paths, or project metadata. The model returns indices of chunks it judges as entirely superseded — abandoned attempts whose content a later chunk re-delivers, even fully reworded; the prompt forbids flagging a chunk that contains both an attempt and its good retry. Indices are strictly validated, mapped back to word-precise times from our own chunk boundaries (the model can never invent a time range), and the take's final chunk is never removable. Missing key, request failure, or timeout falls back to the local detectors with a visible status note. The LLM pass is also skipped (with a "run Transcribe & Cut again" note) when the stored transcript is coarse pre-word-level data, because a coarse chunk mixing a flub with its good retry cannot be split and would be removed whole.
+- The transcript panel header shows a "Restore all" button whenever any removed takes exist; it re-inserts every removed range across all takes as one undo step, for quickly resetting after an over-eager detection. Individual entries keep their per-entry Restore buttons.
+- The target take for both buttons is the selected section's take, falling back to the most recent take still on the timeline.
+- Removed bad takes stay visible in the section transcript list as dimmed, struck-through entries interleaved at their take position, each with a Restore button that puts that range back on the timeline as its own section (a single undo step). The removed list is derived from the stored utterances and the current sections — never persisted separately — so undo/redo and manual edits always keep it consistent. Silence cut-outs are not shown.
+- Repeated-take removal is deterministic and conservative: words are grouped
+  into fine-grained utterances (0.5s gap). A single earlier utterance is removed
+  only when it is clearly incomplete and the immediately following utterance
+  repeats a sufficiently long/distinctive normalized prefix after a short
+  pause with material continuation. A bounded adjacent run may also collapse
+  several progressively longer matching attempts, including tiny matching
+  restart fragments, when at least three prior attempts and three distinct
+  completion lengths make the final continuation unambiguous. Exact full
+  repeats without that progression, vague/common prefixes, corrections, lists,
+  quotes, long pauses, and intervening speech are retained. Survivors re-merge
+  at the normal 1.5s gap. Media files are never modified.
 
 Acceptance criteria:
 
 - The recording view shows no transcript panel and no silence-cutting option; recorder failures surface on a compact notice line.
 - The stop flow performs no transcription work; the finalized files and the recovery checkpoint are on disk before the take enters the timeline.
 - Transcribe & Cut applies as a single undo step; failure, timeout, no-speech, or a timeline edit made while transcription was in flight leaves the timeline unchanged and reports a visible status.
+- Remove Bad Takes and each Restore apply as single undo steps; running Remove Bad Takes without a stored transcript, or when nothing is detected, changes nothing and reports a visible status.
 - Word timestamps map into take time using the per-file recorder start offsets; non-speech annotations are stripped; system-audio "keep" regions captured during the same app session are respected.
 - Takes without mic audio report a visible message and trigger no network call.
-- Utterances with fewer than 3 meaningful tokens are never removed; when takes are removed the status line reports the count, and neighbors are never merged across a removed take so flub audio cannot survive inside a kept section.
+- Utterances with fewer than 4 meaningful tokens are never independently
+  classified as mistakes; only a matching micro-fragment inside an established
+  multi-attempt staircase may be excluded. Punctuation, case, and at most two
+  filler tokens may be normalized only when all other high-confidence restart
+  evidence is present. When takes are removed the status line reports the
+  count, and neighbors are never merged across a removed take so flub audio
+  cannot survive inside a kept section.
 
 ### C3. Section computation
 
@@ -113,6 +136,8 @@ Acceptance criteria:
 Acceptance criteria:
 
 - Output sections are ordered, non-negative, and have positive duration.
+- Padded and computed source ranges are clamped to the take duration, reflowed
+  monotonically, and never overlap.
 - `trimmedDuration` equals last section end or `0`.
 
 ## D. Recovery
@@ -164,6 +189,19 @@ Acceptance criteria:
 
 - Playback crosses section boundaries without visible dead frames.
 - End-of-timeline pauses and resets controls safely.
+- Opening a timeline creates media elements only for the active take and the
+  immediate next distinct take; inactive neighbors use metadata-only preload.
+- Paused editor compositing is invalidation-driven. Playback uses video-frame
+  callbacks (with an animation-frame safety fallback), while seeks, media
+  readiness, image loads, resize, and canvas interactions request one paused
+  frame instead of running a permanent 24fps loop.
+- Drag scrubbing updates the playhead for every pointer event, limits decoder
+  seeks to 50ms intervals, and commits the exact release position before
+  optionally resuming playback. Media play rejection is shown in the editor.
+- Timeline waveform detail is derived from cached per-take peak envelopes and
+  capped at 4,096 rendered buckets. Proxy decode failures retry canonical raw
+  audio; loading, no-audio, partial, and unavailable states are visible, and a
+  missing waveform never represents the take as proven silent.
 - One-sided stereo takes (pre-mono-capture recordings with the mic on one
   channel) play centered: the decoded waveform buffer doubles as the
   channel-balance analysis, the waveform draws from the active channel, and
@@ -179,6 +217,9 @@ Acceptance criteria:
 - Section operations preserve non-overlap and positive durations.
 - Keyframes are remapped consistently after delete/split.
 - Undo/redo restores exact prior snapshots.
+- Trim dragging patches only the active section bands until pointer release;
+  the full marker/transcript DOM, waveform, undo snapshot, and autosave state
+  are finalized once after the drag.
 
 ### E4. Camera keyframing
 
