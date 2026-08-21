@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 
 import { registerIpcHandlers } from '../../src/main/ipc/register-handlers';
+import { RetakeLlmUnavailableError } from '../../src/main/services/retake-llm-service';
 
 function createProjectServiceStub() {
   return {
@@ -87,6 +88,12 @@ function registerWithHandlers(
       languageCode?: string;
     }> => ({ words: [], languageCode: 'eng' })
   );
+  const detectRetakesWithLlm = vi.fn(
+    async (): Promise<{ removedIndices: number[]; model: string }> => ({
+      removedIndices: [],
+      model: 'test-model'
+    })
+  );
   const exportPremiereProject = vi.fn(
     async (_opts: unknown, deps: { onProgress?: (u: unknown) => void; signal?: AbortSignal }) => {
       deps.onProgress?.({ phase: 'transcoding', percent: 0.5 });
@@ -112,6 +119,7 @@ function registerWithHandlers(
     exportPremiereProject,
     computeSections: vi.fn(),
     transcribeRecordingFile,
+    detectRetakesWithLlm,
     proxyService,
     recordingService,
     setPendingDisplayMediaSource: vi.fn()
@@ -125,7 +133,8 @@ function registerWithHandlers(
     exportPremiereProject,
     proxyService,
     recordingService,
-    transcribeRecordingFile
+    transcribeRecordingFile,
+    detectRetakesWithLlm
   };
 }
 
@@ -149,6 +158,39 @@ describe('main/ipc/register-handlers', () => {
       words: [{ text: 'hi', start: 0, end: 0.3, type: 'word' }],
       languageCode: 'eng'
     });
+  });
+
+  test('retake:detect-llm delegates to the LLM service and wraps the result', async () => {
+    const { handlers, detectRetakesWithLlm } = registerWithHandlers();
+    detectRetakesWithLlm.mockResolvedValueOnce({ removedIndices: [0, 2], model: 'test-model' });
+
+    const chunks = [
+      { index: 0, text: 'flub--', gapAfterSec: 1 },
+      { index: 1, text: 'good take.', gapAfterSec: 0 }
+    ];
+    const result = await handlers.get('retake:detect-llm')!({}, { chunks });
+
+    expect(detectRetakesWithLlm).toHaveBeenCalledWith({ chunks });
+    expect(result).toEqual({ status: 'ok', removedIndices: [0, 2], model: 'test-model' });
+  });
+
+  test('retake:detect-llm maps a missing API key to an unavailable status', async () => {
+    const { handlers, detectRetakesWithLlm } = registerWithHandlers();
+    detectRetakesWithLlm.mockRejectedValueOnce(new RetakeLlmUnavailableError());
+
+    const result = await handlers.get('retake:detect-llm')!(
+      {},
+      { chunks: [{ index: 0, text: 'x' }] }
+    );
+    expect(result).toEqual({ status: 'unavailable' });
+  });
+
+  test('retake:detect-llm rejects payloads without a chunks array', async () => {
+    const { handlers, detectRetakesWithLlm } = registerWithHandlers();
+
+    await expect(handlers.get('retake:detect-llm')!({}, {})).rejects.toThrow(/chunks/);
+    await expect(handlers.get('retake:detect-llm')!({}, null)).rejects.toThrow(/chunks/);
+    expect(detectRetakesWithLlm).not.toHaveBeenCalled();
   });
 
   test('transcription:transcribe rejects payloads without a sourcePath', async () => {

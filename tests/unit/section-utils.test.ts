@@ -147,6 +147,35 @@ describe('section-utils', () => {
       expect(result[0].id).toBe('computed-1');
       expect(result[0].transcript).toBe('hello');
     });
+
+    test('clamps fallback and computed source ranges to the recording duration', () => {
+      const fallback = buildRecordingSectionsForTimeline({
+        recordedDuration: 10,
+        activeSegments: [{ start: 9.8, end: 9.95, text: 'ending' }]
+      });
+      const computed = buildRecordingSectionsForTimeline({
+        recordedDuration: 10,
+        activeSegments: [{ start: 9.8, end: 9.95, text: 'ending' }],
+        computedSections: [
+          { id: 'computed-1', start: 0, end: 0.3, sourceStart: 9.8, sourceEnd: 10.1 }
+        ]
+      });
+
+      expect(fallback[0]).toMatchObject({
+        sourceStart: 9.65,
+        sourceEnd: 10,
+        start: 0,
+        end: 0.35,
+        duration: 0.35
+      });
+      expect(computed[0]).toMatchObject({
+        sourceStart: 9.8,
+        sourceEnd: 10,
+        start: 0,
+        end: 0.2,
+        duration: 0.2
+      });
+    });
   });
 
   describe('attachSectionTranscripts', () => {

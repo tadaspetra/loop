@@ -1,9 +1,12 @@
 import { describe, expect, test } from 'vitest';
 
-import { getWaveformDecodeSources } from '../../src/renderer/features/timeline/waveform-sources';
+import {
+  getWaveformDecodeSources,
+  resolveWaveformLoadStatus
+} from '../../src/renderer/features/timeline/waveform-sources';
 
 describe('renderer/features/timeline/waveform-sources', () => {
-  test('uses the camera playback proxy for camera-owned mic waveform decoding', () => {
+  test('tries the camera proxy then canonical camera audio', () => {
     expect(
       getWaveformDecodeSources({
         screenPath: '/project/screen.webm',
@@ -15,13 +18,13 @@ describe('renderer/features/timeline/waveform-sources', () => {
         cameraProxyPath: '/project/camera-proxy-v2.mp4'
       })
     ).toEqual({
-      micPath: '/project/camera-proxy-v2.mp4',
+      micCandidates: ['/project/camera-proxy-v2.mp4', '/project/camera.webm'],
       micSource: 'camera',
-      systemPath: null
+      systemCandidates: []
     });
   });
 
-  test('uses the screen playback proxy for legacy screen-owned mic waveform decoding', () => {
+  test('tries the screen proxy then canonical screen audio', () => {
     expect(
       getWaveformDecodeSources({
         screenPath: '/project/screen.webm',
@@ -33,9 +36,9 @@ describe('renderer/features/timeline/waveform-sources', () => {
         cameraProxyPath: null
       })
     ).toEqual({
-      micPath: '/project/screen-proxy-v2.mp4',
+      micCandidates: ['/project/screen-proxy-v2.mp4', '/project/screen.webm'],
       micSource: 'screen',
-      systemPath: null
+      systemCandidates: []
     });
   });
 
@@ -51,9 +54,9 @@ describe('renderer/features/timeline/waveform-sources', () => {
         cameraProxyPath: null
       })
     ).toEqual({
-      micPath: '/project/audio.webm',
+      micCandidates: ['/project/audio.webm'],
       micSource: 'external',
-      systemPath: '/project/screen-proxy-v2.mp4'
+      systemCandidates: ['/project/screen-proxy-v2.mp4', '/project/screen.webm']
     });
   });
 
@@ -69,9 +72,44 @@ describe('renderer/features/timeline/waveform-sources', () => {
         cameraProxyPath: null
       })
     ).toEqual({
-      micPath: '/project/camera.webm',
+      micCandidates: ['/project/camera.webm'],
       micSource: 'camera',
-      systemPath: '/project/screen.webm'
+      systemCandidates: ['/project/screen.webm']
     });
+  });
+
+  test('distinguishes loading, no-audio, ready, and decode failure states', () => {
+    expect(
+      resolveWaveformLoadStatus({
+        loading: true,
+        candidateSourceCount: 2,
+        decodedTrackCount: 0,
+        failedTrackCount: 0
+      })
+    ).toBe('loading');
+    expect(
+      resolveWaveformLoadStatus({
+        loading: false,
+        candidateSourceCount: 0,
+        decodedTrackCount: 0,
+        failedTrackCount: 0
+      })
+    ).toBe('no-audio');
+    expect(
+      resolveWaveformLoadStatus({
+        loading: false,
+        candidateSourceCount: 2,
+        decodedTrackCount: 1,
+        failedTrackCount: 1
+      })
+    ).toBe('ready');
+    expect(
+      resolveWaveformLoadStatus({
+        loading: false,
+        candidateSourceCount: 2,
+        decodedTrackCount: 0,
+        failedTrackCount: 2
+      })
+    ).toBe('error');
   });
 });

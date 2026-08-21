@@ -176,6 +176,11 @@ export interface ElectronApi {
     sourcePath: string;
     languageCode?: string;
   }) => Promise<TranscribeRecordingResult>;
+  detectRetakesLlm: (opts: {
+    chunks: Array<{ index: number; text: string; gapAfterSec?: number }>;
+  }) => Promise<
+    { status: 'ok'; removedIndices: number[]; model: string } | { status: 'unavailable' }
+  >;
   generateProxy: (opts: GenerateProxyOpts) => Promise<string | null>;
   onProxyProgress: (listener: (payload: ProxyProgressUpdate) => void) => () => void;
   getPathForFile: (file: File) => string;

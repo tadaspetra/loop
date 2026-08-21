@@ -20,6 +20,8 @@ import type { exportPremiereProject } from '../services/premiere-export-service'
 import type { computeSections } from '../services/sections-service';
 import type { generatePreview } from '../services/preview-render-service';
 import type { transcribeRecordingFile } from '../services/transcription-service';
+import { RetakeLlmUnavailableError } from '../services/retake-llm-service';
+import type { detectRetakesWithLlm } from '../services/retake-llm-service';
 import type * as proxyServiceModule from '../services/proxy-service';
 import type * as recordingServiceModule from '../services/recording-service';
 
@@ -32,6 +34,9 @@ type GeneratePreview = typeof generatePreview;
 type TranscribeRecordingFile = (
   opts: Parameters<typeof transcribeRecordingFile>[0]
 ) => ReturnType<typeof transcribeRecordingFile>;
+type DetectRetakesWithLlm = (
+  opts: Parameters<typeof detectRetakesWithLlm>[0]
+) => ReturnType<typeof detectRetakesWithLlm>;
 type ProxyService = typeof proxyServiceModule;
 type RecordingService = typeof recordingServiceModule;
 
@@ -56,6 +61,7 @@ export function registerIpcHandlers({
   computeSections,
   generatePreview,
   transcribeRecordingFile,
+  detectRetakesWithLlm,
   proxyService,
   recordingService,
   setPendingDisplayMediaSource
@@ -74,6 +80,7 @@ export function registerIpcHandlers({
   computeSections: ComputeSections;
   generatePreview: GeneratePreview;
   transcribeRecordingFile: TranscribeRecordingFile;
+  detectRetakesWithLlm: DetectRetakesWithLlm;
   proxyService: ProxyService;
   recordingService: RecordingService;
   setPendingDisplayMediaSource: (sourceId: string | null) => void;
@@ -355,6 +362,25 @@ export function registerIpcHandlers({
 
   ipcMain.handle('compute-sections', async (_event, opts: unknown) => {
     return computeSections(opts as Parameters<ComputeSections>[0]);
+  });
+
+  ipcMain.handle('retake:detect-llm', async (_event, opts: unknown) => {
+    const payload = (opts || {}) as { chunks?: unknown };
+    if (!Array.isArray(payload.chunks)) {
+      throw new Error('retake:detect-llm requires a chunks array');
+    }
+    try {
+      const result = await detectRetakesWithLlm({
+        chunks: payload.chunks as Parameters<DetectRetakesWithLlm>[0]['chunks']
+      });
+      return { status: 'ok' as const, ...result };
+    } catch (error) {
+      if (error instanceof RetakeLlmUnavailableError) {
+        return { status: 'unavailable' as const };
+      }
+      console.error('LLM retake detection failed:', error);
+      throw error;
+    }
   });
 
   ipcMain.handle(

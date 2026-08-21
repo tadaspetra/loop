@@ -105,6 +105,12 @@ describe('preload', () => {
     expect(mockIpcRenderer.invoke).toHaveBeenCalledWith('request-media-access', 'camera');
   });
 
+  test('detectRetakesLlm invokes matching IPC channel', () => {
+    const opts = { chunks: [{ index: 0, text: 'flub--', gapAfterSec: 1 }] };
+    electronAPI.detectRetakesLlm(opts);
+    expect(mockIpcRenderer.invoke).toHaveBeenCalledWith('retake:detect-llm', opts);
+  });
+
   test('recording lifecycle methods invoke the matching IPC channels', () => {
     electronAPI.recordingBegin({ takeId: 't', suffix: 'screen', folder: '/tmp' });
     expect(mockIpcRenderer.invoke).toHaveBeenCalledWith('recording:begin', {

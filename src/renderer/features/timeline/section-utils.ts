@@ -211,6 +211,77 @@ export function normalizeTakeSections(
   return buildDefaultSectionsForDuration(duration);
 }
 
+function clampAndRemapRecordingSections(
+  rawSections: TranscriptSection[] | unknown,
+  recordedDuration: number
+): Section[] {
+  const safeDuration = Math.max(0, Number(recordedDuration) || 0);
+  if (safeDuration <= 0 || !Array.isArray(rawSections)) return [];
+
+  const sourceRanges = rawSections
+    .map((section, originalIndex) => {
+      const rawSourceStart = Number.isFinite(Number(section.sourceStart))
+        ? Number(section.sourceStart)
+        : Number(section.start);
+      const rawSourceEnd = Number.isFinite(Number(section.sourceEnd))
+        ? Number(section.sourceEnd)
+        : Number(section.end);
+      if (!Number.isFinite(rawSourceStart) || !Number.isFinite(rawSourceEnd)) return null;
+      const sourceStart = Math.max(0, Math.min(safeDuration, rawSourceStart));
+      const sourceEnd = Math.max(sourceStart, Math.min(safeDuration, rawSourceEnd));
+      return { section, originalIndex, sourceStart, sourceEnd };
+    })
+    .filter(
+      (
+        entry
+      ): entry is {
+        section: TranscriptSection;
+        originalIndex: number;
+        sourceStart: number;
+        sourceEnd: number;
+      } => entry !== null
+    )
+    .sort(
+      (left, right) =>
+        left.sourceStart - right.sourceStart || left.sourceEnd - right.sourceEnd
+    );
+
+  const sections: Section[] = [];
+  let timelineCursor = 0;
+  let previousSourceEnd = 0;
+  for (const { section, originalIndex, sourceStart, sourceEnd } of sourceRanges) {
+    const nonOverlappingStart = Math.max(sourceStart, previousSourceEnd);
+    if (sourceEnd - nonOverlappingStart <= 0.0001) continue;
+
+    const clampedSourceStart = Math.min(roundMs(nonOverlappingStart), safeDuration);
+    const clampedSourceEnd = Math.min(roundMs(sourceEnd), safeDuration);
+    const sectionDuration = roundMs(clampedSourceEnd - clampedSourceStart);
+    if (sectionDuration <= 0) continue;
+
+    const start = roundMs(timelineCursor);
+    const end = roundMs(start + sectionDuration);
+    const index = sections.length;
+    sections.push({
+      ...section,
+      id: section.id || `section-${originalIndex + 1}`,
+      index,
+      label: `Section ${index + 1}`,
+      sourceStart: clampedSourceStart,
+      sourceEnd: clampedSourceEnd,
+      start,
+      end,
+      duration: sectionDuration,
+      takeId: typeof section.takeId === 'string' && section.takeId ? section.takeId : null,
+      transcript: normalizeTranscriptText(section.transcript || section.text),
+      imagePath:
+        typeof section.imagePath === 'string' && section.imagePath ? section.imagePath : null
+    });
+    previousSourceEnd = clampedSourceEnd;
+    timelineCursor = end;
+  }
+  return sections;
+}
+
 export function buildRecordingSectionsForTimeline({
   recordedDuration,
   activeSegments,
@@ -225,10 +296,21 @@ export function buildRecordingSectionsForTimeline({
   const defaultSections = buildDefaultSectionsForDuration(recordedDuration);
   if (!autoCutSilences) return defaultSections;
 
-  const fallbackSections = buildRemappedSectionsFromSegments(activeSegments);
+  const fallbackSections = clampAndRemapRecordingSections(
+    buildRemappedSectionsFromSegments(activeSegments),
+    recordedDuration
+  );
   const normalizedComputedSections = Array.isArray(computedSections) ? computedSections : [];
   if (normalizedComputedSections.length > 0) {
-    return attachSectionTranscripts(normalizedComputedSections, fallbackSections) as Section[];
+    const computedWithTranscripts = attachSectionTranscripts(
+      normalizedComputedSections,
+      fallbackSections
+    );
+    const clampedComputedSections = clampAndRemapRecordingSections(
+      computedWithTranscripts,
+      recordedDuration
+    );
+    if (clampedComputedSections.length > 0) return clampedComputedSections;
   }
 
   return fallbackSections.length > 0 ? fallbackSections : defaultSections;

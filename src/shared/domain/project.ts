@@ -74,9 +74,11 @@ export interface ProjectSettings {
 
 export type AudioSource = 'screen' | 'camera' | 'external';
 
-// One "keep" region of a take, in take-local seconds. Shares the speech
-// segment shape ({ start, end, text }) so system-audio activity ranges can be
-// merged directly with transcription segments by the section builder.
+/**
+ * A stored speech-shaped segment in take-local recording time: either a
+ * transcription utterance or a system-audio "keep" region. Sharing the shape
+ * lets the section builder merge both kinds directly.
+ */
 export interface TakeSpeechSegment {
   start: number;
   end: number;
@@ -116,6 +118,11 @@ export interface Take {
   // after an app restart, when the in-session activity map is gone.
   systemAudioSegments: TakeSpeechSegment[];
   sections: Section[];
+  // Fine-grained speech utterances stored by Transcribe & Cut so bad-take
+  // detection and restore can run later without re-transcribing. The removed
+  // bad takes themselves are never persisted — they are derived from these
+  // utterances and the current timeline sections.
+  transcriptSegments: TakeSpeechSegment[];
 }
 
 export interface Timeline {
@@ -270,6 +277,26 @@ export function normalizeSections(rawSections: unknown = []): Section[] {
   return sorted;
 }
 
+export function normalizeTakeSpeechSegments(rawSegments: unknown): TakeSpeechSegment[] {
+  if (!Array.isArray(rawSegments)) return [];
+  return rawSegments
+    .map((rawSegment) => {
+      if (!isRecord(rawSegment)) return null;
+      const rawStart = Number(rawSegment.start);
+      const rawEnd = Number(rawSegment.end);
+      if (!Number.isFinite(rawStart) || !Number.isFinite(rawEnd)) return null;
+      const start = Math.max(0, rawStart);
+      const end = Math.max(0, rawEnd);
+      if (end - start <= 0.0001) return null;
+      const text = String(typeof rawSegment.text === 'string' ? rawSegment.text : '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      return { start, end, text };
+    })
+    .filter((segment): segment is TakeSpeechSegment => segment !== null)
+    .sort((left, right) => left.start - right.start);
+}
+
 export function normalizeBackgroundZoom(value: unknown): number {
   const zoom = Number(value);
   if (!Number.isFinite(zoom)) return MIN_BACKGROUND_ZOOM;
@@ -316,25 +343,6 @@ export function normalizeExportVideoPreset(value: unknown): ExportVideoPreset {
   return value === EXPORT_VIDEO_PRESET_FAST
     ? EXPORT_VIDEO_PRESET_FAST
     : EXPORT_VIDEO_PRESET_QUALITY;
-}
-
-export function normalizeTakeSpeechSegments(rawSegments: unknown): TakeSpeechSegment[] {
-  if (!Array.isArray(rawSegments)) return [];
-  return rawSegments
-    .map((rawSegment) => {
-      if (!isRecord(rawSegment)) return null;
-      const start = Number(rawSegment.start);
-      const end = Number(rawSegment.end);
-      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
-
-      return {
-        start,
-        end,
-        text: typeof rawSegment.text === 'string' ? rawSegment.text.trim() : ''
-      };
-    })
-    .filter((segment): segment is TakeSpeechSegment => segment !== null)
-    .sort((left, right) => left.start - right.start);
 }
 
 export function normalizeAudioSource(value: unknown): AudioSource | null {
@@ -465,7 +473,8 @@ export function normalizeProjectData(rawProject: unknown, projectFolder?: string
         cameraStartOffsetMs: normalizeRecorderStartOffsetMs(rawTakeRecord.cameraStartOffsetMs),
         audioStartOffsetMs: normalizeRecorderStartOffsetMs(rawTakeRecord.audioStartOffsetMs),
         systemAudioSegments: normalizeTakeSpeechSegments(rawTakeRecord.systemAudioSegments),
-        sections: normalizeSections(take.sections)
+        sections: normalizeSections(take.sections),
+        transcriptSegments: normalizeTakeSpeechSegments(rawTakeRecord.transcriptSegments)
       };
     }),
     timeline: {

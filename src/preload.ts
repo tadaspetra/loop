@@ -57,6 +57,7 @@ const electronApi: ElectronApi = {
     ipcRenderer.invoke('import-file', sourcePath, projectFolder),
   pickImageFile: () => ipcRenderer.invoke('pick-image-file'),
   transcribeRecording: (opts) => ipcRenderer.invoke('transcription:transcribe', opts),
+  detectRetakesLlm: (opts) => ipcRenderer.invoke('retake:detect-llm', opts),
   generateProxy: (opts) => ipcRenderer.invoke('proxy:generate', opts),
   onProxyProgress: (listener) => {
     if (typeof listener !== 'function') return () => {};

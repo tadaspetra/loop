@@ -24,6 +24,7 @@ import { exportPremiereProject } from './main/services/premiere-export-service';
 import { computeSections } from './main/services/sections-service';
 import { generatePreview } from './main/services/preview-render-service';
 import { transcribeRecordingFile } from './main/services/transcription-service';
+import { detectRetakesWithLlm } from './main/services/retake-llm-service';
 import * as proxyService from './main/services/proxy-service';
 import * as recordingService from './main/services/recording-service';
 
@@ -50,6 +51,7 @@ registerIpcHandlers({
   computeSections,
   generatePreview,
   transcribeRecordingFile,
+  detectRetakesWithLlm,
   proxyService,
   recordingService,
   setPendingDisplayMediaSource

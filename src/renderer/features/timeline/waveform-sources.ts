@@ -1,6 +1,5 @@
 import type { AudioSource, Take } from '../../../shared/domain/project';
 import { resolveTakeAudio } from '../../../shared/domain/take-audio';
-import { getTakePlaybackSources } from './take-playback-sources';
 
 export type WaveformTakeInput = Partial<
   Pick<
@@ -16,44 +15,74 @@ export type WaveformTakeInput = Partial<
 >;
 
 export interface WaveformDecodeSources {
-  micPath: string | null;
+  micCandidates: string[];
   micSource: AudioSource | null;
-  systemPath: string | null;
+  systemCandidates: string[];
 }
 
-function resolveMicDecodePath(
+export type WaveformLoadStatus = 'loading' | 'ready' | 'no-audio' | 'error';
+
+function orderedUniquePaths(...paths: unknown[]): string[] {
+  const normalized = paths.filter(
+    (path): path is string => typeof path === 'string' && path.trim().length > 0
+  );
+  return [...new Set(normalized)];
+}
+
+function resolveMicDecodeCandidates(
   source: AudioSource | null,
   resolvedPath: string | null,
-  playbackSources: ReturnType<typeof getTakePlaybackSources>
-): string | null {
-  if (source === 'camera') return playbackSources.cameraPath || resolvedPath;
-  if (source === 'screen') return playbackSources.screenPath || resolvedPath;
-  if (source === 'external') return resolvedPath;
-  return null;
+  take: WaveformTakeInput
+): string[] {
+  if (source === 'camera') {
+    return orderedUniquePaths(take.cameraProxyPath, take.cameraPath, resolvedPath);
+  }
+  if (source === 'screen') {
+    return orderedUniquePaths(take.proxyPath, take.screenPath, resolvedPath);
+  }
+  if (source === 'external') return orderedUniquePaths(resolvedPath);
+  return [];
 }
 
 export function getWaveformDecodeSources(
   take: WaveformTakeInput | null | undefined
 ): WaveformDecodeSources {
   if (!take) {
-    return { micPath: null, micSource: null, systemPath: null };
+    return { micCandidates: [], micSource: null, systemCandidates: [] };
   }
 
-  const playbackSources = getTakePlaybackSources(take);
   const audioResolution = resolveTakeAudio(take);
-  const micPath = resolveMicDecodePath(
+  const micCandidates = resolveMicDecodeCandidates(
     audioResolution.source,
     audioResolution.path,
-    playbackSources
+    take
   );
-  const systemPath =
+  const systemCandidates =
     take.hasSystemAudio === true && audioResolution.source !== 'screen'
-      ? playbackSources.screenPath
-      : null;
+      ? orderedUniquePaths(take.proxyPath, take.screenPath)
+      : [];
 
   return {
-    micPath,
+    micCandidates,
     micSource: audioResolution.source,
-    systemPath
+    systemCandidates
   };
+}
+
+export function resolveWaveformLoadStatus({
+  loading,
+  candidateSourceCount,
+  decodedTrackCount,
+  failedTrackCount
+}: {
+  loading: boolean;
+  candidateSourceCount: number;
+  decodedTrackCount: number;
+  failedTrackCount: number;
+}): WaveformLoadStatus {
+  if (loading) return 'loading';
+  if (decodedTrackCount > 0) return 'ready';
+  if (candidateSourceCount <= 0) return 'no-audio';
+  if (failedTrackCount >= candidateSourceCount) return 'error';
+  return 'loading';
 }
